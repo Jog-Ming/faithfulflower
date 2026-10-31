@@ -3874,6 +3874,52 @@ public final class RoundTrip {
   }
 
   /**
+   * True when the target's anonymous stores cannot tell a flat condition from a nested one for
+   * this pattern operand's binding: no temporary stored before the binding's row opened took a
+   * slot at or above the one the binding got. A nested if starts after the enclosing condition,
+   * so a temporary of that condition would already have been released when the inner block
+   * declared the binding, and the binding would reuse the freed slot; a binding above every
+   * earlier temporary is the slot both forms allocate, and the line the operand begins on alone
+   * decides the shape.
+   */
+  public static boolean patternSlotFresh(Exprent operand) {
+    if (!selector("ifnest")) {
+      return false;
+    }
+    StructMethod method = currentMethod();
+    java.util.Map<Integer, java.util.List<int[]>> tempStores = method == null ? null : TEMP_STORES.get(method);
+    if (tempStores == null || tempStores.isEmpty() || operand == null) {
+      return false;
+    }
+    boolean binding = false;
+    for (Exprent part : operand.getAllExprents(true, true)) {
+      if (!(part instanceof FunctionExprent function)
+          || function.getFuncType() != FunctionExprent.FunctionType.INSTANCEOF
+          || function.getLstOperands().size() < 3
+          || !(function.getLstOperands().get(2) instanceof VarExprent var)
+          || var.getLVT() == null) {
+        continue;
+      }
+      binding = true;
+      int slot = var.getLVT().getIndex();
+      int start = var.getLVT().getStart();
+      for (java.util.Map.Entry<Integer, java.util.List<int[]>> entry : tempStores.entrySet()) {
+        if (entry.getKey() < slot) {
+          continue;
+        }
+        for (int[] store : entry.getValue()) {
+          // The binding's own store ends exactly where its row begins; only a temporary that
+          // ended earlier says the slot was already in use.
+          if (store[1] < start) {
+            return false;
+          }
+        }
+      }
+    }
+    return binding;
+  }
+
+  /**
    * True when the condition's branch jumps to the statement that follows the if, with the if arm
    * starting past a void return: {@code if (!C) { rest; return; } arm}. javac branches to the rest,
    * ends it with the return, and reaches the arm from the condition's own fall-through.

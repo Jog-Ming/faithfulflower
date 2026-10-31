@@ -1206,7 +1206,8 @@ public class IfStatement extends Statement {
           && !chained
           && (!starts
               || !RoundTrip.continuesBefore(operands.get(i), arm)
-                 && !RoundTrip.patternSlotReused(operands.get(i)))) {
+                 && !RoundTrip.patternSlotReused(operands.get(i))
+                 && !RoundTrip.patternSlotFresh(operands.get(i)))) {
         // A pattern variable the flat condition declares stays where it is: nesting a later
         // operand would move its declaration into a block of its own, and javac then numbers the
         // slots differently. The later boundaries still split — a pattern variable in the prefix
