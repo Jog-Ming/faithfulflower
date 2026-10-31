@@ -255,7 +255,15 @@ public class IfStatement extends Statement {
       guard.setCondition(guardCondition);
       buf.appendIndent(indent);
       buf.append(guard.toJava(indent)).append(" {").appendLineSeparator();
-      buf.appendIndent(indent + 1).append("return;").appendLineSeparator();
+      // The return the arm folds into the method's end is the instruction that ends where the
+      // body begins; pinning it keeps the early exit on its own line instead of the brace's.
+      TextBuffer returnLine = new TextBuffer();
+      returnLine.appendIndent(indent + 1).append("return;").appendLineSeparator();
+      int exit = RoundTrip.voidReturnEndingAt(RoundTrip.firstOffset(guardBody));
+      if (exit >= 0) {
+        RoundTrip.mapSynthesizedLine(returnLine, exit);
+      }
+      buf.append(returnLine);
       buf.appendIndent(indent).append("}").appendLineSeparator();
       buf.append(ExprProcessor.jmpWrapper(guardBody, indent, false));
       return buf;
@@ -625,7 +633,18 @@ public class IfStatement extends Statement {
       } else if (appendFlatElse(buf, indent, elsestat, ifstat, false)) {
         // The table proves the source wrote the second arm flat after the first.
       } else if (!printElseIfArm(buf, indent, ifstat, elsestat)) {
-        buf.appendIndent(indent).append("} else {").appendLineSeparator();
+        // The arm printed first is the source's then; the jump over the other arm runs at its
+        // end, and the writer records it on the brace line this branch writes.
+        char armLast = buf.lastTokenChar();
+        int exit = armExitSite(buf, elsestat, ifstat);
+        if (armLast == '}') {
+          mapArmExit(buf, exit, elsestat, armLast);
+        }
+        buf.appendIndent(indent).append("} else {");
+        if (armLast != '}') {
+          mapArmExit(buf, exit, elsestat, armLast);
+        }
+        buf.appendLineSeparator();
         buf.append(ExprProcessor.jmpWrapper(ifstat, indent + 1, false));
         buf.appendIndent(indent).append("}").appendLineSeparator();
       }
@@ -1117,9 +1136,14 @@ public class IfStatement extends Statement {
     if (exit < 0) {
       return;
     }
-    if (RoundTrip.armDeclaresOwnLocal(arm, exit)) {
+    if (armLast != '}') {
+      // The arm printed no closing brace of its own; the caller has just written the brace that
+      // closes it, and the writer flushed the exit jump on that line. Without the mapping the
+      // brace carries no anchor and padding for the following arm lands after it instead.
       buf.addBytecodeMapping(exit);
-    } else if (armLast == '}') {
+    } else if (RoundTrip.armDeclaresOwnLocal(arm, exit)) {
+      buf.addBytecodeMapping(exit);
+    } else {
       buf.addBytecodeMappingAtLastToken(exit);
     }
   }

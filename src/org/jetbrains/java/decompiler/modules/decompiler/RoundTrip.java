@@ -2037,12 +2037,12 @@ public final class RoundTrip {
    */
   public static void mapSynthesizedLine(org.jetbrains.java.decompiler.util.TextBuffer line, int offset) {
     StructMethod method = currentMethod();
-    org.jetbrains.java.decompiler.struct.StructClass cl =
-      DecompilerContext.getContextProperty(DecompilerContext.CURRENT_CLASS);
-    if (method == null || cl == null) {
+    if (method == null) {
       return;
     }
-    line.addBytecodeMappingAt(0, offset, cl.qualifiedName,
+    // The key must name the method's own class: the write phase runs after every class was
+    // decompiled, so the context's current class is whichever was initialized last, not this one.
+    line.addBytecodeMappingAt(0, offset, method.getClassQualifiedName(),
       org.jetbrains.java.decompiler.util.InterpreterUtil.makeUniqueKey(method.getName(), method.getDescriptor()));
   }
 
