@@ -2497,10 +2497,14 @@ public class InvocationExprent extends Exprent {
             argumentType = argumentType.remap(shadowed);
           }
         }
-        int line = RoundTrip.sourceLine(lstParameters.get(i));
+        // An argument's text starts at its first printed token: a chain's own invoke the table
+        // records sits on its last link, and a cast's checkcast after its operand. The first
+        // argument keeps its own first offset, which decides where the call's line is.
+        Exprent argument = lstParameters.get(i);
+        int ownLine = RoundTrip.sourceLine(argument);
+        int line = i > start ? firstPrintedLine(argument) : ownLine;
         // A constructor argument's own offsets stop at its new; the invoke at the end of its
         // argument list is what the target's table places on the last line of the expression.
-        Exprent argument = lstParameters.get(i);
         int end = argument instanceof NewExprent created && created.getConstructor() != null
           ? RoundTrip.sourceLineEnd(created.getConstructor())
           : RoundTrip.sourceLineEnd(argument);
@@ -2562,11 +2566,14 @@ public class InvocationExprent extends Exprent {
           }
           buf.append(buff);
         }
-        if (line >= 0) {
-          previousLine = line;
+        // The printed text's lines never move back along the argument order: a later argument
+        // whose own line is above the previous one's end carries the enclosing statement's
+        // marker, not a break the source had.
+        if (ownLine >= 0) {
+          previousLine = Math.max(previousLine, ownLine);
         }
         if (end >= 0) {
-          previousEnd = end;
+          previousEnd = Math.max(previousEnd, end);
         }
 
         firstParameter = false;
