@@ -1406,14 +1406,18 @@ public class InvocationExprent extends Exprent {
           // A lambda argument's body is another method, so the receiver's own offsets stop at the
           // call that carries it; the receiver's text still ends on the body's last line, and a
           // link on that line continues the receiver rather than starting a line of its own.
-          boolean chainBreak = instance != null && RoundTrip.newlineBetween(instance, this)
+          // An operand the printer just moved to a line of its own already places this call on
+          // that line; a chain or qualifier break here would spend one line too many, putting the
+          // invoke past the line the table records for it.
+          boolean leadingOperand = RoundTrip.isLeadingOperand(this);
+          boolean chainBreak = !leadingOperand && instance != null && RoundTrip.newlineBetween(instance, this)
             && textEndLine(instance) < RoundTrip.sourceLine(this)
             && (!insideOwnArgumentList()
               || (instance instanceof InvocationExprent
                        && (RoundTrip.sourceLine(this) == RoundTrip.sourceLineEnd(instance) + 1
                            || RoundTrip.sourceLine(this) == printedEndLine(buf) + 1)
                      || chainReceiverBreak(instance, this)));
-          boolean staticQualifiedBreak = breaksBeforeQualifier();
+          boolean staticQualifiedBreak = !leadingOperand && breaksBeforeQualifier();
           if (chainBreak) {
             buf.appendLineSeparator().appendIndent(indent);
           } else if (instance == null && qualifierBreak) {

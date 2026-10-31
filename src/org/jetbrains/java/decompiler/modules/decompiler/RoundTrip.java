@@ -3169,42 +3169,83 @@ public final class RoundTrip {
   }
 
   /**
-   * Whether a boolean operand begins the target's next line, judging by the operand's own first
-   * instruction. javac enters an invocation's line at its invoke, after its arguments, so an
-   * operand that starts with a call has no entry where its text starts; the call's own offset is
-   * the line the operand was written on.
+   * Whether a boolean operand begins the target's next line, judging by the line its own text
+   * starts on. javac enters an invocation's line at its invoke, after its arguments are
+   * generated, so an operand that starts with a call has no entry where its text starts; the
+   * call's own offset carries the line. A compound operand's text begins with its first operand,
+   * so its anchor is the first call on that leftmost chain. The line at the invoke is compared
+   * even when the table has no entry there: javac drops the entry when the line it would record
+   * equals the one its last argument already recorded, and the operand still began that line.
    */
   public static boolean newlineBeforeOperand(Exprent before, Exprent after) {
-    if (!enabled() || after == null || !(after instanceof InvocationExprent)) {
+    if (!enabled() || after == null) {
+      return false;
+    }
+    int start = operandOwnLine(after);
+    if (start < 0) {
       return newlineBetweenOperands(before, after);
     }
-    int first = after.bytecode == null || after.bytecode.isEmpty()
-      ? -1 : after.bytecode.nextSetBit(0);
-    if (first < 0) {
-      return newlineBetweenOperands(before, after);
-    }
-    int end = -1;
-    for (Exprent part : before.getAllExprents(true, false)) {
-      if (part.bytecode == null || part.bytecode.isEmpty()) {
-        continue;
-      }
-      int line = lineAtOffset(part.bytecode.previousSetBit(Integer.MAX_VALUE));
-      if (line > end) {
-        end = line;
-      }
-    }
+    int end = lastLine(before);
     if (end < 0) {
       end = sourceLineEnd(before);
     }
-    StructMethod method = currentMethod();
-    StructLineNumberTableAttribute table = method == null ? null
-      : method.getAttribute(StructGeneralAttribute.ATTRIBUTE_LINE_NUMBER_TABLE);
-    if (table == null) {
-      return false;
+    return end >= 0 && start > end;
+  }
+
+  /**
+   * The source line the operand's text begins on, or -1 when its first part anchors no line of
+   * its own. An invocation is anchored at its invoke, the line javac records after its arguments;
+   * following a compound's first operand reaches the call its text starts with.
+   */
+  private static int operandOwnLine(Exprent exprent) {
+    if (exprent instanceof InvocationExprent) {
+      int first = exprent.bytecode == null || exprent.bytecode.isEmpty()
+        ? -1 : exprent.bytecode.nextSetBit(0);
+      return first < 0 ? -1 : lineAtOffset(first);
     }
-    boolean startsLine = table.findLineNumber(first) != (first <= 0 ? -1 : table.findLineNumber(first - 1));
-    int start = lineAtOffset(first);
-    return startsLine && end >= 0 && start >= 0 && start > end;
+    if (exprent instanceof FunctionExprent function && !function.getLstOperands().isEmpty()) {
+      return operandOwnLine(function.getLstOperands().get(0));
+    }
+    return -1;
+  }
+
+  /**
+   * The call whose text starts an operand that the printer has just moved to a line of its own.
+   * The operand's own break already puts that call on the new line, so the receiver must not
+   * also break at the dot: the call's own line is the operand's line, not one past the receiver.
+   */
+  private static final ThreadLocal<Exprent> LEADING_OPERAND = new ThreadLocal<>();
+
+  /** Opens the print of an operand that begins a line, returning the previous scope. */
+  public static Exprent enterLeadingOperand(Exprent operand) {
+    Exprent prior = LEADING_OPERAND.get();
+    LEADING_OPERAND.set(leadingCall(operand));
+    return prior;
+  }
+
+  /** Closes the scope {@link #enterLeadingOperand} opened. */
+  public static void exitLeadingOperand(Exprent prior) {
+    if (prior == null) {
+      LEADING_OPERAND.remove();
+    } else {
+      LEADING_OPERAND.set(prior);
+    }
+  }
+
+  /** Whether this call begins an operand the printer placed on a line of its own. */
+  public static boolean isLeadingOperand(Exprent exprent) {
+    return exprent != null && LEADING_OPERAND.get() == exprent;
+  }
+
+  /** The call on the leftmost chain of the operand's text, or null. */
+  private static Exprent leadingCall(Exprent exprent) {
+    if (exprent instanceof InvocationExprent) {
+      return exprent;
+    }
+    if (exprent instanceof FunctionExprent function && !function.getLstOperands().isEmpty()) {
+      return leadingCall(function.getLstOperands().get(0));
+    }
+    return null;
   }
 
   /** Whether the original source started the second expression on a later line than the first ended. */

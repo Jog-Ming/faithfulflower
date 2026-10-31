@@ -725,14 +725,23 @@ public class FunctionExprent extends Exprent {
       }
       buf.append(wrapOperandString(left, false, indent, true));
       boolean isBoolean = funcType == FunctionType.BOOLEAN_AND || funcType == FunctionType.BOOLEAN_OR;
-      boolean booleanBreak = isBoolean && RoundTrip.newlineBeforeOperand(left, right);
-      if (booleanBreak || (isBoolean ? RoundTrip.newlineBetweenOperands(left, right)
-                                     : RoundTrip.newlineBetween(left, right))) {
+      boolean breakHere = isBoolean ? RoundTrip.newlineBeforeOperand(left, right)
+                                    : RoundTrip.newlineBetween(left, right);
+      if (breakHere) {
         buf.appendLineSeparator().appendIndent(indent + 1).append(funcType.operator).append(" ");
       } else {
         buf.appendPossibleNewline(" ").append(funcType.operator).append(" ");
       }
-      buf.append(wrapOperandString(right, true, indent, true));
+      if (isBoolean && breakHere) {
+        Exprent prior = RoundTrip.enterLeadingOperand(right);
+        try {
+          buf.append(wrapOperandString(right, true, indent, true));
+        } finally {
+          RoundTrip.exitLeadingOperand(prior);
+        }
+      } else {
+        buf.append(wrapOperandString(right, true, indent, true));
+      }
       if (!disableNewlineGroupCreation) {
         buf.popNewlineGroup();
       }
