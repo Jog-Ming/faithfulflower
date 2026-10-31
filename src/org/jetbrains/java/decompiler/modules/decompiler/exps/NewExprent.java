@@ -770,9 +770,11 @@ public class NewExprent extends Exprent {
       int previousEnd = callLine >= 0 ? callLine : RoundTrip.sourceLine(this);
       // An invocation, a creation and a conditional expression carry a line entry of their own; a
       // variable or constant carries none, so its line is whatever the statement before it left
-      // and no gap from it to a later element proves anything.
+      // and cannot move the baseline. The last element that does carry one stays the comparison
+      // point across any run of variables and fields: an element after them still proves its own
+      // break when its entry sits below that line, and the field simply shares the earlier line
+      // in the printed text, which the table gives no entry of its own to contradict.
       boolean enabled = RoundTrip.selector("vararg-elements");
-      boolean previousOwnLine = true;
       for (int i = 0; i < lstArrayElements.size(); i++) {
         Exprent element = lstArrayElements.get(i);
         int line = RoundTrip.sourceLine(element);
@@ -780,8 +782,7 @@ public class NewExprent extends Exprent {
         // An element the original put on a later line starts a line here. A later element whose
         // own line is inherited but whose invoke is later was written on that later line, for the
         // same reason as an argument.
-        boolean later = enabled && previousOwnLine
-          && line >= 0 && previousEnd >= 0 && line > previousEnd;
+        boolean later = enabled && line >= 0 && previousEnd >= 0 && line > previousEnd;
         boolean ownLater = enabled && element instanceof InvocationExprent
           && line >= 0 && previousEnd >= 0 && line <= previousEnd && end > previousEnd;
         boolean elementStartsLine = later || ownLater;
@@ -808,11 +809,10 @@ public class NewExprent extends Exprent {
             InvocationExprent.exitVarargElement(savedTextStart);
           }
         }
-        if (end >= 0) {
+        if (end >= 0 && (element instanceof InvocationExprent || element instanceof NewExprent
+            || element instanceof FunctionExprent)) {
           previousEnd = end;
         }
-        previousOwnLine = element instanceof InvocationExprent || element instanceof NewExprent
-          || element instanceof FunctionExprent;
       }
 
       // if there is just one element of Object[] type it needs to be casted to resolve ambiguity

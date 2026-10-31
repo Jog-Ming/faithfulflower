@@ -2595,9 +2595,14 @@ public class InvocationExprent extends Exprent {
       boolean inheritedFirst = firstLine < callLine && firstEnd == firstLine
         && (ARG_AT_LINE_START.get()
             || RoundTrip.selector("arg-head-line") && ARGUMENT_TEXT_START.get()[0] > firstLine);
-      boolean explicitStart = callLine >= 0 && firstLine >= 0
-        && (firstLine > callLine
-          || firstLine != callLine && RoundTrip.lineStartsHere(lstParameters.get(start))
+      // A constructor's own token is its `new`: the init invocation inherits the line of the last
+      // instruction of the argument list, so comparing the first argument with it would read a
+      // chain that starts on the creation's line and ends below it as a break after the
+      // parenthesis. The creation's text line is the one the comparison needs.
+      int callTextStart = functype == Type.INIT && creationLine >= 0 ? creationLine : callLine;
+      boolean explicitStart = callTextStart >= 0 && firstLine >= 0
+        && (firstLine > callTextStart
+          || firstLine != callTextStart && RoundTrip.lineStartsHere(lstParameters.get(start))
              && !inheritedFirst);
       // A constructor's call token sits on its `new`, not on the init invocation, which javac
       // records on the line of the last instruction of the argument list. The first argument's
@@ -2610,8 +2615,14 @@ public class InvocationExprent extends Exprent {
       // there; an inherited line is not where the creation's text sits. A creation written as
       // an argument sits on the enclosing call's line, and only that line may be compared with
       // the first argument's -- otherwise an argument the target kept inline is moved away.
+      // The argument's text start, not its own outermost invoke: a fluent chain printed from its
+      // first link starts on that link's line even though the invoke the table records for the
+      // argument's bitset sits on the chain's last one.
+      int argumentTextStart = start < lstParameters.size()
+        ? firstLine >= 0 ? firstLine : RoundTrip.sourceLine(lstParameters.get(start))
+        : -1;
       boolean constructorStartLater = callerOpeningLine >= 0 && start < lstParameters.size()
-        && RoundTrip.sourceLine(lstParameters.get(start)) > creationLine;
+        && argumentTextStart > creationLine;
       // An anonymous class's own constructor is recorded on the line the source closed its
       // argument list on; when that line is later than the line the call's text sits on, its text
       // did not start there and the source broke the line instead. A creation with its own lambda
