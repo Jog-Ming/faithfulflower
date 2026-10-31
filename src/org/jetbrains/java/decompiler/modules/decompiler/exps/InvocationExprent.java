@@ -1413,12 +1413,15 @@ public class InvocationExprent extends Exprent {
                        && (RoundTrip.sourceLine(this) == RoundTrip.sourceLineEnd(instance) + 1
                            || RoundTrip.sourceLine(this) == printedEndLine(buf) + 1)
                      || chainReceiverBreak(instance, this)));
+          boolean staticQualifiedBreak = breaksBeforeQualifier();
           if (chainBreak) {
             buf.appendLineSeparator().appendIndent(indent);
           } else if (instance == null && qualifierBreak) {
             // The parent (a ternary) proved from the line table that the qualifier ends its line.
             qualifierBreak = false;
             buf.appendLineSeparator().appendIndent(indent + 1);
+          } else if (staticQualifiedBreak) {
+            buf.appendLineSeparator().appendIndent(indent);
           }
           buf.append(".");
           // Adds generic arguments to the invocation, so .m() becomes .<T>m()
@@ -1513,6 +1516,31 @@ public class InvocationExprent extends Exprent {
       buf.popNewlineGroup();
     }
     return buf;
+  }
+
+  /**
+   * Whether the printer puts this class-qualified static call's dot on a line of its own. The
+   * class name it prints is the text before the dot and has no exprent, so the chain rule cannot
+   * see it; the line table marks the dot's own line at the invoke, and a first argument whose own
+   * line is earlier is the statement's line inherited by the text before the dot: the source
+   * wrote {@code Class} and {@code .method(} on different lines. Inside an argument list the
+   * first argument inherits the enclosing call's last entry instead of a statement line, so the
+   * comparison proves nothing there.
+   *
+   * <p>The field printer asks this to place a declaration on the line of the expression's first
+   * instruction, which is the line javac records the field on.
+   */
+  public boolean breaksBeforeQualifier() {
+    if (instance != null || staticQualifier != null
+      || invocationType == InvocationType.DYNAMIC || invocationType == InvocationType.CONSTANT_DYNAMIC) {
+      return false;
+    }
+    int invokeOffset = RoundTrip.lastInstructionStart(bytecode);
+    int argumentStart = lstParameters == null || lstParameters.isEmpty()
+      ? -1 : firstPrintedLine(lstParameters.get(0));
+    return invokeOffset >= 0 && RoundTrip.lineStartsAt(invokeOffset)
+      && argumentStart >= 0 && RoundTrip.sourceLine(this) > argumentStart
+      && !insideOwnArgumentList();
   }
 
   /**

@@ -70,6 +70,7 @@ public final class LineAlign {
     } catch (RuntimeException e) {
       return null;
     }
+    applyFieldDeclarationAnchors(tracers);
 
     if (RoundTrip.selector("rt-same-line-join")) {
       String joined = joinSameTargetLines(text, separator, lines, tracers);
@@ -246,6 +247,44 @@ public final class LineAlign {
       return text;
     }
     return aligned;
+  }
+
+  /**
+   * Puts a field initializer's first instruction on the declaration's line.
+   *
+   * <p>javac records a field's declaration at the position of the initializer expression, and the
+   * first instruction the expression emits inherits that line. The printer records where each
+   * instruction's text was printed instead, and that text may be an argument that landed on a
+   * later line (a class-qualified static call prints its class name on the declaration's line and
+   * the dot on the next one, and the arguments below inherit the declaration's line). The printer
+   * records the declaration anchor under a {@code <field-decl owner>} key; the owner's table gives
+   * the line, and the argument's own position yields to it without losing the printed position
+   * the constant-name pass reads.
+   */
+  private static void applyFieldDeclarationAnchors(
+      Map<Pair<String, String>, BytecodeMappingTracer> tracers) {
+    Map<Pair<String, String>, Map<Integer, Integer>> anchors = new java.util.HashMap<>();
+    for (Map.Entry<Pair<String, String>, BytecodeMappingTracer> entry : tracers.entrySet()) {
+      String methodKey = entry.getKey().b;
+      if (!methodKey.startsWith("<field-decl ") || !methodKey.endsWith(">")) {
+        continue;
+      }
+      String owner = methodKey.substring("<field-decl ".length(), methodKey.length() - 1);
+      anchors.computeIfAbsent(Pair.of(entry.getKey().a, owner), k -> new java.util.HashMap<>())
+        .putAll(entry.getValue().getMapping());
+    }
+    for (Map.Entry<Pair<String, String>, Map<Integer, Integer>> anchor : anchors.entrySet()) {
+      BytecodeMappingTracer tracer = tracers.get(anchor.getKey());
+      if (tracer == null) {
+        continue;
+      }
+      for (Map.Entry<Integer, Integer> offset : anchor.getValue().entrySet()) {
+        Integer current = tracer.getMapping().get(offset.getKey());
+        if (current == null || offset.getValue() < current) {
+          tracer.getMapping().put(offset.getKey(), offset.getValue());
+        }
+      }
+    }
   }
 
   /**

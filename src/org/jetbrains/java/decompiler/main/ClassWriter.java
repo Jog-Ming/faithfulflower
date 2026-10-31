@@ -1970,8 +1970,26 @@ public class ClassWriter implements StatementWriter {
       else {
         // A lifted initializer keeps the offsets of the method it came from; its instructions
         // belong to this declaration's line, both in a constructor and in <clinit>.
-        if (initializer.bytecode != null) {
+        boolean staticInitializer = fd.hasModifier(CodeConstants.ACC_STATIC);
+        if (!staticInitializer && initializer.bytecode != null) {
           buffer.addBytecodeMapping(initializer.bytecode);
+        }
+        // A declaration's line is the one javac gave the initializer's first instruction: the
+        // declaration's position is the last line set before the expression starts emitting, so
+        // an argument or a chain head that carries a later line of its own does not move the
+        // declaration with it. A static field is anchored here instead of on its invoke, whose
+        // printed line the aligner keeps for the invocation itself; the anchor is recorded under
+        // its own key so the instruction's printed position stays where the argument text is and
+        // the constant-name pass still reads it.
+        int firstInstruction = RoundTrip.exprentStart(initializer);
+        if (firstInstruction >= 0 && staticInitializer) {
+          // Every byte of the instruction: its operand bytes are recorded under the same line and
+          // would otherwise keep the argument's printed position as the anchor.
+          int end = RoundTrip.instructionEnd(RoundTrip.currentMethod(), firstInstruction);
+          for (int offset = firstInstruction; offset < (end > firstInstruction ? end : firstInstruction + 1); offset++) {
+            buffer.addBytecodeMappingAt(buffer.length(), offset, cl.qualifiedName,
+              "<field-decl <clinit> ()V>");
+          }
         }
         // A chained initializer's creation prologue (the `new`) is the receiver chain's root,
         // and the target attributes it to the declaration's line; the top-level set omits it,
