@@ -1388,7 +1388,11 @@ public class ClassWriter implements StatementWriter {
               // anchor, not a declaration position: neither can bound a method's place.
               StructMethod boundMethod = methods.get(plan.get(j)[1]);
               if (CodeConstants.INIT_NAME.equals(boundMethod.getName())
-                  || CodeConstants.CLINIT_NAME.equals(boundMethod.getName())) {
+                  || CodeConstants.CLINIT_NAME.equals(boundMethod.getName())
+                  || hiddenMethod(wrapper, boundMethod)) {
+                // A hidden method — a lambda body, a synthetic bridge — is not printed at its
+                // line: the line is where its body's instructions sit, not a declaration, and
+                // the source can put a code-less method after it and still print it there.
                 continue;
               }
               if (plan.get(j)[2] < member[2]) {
@@ -1495,6 +1499,15 @@ public class ClassWriter implements StatementWriter {
               }
             }
           }
+        }
+        // A member the class file records no line for — an abstract or interface method, a member
+        // type without a line table of its own — has no declaration position; the passes above
+        // only borrow a neighbour's. The target's line tables over the whole source file say which
+        // lines its statements occupy, and text printed into the lines they leave moves no anchor.
+        // Put such a member where its text ends before the next anchored member, at the place the
+        // rank or the method order gives it, so that member is still paid in full.
+        if (RoundTrip.selector("membergap") && methodToDecompile.isEmpty()) {
+          placeUnlinedMembers(node, wrapper, methods, plan, original, indent);
         }
         plan.sort(Comparator.comparingInt((int[] m) -> m[2])
           .thenComparingInt(m -> m.length > 4 ? m[4] : Integer.MAX_VALUE)
@@ -2027,13 +2040,20 @@ public class ClassWriter implements StatementWriter {
         // its own key so the instruction's printed position stays where the argument text is and
         // the constant-name pass still reads it.
         int firstInstruction = RoundTrip.exprentStart(initializer);
-        if (firstInstruction >= 0 && staticInitializer) {
+        StructMethod declarationOwner = staticInitializer ? null : wrapper.getDynamicInitializerOwner();
+        String declarationKey = staticInitializer ? "<clinit> ()V"
+          : declarationOwner == null ? null
+            : InterpreterUtil.makeUniqueKey(declarationOwner.getName(), declarationOwner.getDescriptor());
+        if (firstInstruction >= 0 && declarationKey != null) {
           // Every byte of the instruction: its operand bytes are recorded under the same line and
-          // would otherwise keep the argument's printed position as the anchor.
+          // would otherwise keep the argument's printed position as the anchor. An instance
+          // initializer is anchored on the constructor it was lifted from the same way, so the
+          // declaration's own line — not the line its arguments wrapped onto — takes the line the
+          // constructor's table gives the initializer.
           int end = RoundTrip.instructionEnd(RoundTrip.currentMethod(), firstInstruction);
           for (int offset = firstInstruction; offset < (end > firstInstruction ? end : firstInstruction + 1); offset++) {
             buffer.addBytecodeMappingAt(buffer.length(), offset, cl.qualifiedName,
-              "<field-decl <clinit> ()V>");
+              "<field-decl " + declarationKey + ">");
           }
         }
         // A chained initializer's creation prologue (the `new`) is the receiver chain's root,
@@ -3402,6 +3422,339 @@ public class ClassWriter implements StatementWriter {
 
   private static int methodLine(StructMethod method) {
     return lineAt(method, 0);
+  }
+
+  /**
+   * Prints a member the class file records no line for where the target has room.
+   *
+   * <p>A code-less method and a member type with no line table have no declaration line of their
+   * own: the passes above hand them a neighbour's line, and a member type may instead take the
+   * line of the nearest ranked class. Either is only a guess, and text printed on a line the
+   * target gives to an instruction shifts every anchor after it. The text of a member with a line
+   * ends at the last line its own table records; an unlined group printed after it starts below
+   * that and must end before the next anchored member's line, or that member is pulled off its
+   * target. This pass keeps the order the class file forces — methods in method order, member
+   * types by their NestMembers rank — and gives an unlined group the nearest line at which its
+   * text fits, leaving it where it is when it already fits.
+   */
+  private void placeUnlinedMembers(ClassNode node, ClassWrapper wrapper,
+      VBStyleCollection<StructMethod, String> methods, List<int[]> plan, int[] original, int indent) {
+    int planSize = plan.size();
+    int minLine = Integer.MAX_VALUE;
+    for (int[] member : plan) {
+      if (member[2] >= 0 && member[2] < minLine) {
+        minLine = member[2];
+      }
+    }
+    if (minLine == Integer.MAX_VALUE) {
+      return;
+    }
+    // The last source line each printed member's own text records. The text of a group of
+    // unlined members flows after the printed members the sort puts before it, and the next
+    // printed member's anchor line bounds where it can end: a group whose text ran past that
+    // line would push the anchor off its target.
+    Map<Integer, Integer> ends = new HashMap<>();
+    for (int i = 0; i < planSize; i++) {
+      int[] member = plan.get(i);
+      if (member[2] < 0) {
+        continue;
+      }
+      if (member[0] == 1) {
+        StructMethod mt = methods.get(member[1]);
+        if (hiddenMethod(wrapper, mt)) {
+          continue;
+        }
+        StructLineNumberTableAttribute table =
+          mt.getAttribute(StructGeneralAttribute.ATTRIBUTE_LINE_NUMBER_TABLE);
+        ends.put(i, table == null ? member[2] : Math.max(member[2], maxLine(table)));
+      }
+      else if (member[0] == 2) {
+        ClassNode inner = node.nested.get(member[1]);
+        if (inner.type != ClassNode.Type.MEMBER || inner.classStruct == null) {
+          continue;
+        }
+        int end = member[2];
+        for (StructMethod mt : inner.classStruct.getMethods()) {
+          StructLineNumberTableAttribute table =
+            mt.getAttribute(StructGeneralAttribute.ATTRIBUTE_LINE_NUMBER_TABLE);
+          if (table != null) {
+            end = Math.max(end, maxLine(table));
+          }
+        }
+        ends.put(i, end);
+      }
+      else {
+        ends.put(i, member[2]);
+      }
+    }
+
+    // Methods keep the order the class file lists them in: a group may move only between the
+    // printed methods around it, and never back over a group already placed.
+    List<Integer> printedMethods = new ArrayList<>();
+    for (int i = 0; i < planSize; i++) {
+      int[] member = plan.get(i);
+      if (member[0] != 1) {
+        continue;
+      }
+      StructMethod mt = methods.get(member[1]);
+      if (CodeConstants.CLINIT_NAME.equals(mt.getName()) || hiddenMethod(wrapper, mt)) {
+        continue;
+      }
+      printedMethods.add(i);
+    }
+    int at = 0;
+    int lastMethodLine = -1;
+    while (at < printedMethods.size()) {
+      int start = at;
+      while (at < printedMethods.size()) {
+        int planIndex = printedMethods.get(at);
+        if (original[planIndex] >= 0 || !codeLessMethod(wrapper, plan.get(planIndex)[1])) {
+          break;
+        }
+        at++;
+      }
+      if (at == start) {
+        at++;
+        continue;
+      }
+      int line = plan.get(printedMethods.get(start))[2];
+      if (line < 0) {
+        continue;
+      }
+      int lower = start > 0 ? plan.get(printedMethods.get(start - 1))[2] : -1;
+      lower = Math.max(lower, lastMethodLine);
+      int upper = at < printedMethods.size() ? plan.get(printedMethods.get(at))[2] : Integer.MAX_VALUE;
+      int height = 0;
+      for (int k = start; k < at; k++) {
+        int planIndex = printedMethods.get(k);
+        height += methodHeight(node, methods.get(plan.get(planIndex)[1]), plan.get(planIndex)[1], indent + 1);
+      }
+      if (height <= 0) {
+        continue;
+      }
+      int[] group = new int[at - start];
+      for (int k = start; k < at; k++) {
+        group[k - start] = printedMethods.get(k);
+      }
+      int chosen = placeGroup(plan, group, line, height, lower, upper, minLine, ends);
+      for (int k = start; k < at; k++) {
+        plan.get(printedMethods.get(k))[2] = chosen;
+      }
+      lastMethodLine = chosen;
+    }
+
+    // Member types follow their NestMembers rank; the lined members of the same class body bound
+    // where the unlined ones can go.
+    java.util.List<int[]> ranked = new ArrayList<>(); // {plan index, rank, own line}
+    for (int i = 0; i < planSize; i++) {
+      int[] member = plan.get(i);
+      if (member[0] != 2 || member.length <= 4 || member[4] == Integer.MAX_VALUE) {
+        continue;
+      }
+      ClassNode inner = node.nested.get(member[1]);
+      if (inner.type != ClassNode.Type.MEMBER || inner.classStruct == null) {
+        continue;
+      }
+      ranked.add(new int[]{i, member[4], classLine(inner)});
+    }
+    ranked.sort(Comparator.comparingInt(a -> a[1]));
+    int r = 0;
+    int lastClassLine = -1;
+    while (r < ranked.size()) {
+      int start = r;
+      while (r < ranked.size() && ranked.get(r)[2] < 0) {
+        r++;
+      }
+      if (r == start) {
+        r++;
+        continue;
+      }
+      int line = plan.get(ranked.get(start)[0])[2];
+      if (line < 0) {
+        continue;
+      }
+      int lower = start > 0 ? ranked.get(start - 1)[2] : -1;
+      lower = Math.max(lower, lastClassLine);
+      int upper = r < ranked.size() ? ranked.get(r)[2] : Integer.MAX_VALUE;
+      int height = 0;
+      for (int k = start; k < r; k++) {
+        ClassNode inner = node.nested.get(plan.get(ranked.get(k)[0])[1]);
+        height += classHeight(inner, indent + 1);
+      }
+      if (height <= 0) {
+        continue;
+      }
+      int[] group = new int[r - start];
+      for (int k = start; k < r; k++) {
+        group[k - start] = ranked.get(k)[0];
+      }
+      int chosen = placeGroup(plan, group, line, height, lower, upper, minLine, ends);
+      for (int k = start; k < r; k++) {
+        plan.get(ranked.get(k)[0])[2] = chosen;
+      }
+      lastClassLine = chosen;
+    }
+  }
+
+  /**
+   * The line to give a group of unlined members: the nearest one at which the group's printed
+   * text ends before the next anchored member, inside the lines the class file's order allows.
+   * Keeps the current line when it already works.
+   */
+  private static int placeGroup(List<int[]> plan, int[] group, int line, int height,
+      int lower, int upper, int minLine, Map<Integer, Integer> ends) {
+    java.util.TreeSet<Integer> candidates = new java.util.TreeSet<>();
+    candidates.add(line);
+    for (int[] member : plan) {
+      if (member[2] >= 0) {
+        candidates.add(member[2]);
+        candidates.add(member[2] + 1);
+      }
+    }
+    if (fitsGroup(plan, group, line, height, ends)) {
+      return line;
+    }
+    for (int candidate : candidates.tailSet(line, false)) {
+      if (candidate < lower || candidate > upper || candidate < minLine) {
+        continue;
+      }
+      if (fitsGroup(plan, group, candidate, height, ends)) {
+        return candidate;
+      }
+    }
+    for (int candidate : candidates.headSet(line, false).descendingSet()) {
+      if (candidate < lower || candidate > upper || candidate < minLine) {
+        continue;
+      }
+      if (fitsGroup(plan, group, candidate, height, ends)) {
+        return candidate;
+      }
+    }
+    return line;
+  }
+
+  /** Whether the group's text, printed at {@code line}, ends before the next anchored member. */
+  private static boolean fitsGroup(List<int[]> plan, int[] group, int line, int height,
+      Map<Integer, Integer> ends) {
+    java.util.Set<Integer> members = new java.util.HashSet<>();
+    for (int index : group) {
+      members.add(index);
+    }
+    int[] first = plan.get(group[0]);
+    int[] last = plan.get(group[group.length - 1]);
+    int firstRank = first.length > 4 ? first[4] : Integer.MAX_VALUE;
+    int lastRank = last.length > 4 ? last[4] : Integer.MAX_VALUE;
+    int flowEnd = -1;
+    int nextAnchor = Integer.MAX_VALUE;
+    for (int i = 0; i < plan.size(); i++) {
+      if (members.contains(i)) {
+        continue;
+      }
+      Integer end = ends.get(i);
+      if (end == null) {
+        continue; // the member prints no text
+      }
+      int[] member = plan.get(i);
+      if (compareKey(member, line, firstRank, first[3]) < 0) {
+        flowEnd = Math.max(flowEnd, end);
+      }
+      else if (compareKey(member, line, lastRank, last[3]) > 0 && member[2] >= 0) {
+        nextAnchor = Math.min(nextAnchor, member[2]);
+      }
+    }
+    return (long) flowEnd + height < nextAnchor;
+  }
+
+  /** The plan's own sort order: line, then NestMembers rank, then the insertion sequence. */
+  private static int compareKey(int[] member, int line, int rank, int sequence) {
+    int cmp = Integer.compare(member[2], line);
+    if (cmp != 0) {
+      return cmp;
+    }
+    cmp = Integer.compare(member.length > 4 ? member[4] : Integer.MAX_VALUE, rank);
+    if (cmp != 0) {
+      return cmp;
+    }
+    return Integer.compare(member[3], sequence);
+  }
+
+  private static boolean codeLessMethod(ClassWrapper wrapper, int methodIndex) {
+    MethodWrapper method = wrapper.getMethodWrapper(methodIndex);
+    return method == null || method.root == null;
+  }
+
+  /** Whether the printer drops this method, by the same test the plan's output loop makes. */
+  private static boolean hiddenMethod(ClassWrapper wrapper, StructMethod mt) {
+    return mt.isSynthetic() && DecompilerContext.getOption(IFernflowerPreferences.REMOVE_SYNTHETIC)
+      || mt.hasModifier(CodeConstants.ACC_BRIDGE)
+         && DecompilerContext.getOption(IFernflowerPreferences.REMOVE_BRIDGE)
+      || wrapper.getHiddenMembers().contains(InterpreterUtil.makeUniqueKey(mt.getName(), mt.getDescriptor()));
+  }
+
+  private int methodHeight(ClassNode node, StructMethod mt, int methodIndex, int indent) {
+    TextBuffer probe = new TextBuffer();
+    int height = writeMethod(node, mt, methodIndex, probe, indent) ? printedHeight(probe) : 0;
+    // Printing an annotation marks it written so a later position does not repeat it. A probe is
+    // only measuring text, and the class is printed for real at the end: clear the marks it set,
+    // or the real print leaves the annotation out.
+    resetAnnotationMarks(mt);
+    return height;
+  }
+
+  private int classHeight(ClassNode inner, int indent) {
+    TextBuffer probe = new TextBuffer();
+    writeClass(inner, probe, indent);
+    resetAnnotationMarks(inner);
+    return printedHeight(probe);
+  }
+
+  private static void resetAnnotationMarks(ClassNode node) {
+    if (node.classStruct != null) {
+      resetAnnotationMarks(node.classStruct);
+      for (StructField field : node.classStruct.getFields()) {
+        resetAnnotationMarks(field);
+      }
+      for (StructMethod method : node.classStruct.getMethods()) {
+        resetAnnotationMarks(method);
+      }
+    }
+    for (ClassNode nested : node.nested) {
+      if (nested.type != ClassNode.Type.LAMBDA) {
+        resetAnnotationMarks(nested);
+      }
+    }
+  }
+
+  private static void resetAnnotationMarks(StructMember member) {
+    for (Key<?> key : ANNOTATION_ATTRIBUTES) {
+      StructAnnotationAttribute attribute = member.getAttribute((Key<StructAnnotationAttribute>) key);
+      if (attribute != null) {
+        for (AnnotationExprent annotation : attribute.getAnnotations()) {
+          annotation.setDidWriteAlready(false);
+        }
+      }
+    }
+    for (Key<?> key : TYPE_ANNOTATION_ATTRIBUTES) {
+      StructTypeAnnotationAttribute attribute = member.getAttribute((Key<StructTypeAnnotationAttribute>) key);
+      if (attribute != null) {
+        for (TypeAnnotation annotation : attribute.getAnnotations()) {
+          annotation.getAnnotation().setDidWriteAlready(false);
+        }
+      }
+    }
+  }
+
+  /** The non-blank lines a rendered member occupies: the least it can take in a hole. */
+  private static int printedHeight(TextBuffer probe) {
+    String text = probe.convertToStringAndAllowDataDiscard();
+    String separator = DecompilerContext.getNewLineSeparator();
+    int height = 0;
+    for (String line : text.split(java.util.regex.Pattern.quote(separator), -1)) {
+      if (!line.trim().isEmpty()) {
+        height++;
+      }
+    }
+    return height;
   }
 
   /** Whether an expression carries a lambda argument anywhere inside it. */
