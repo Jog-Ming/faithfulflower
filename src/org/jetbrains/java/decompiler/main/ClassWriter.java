@@ -3749,26 +3749,24 @@ public class ClassWriter implements StatementWriter {
       return line;
     }
     int found = -1;
+    // The initializer was lifted out of the constructor the wrapper kept, and its offsets are
+    // that constructor's; the line aligner anchors the printed initializer on the same owner.
+    // Its table places the declaration. Another constructor that covers the offsets by accident
+    // — a small delegating constructor — maps them to its own lines, so demanding that every
+    // constructor agree throws away the only evidence there is.
+    StructMethod owner = wrapper.getDynamicInitializerOwner();
+    if (owner != null) {
+      found = uniqueLineAt(owner, initializer.bytecode);
+    }
+    if (found >= 0) {
+      return found;
+    }
     for (StructMethod method : cl.getMethods()) {
       if (!CodeConstants.INIT_NAME.equals(method.getName())) {
         continue;
       }
-      int line = -1;
-      boolean consistent = true;
-      for (int offset = initializer.bytecode.nextSetBit(0); offset >= 0;
-           offset = initializer.bytecode.nextSetBit(offset + 1)) {
-        int candidate = lineAt(method, offset);
-        if (candidate < 0) {
-          continue;
-        }
-        if (line < 0) {
-          line = candidate;
-        } else if (line != candidate) {
-          consistent = false;
-          break;
-        }
-      }
-      if (consistent && line >= 0) {
+      int line = uniqueLineAt(method, initializer.bytecode);
+      if (line >= 0) {
         if (found >= 0 && found != line) {
           return -1;
         }
@@ -3776,6 +3774,23 @@ public class ClassWriter implements StatementWriter {
       }
     }
     return found;
+  }
+
+  /** The one line every offset of an expression maps to in the method's table, or -1. */
+  private static int uniqueLineAt(StructMethod method, java.util.BitSet offsets) {
+    int line = -1;
+    for (int offset = offsets.nextSetBit(0); offset >= 0; offset = offsets.nextSetBit(offset + 1)) {
+      int candidate = lineAt(method, offset);
+      if (candidate < 0) {
+        continue;
+      }
+      if (line < 0) {
+        line = candidate;
+      } else if (line != candidate) {
+        return -1;
+      }
+    }
+    return line;
   }
 
   /** The first line any of a member class's methods starts on. */
