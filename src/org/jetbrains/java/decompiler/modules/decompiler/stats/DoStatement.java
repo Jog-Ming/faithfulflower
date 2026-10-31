@@ -147,7 +147,7 @@ public class DoStatement extends Statement {
           }
           buf.appendIndent(indent).append("while (true) {").appendLineSeparator();
           buf.append(ExprProcessor.jmpWrapper(first, indent + 1, false));
-          buf.appendIndent(indent).append("}").appendLineSeparator();
+          appendLoopClose(buf, indent);
           if (!deferred.isEmpty()) {
             RoundTrip.releaseDeferredExits(deferred);
             for (Statement exit : deferred) {
@@ -199,7 +199,7 @@ public class DoStatement extends Statement {
             buf.appendIndent(indent + 2).append("break;").appendLineSeparator();
           }
           buf.appendIndent(indent + 1).append("}").appendLineSeparator();
-          buf.appendIndent(indent).append("}").appendLineSeparator();
+          appendLoopClose(buf, indent);
           break;
         }
         buf.appendIndent(indent).append("do {").appendLineSeparator();
@@ -248,7 +248,7 @@ public class DoStatement extends Statement {
           buf.appendIndent(indent + 2).append("break;").appendLineSeparator();
           buf.appendIndent(indent + 1).append("}").appendLineSeparator();
           buf.append(ExprProcessor.jmpWrapper(first, indent + 1, false));
-          buf.appendIndent(indent).append("}").appendLineSeparator();
+          appendLoopClose(buf, indent);
           break;
         }
         Exprent whileGuard = RoundTrip.foldedBreakGuard(conditionExprent.get(0), this, first);
@@ -264,7 +264,7 @@ public class DoStatement extends Statement {
           appendBreakGuard(buf, whileGuard, indent + 1);
         }
         buf.append(ExprProcessor.jmpWrapper(first, indent + 1, false));
-        buf.appendIndent(indent).append("}").appendLineSeparator();
+        appendLoopClose(buf, indent);
         break;
       case FOR:
         int incLine = RoundTrip.sourceLineDeep(incExprent.get(0));
@@ -310,7 +310,7 @@ public class DoStatement extends Statement {
                 buf.appendIndent(indent + 1).append(inc.toJava(indent + 1)).append(";").appendLineSeparator();
               }
             }
-            buf.appendIndent(indent).append("}").appendLineSeparator();
+            appendLoopClose(buf, indent);
             break;
           }
         }
@@ -338,7 +338,7 @@ public class DoStatement extends Statement {
           appendBreakGuard(buf, forGuard, indent + 1);
         }
         buf.append(ExprProcessor.jmpWrapper(first, indent + 1, false));
-        buf.appendIndent(indent).append("}").appendLineSeparator();
+        appendLoopClose(buf, indent);
         break;
       case FOR_EACH:
         buf.appendIndent(indent).append("for (").append(initExprent.get(0).toJava(indent));
@@ -346,13 +346,40 @@ public class DoStatement extends Statement {
         narrowForEachCast(incExprent.get(0), initExprent.get(0).getInferredExprType(null));
         buf.append(" : ").append(incExprent.get(0).toJava(indent)).append(") {").appendLineSeparator();
         buf.append(ExprProcessor.jmpWrapper(first, indent + 1, true));
-        buf.appendIndent(indent).append("}").appendLineSeparator();
+        appendLoopClose(buf, indent);
       }
     } finally {
       RoundTrip.exitAnyLoop();
     }
 
     return buf;
+  }
+
+  /**
+   * Prints the loop's closing brace, anchoring the jump the loop's back edge compiled to when the
+   * writer gave that jump an entry: the line of the closing brace of the outermost block the
+   * body ends with that declares a local. The body's own brace when it declares one, otherwise
+   * the brace its print ends with. A jump the body printed, or one the writer gave no entry,
+   * owns no line here. Without the anchor the alignment cannot tell which side of a brace a
+   * blank line it adds belongs on.
+   */
+  private void appendLoopClose(TextBuffer buf, int indent) {
+    int back = RoundTrip.backEdgeOffset(this);
+    boolean own = false;
+    if (back >= 0 && !RoundTrip.printsTerminalJump(first) && !buf.hasBytecodeMapping(back)
+        && RoundTrip.hasLineEntryAt(back)) {
+      own = RoundTrip.armDeclaresOwnLocal(first, back);
+      if (!own && buf.lastTokenChar() == '}') {
+        buf.addBytecodeMappingAtLastToken(back);
+      }
+    } else {
+      back = -1;
+    }
+    buf.appendIndent(indent).append("}");
+    if (back >= 0 && own) {
+      buf.addBytecodeMapping(back);
+    }
+    buf.appendLineSeparator();
   }
 
   /** Prints {@code if (!test) { break; }} at the head of a loop body. */

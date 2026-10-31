@@ -10663,6 +10663,162 @@ public final class RoundTrip {
     return jumpTargetAt(tailJumpOffset(statement));
   }
 
+  /**
+   * The unconditional jump that closes an arm, when the next arm's first instruction follows it
+   * in the bytecode: the writer records that jump on the line of the brace that ended the arm,
+   * and no printed text maps it. The jump is the instruction that ends exactly where the next
+   * arm begins — a walk of the arm's gotos would find a loop's own latch first. -1 when the arm
+   * ends some other way (a return, a written continue) or no jump precedes the next arm.
+   */
+  public static int armExitGoto(Statement arm, Statement next) {
+    if (arm == null || next == null) {
+      return -1;
+    }
+    StructMethod method = currentMethod();
+    java.util.Map<Integer, Integer> gotos = method == null ? null : GOTO_TARGETS.get(method);
+    java.util.Map<Integer, Integer> byEnd = method == null ? null : INSTRUCTION_BY_END.get(method);
+    int limit = firstOffset(next);
+    if (gotos == null || byEnd == null || limit < 0) {
+      return -1;
+    }
+    Integer candidate = byEnd.get(limit);
+    return candidate != null && gotos.containsKey(candidate) ? candidate : -1;
+  }
+
+  /**
+   * Whether a local the arm body itself declares closes with the arm: its track ends where the
+   * arm's exit jump starts or ends and starts before the first block the arm's print opens with
+   * braces. Such a local makes the arm block's own closing brace the line the writer flushes
+   * that jump on; a local declared only in a nested block makes that block's brace the line.
+   */
+  public static boolean armDeclaresOwnLocal(Statement arm, int exit) {
+    StructMethod method = currentMethod();
+    if (method == null || arm == null) {
+      return false;
+    }
+    StructLocalVariableTableAttribute table =
+      method.getAttribute(StructGeneralAttribute.ATTRIBUTE_LOCAL_VARIABLE_TABLE);
+    java.util.Map<Integer, Integer> ends = INSTRUCTION_ENDS.get(method);
+    int end = lastEnd(arm);
+    Integer exitEnd = ends == null ? null : ends.get(exit);
+    if (table == null || end < 0) {
+      return false;
+    }
+    // A local declared in a block the arm's print opens with braces is that block's, not the
+    // arm's: only the tracks that start before the first such block's test are at the arm's
+    // own level. The arm's printed prelude (a loop header's variable, an if's merged prefix)
+    // lies before that test and counts as the arm's.
+    int limit = writesBraces(arm) ? testStart(arm) : firstBracedTailStart(arm);
+    if (limit < 0) {
+      limit = Integer.MAX_VALUE;
+    }
+    for (StructLocalVariableTableAttribute.LocalVariable row : table.getVariables().toList()) {
+      if (row.getStart() > limit) {
+        continue;
+      }
+      if (row.getEnd() == end || row.getEnd() == exit
+          || (exitEnd != null && row.getEnd() == exitEnd)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** The first offset of the first block the statement's printed tail opens with braces. */
+  private static int firstBracedTailStart(Statement stat) {
+    Statement cur = stat;
+    while (true) {
+      Statement next = null;
+      for (Statement child : cur.getStats()) {
+        if (!printsNothing(child)) {
+          next = child;
+        }
+      }
+      if (next == null) {
+        return Integer.MAX_VALUE;
+      }
+      if (writesBraces(next)) {
+        // The block's own locals are declared before its test runs; the statement's own first
+        // offset can lie behind code the printer merged into its head, so the test bounds it.
+        int start = testStart(next);
+        if (start < 0) {
+          start = firstOffset(next);
+        }
+        return start >= 0 ? start : Integer.MAX_VALUE;
+      }
+      cur = next;
+    }
+  }
+
+  /** The first instruction of a bracketed statement's own test, or -1 when it has none. */
+  private static int testStart(Statement stat) {
+    Exprent head = null;
+    if (stat instanceof org.jetbrains.java.decompiler.modules.decompiler.stats.IfStatement ifStatement) {
+      head = ifStatement.getHeadexprent();
+    } else if (stat instanceof org.jetbrains.java.decompiler.modules.decompiler.stats.DoStatement loop) {
+      head = loop.getConditionExprent();
+    }
+    return head == null ? -1 : exprentStart(head);
+  }
+
+  /** Whether the statement prints a brace-enclosed block of its own. */
+  private static boolean writesBraces(Statement stat) {
+    return stat instanceof org.jetbrains.java.decompiler.modules.decompiler.stats.IfStatement
+      || stat instanceof org.jetbrains.java.decompiler.modules.decompiler.stats.DoStatement
+      || stat instanceof org.jetbrains.java.decompiler.modules.decompiler.stats.CatchAllStatement
+      || stat instanceof org.jetbrains.java.decompiler.modules.decompiler.stats.SynchronizedStatement
+      || stat instanceof org.jetbrains.java.decompiler.modules.decompiler.stats.SwitchStatement
+      || stat instanceof org.jetbrains.java.decompiler.modules.decompiler.stats.GeneralStatement;
+  }
+
+  /** Whether the target's table has an entry starting exactly at this offset. */
+  public static boolean hasLineEntryAt(int offset) {
+    StructMethod method = currentMethod();
+    if (method == null || offset < 0) {
+      return false;
+    }
+    StructLineNumberTableAttribute table =
+      method.getAttribute(StructGeneralAttribute.ATTRIBUTE_LINE_NUMBER_TABLE);
+    if (table == null) {
+      return false;
+    }
+    int[] raw = table.getRawData();
+    for (int i = 0; i + 1 < raw.length && raw[i] <= offset; i += 2) {
+      if (raw[i] == offset) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Whether the printer spells the trailing jump on {@code stat}'s tail path out as text. The
+   * same conditions {@code ExprProcessor.jmpWrapper} applies, walked down the tail the way that
+   * print walks it: a jump here belongs to the statement's own line and the brace that follows
+   * must not claim it.
+   */
+  public static boolean printsTerminalJump(Statement stat) {
+    while (true) {
+      List<StatEdge> edges = stat.getSuccessorEdges(Statement.STATEDGE_DIRECT_ALL);
+      if (edges.size() == 1) {
+        StatEdge edge = edges.get(0);
+        if (edge.getType() != StatEdge.TYPE_REGULAR) {
+          return edge.explicit && !(edge.getDestination() instanceof DummyExitStatement)
+            && !isJumpSuppressed(stat) && !isClosureHidden(edge) && !printedBreak(stat)
+            && !isDeferredBreak(edge)
+            // The loop's own back edge: its branch lands on a goto to the head, and the source
+            // wrote no continue, so the jump is the latch and the brace's line is where it sits.
+            && !(edge.getType() == StatEdge.TYPE_CONTINUE && !edge.labeled && landsOnLoopLatch(stat));
+        }
+      }
+      List<Statement> children = stat.getStats();
+      if (children.isEmpty()) {
+        return false;
+      }
+      stat = children.get(children.size() - 1);
+    }
+  }
+
   /** The target of the goto starting exactly at this offset, or -1 when none starts there. */
   public static int jumpTargetAt(int offset) {
     StructMethod method = currentMethod();

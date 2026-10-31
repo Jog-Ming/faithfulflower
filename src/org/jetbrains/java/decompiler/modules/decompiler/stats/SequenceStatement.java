@@ -877,7 +877,7 @@ public class SequenceStatement extends Statement {
               }
             }
           }
-          if (!(elseEnd == i + 1 && IfStatement.printElseIfArm(buf, indent, stats.get(i + 1)))) {
+          if (!(elseEnd == i + 1 && IfStatement.printElseIfArm(buf, indent, stats.get(i + 1), arm))) {
             buf.appendIndent(indent).append("} else {").appendLineSeparator();
             for (int k = i + 1; k <= elseEnd; k++) {
               buf.append(ExprProcessor.jmpWrapper(stats.get(k), indent + 1, k == i + 1));

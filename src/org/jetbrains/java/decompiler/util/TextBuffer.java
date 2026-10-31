@@ -350,6 +350,15 @@ public class TextBuffer {
     myBytecodeOffsetMapping.put(new BytecodeMappingKey(bytecodeOffset, null, null), myStringBuilder.length());
   }
 
+  /**
+   * Whether an earlier print already placed this offset in this buffer. A closing brace anchors
+   * the jump the source's block ended with, but a statement the block printed (a written
+   * `continue;`) owns that jump and its line; the brace must not claim it.
+   */
+  public boolean hasBytecodeMapping(int bytecodeOffset) {
+    return myBytecodeOffsetMapping.containsKey(new BytecodeMappingKey(bytecodeOffset, null, null));
+  }
+
   public void addStartBytecodeMapping(int bytecodeOffset) {
     if (myDebugTrace != null) {
       myDebugTrace.myPreventDeletion = true;
@@ -698,6 +707,31 @@ public class TextBuffer {
 
   public int length() {
     return myStringBuilder.length();
+  }
+
+  /**
+   * Maps an offset at the last character already printed rather than at the buffer's end: a
+   * jump the source wrote after a block's closing brace gets that brace's line, and the brace is
+   * this buffer's last token.
+   */
+  public void addBytecodeMappingAtLastToken(int bytecodeOffset) {
+    for (int i = myStringBuilder.length() - 1; i >= 0; i--) {
+      if (!Character.isWhitespace(myStringBuilder.charAt(i))) {
+        myBytecodeOffsetMapping.put(new BytecodeMappingKey(bytecodeOffset, null, null), i);
+        return;
+      }
+    }
+  }
+
+  /** The last character printed that is not whitespace, or ' ' when the buffer is blank. */
+  public char lastTokenChar() {
+    for (int i = myStringBuilder.length() - 1; i >= 0; i--) {
+      char ch = myStringBuilder.charAt(i);
+      if (!Character.isWhitespace(ch)) {
+        return ch;
+      }
+    }
+    return ' ';
   }
 
   public void setStart(int position) {

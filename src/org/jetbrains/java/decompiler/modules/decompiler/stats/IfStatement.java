@@ -538,7 +538,7 @@ public class IfStatement extends Statement {
       IfExprent head = (IfExprent) ifHead.copy();
       head.setCondition(RoundTrip.negateCondition(head.getCondition()));
       buf.appendIndent(indent).append(head.toJava(indent)).append(" {").appendLineSeparator();
-      if (!printElseIfArm(buf, indent, ifstat)) {
+      if (!printElseIfArm(buf, indent, ifstat, null)) {
         buf.appendIndent(indent).append("} else {").appendLineSeparator();
         buf.append(ExprProcessor.jmpWrapper(ifstat, indent + 1, false));
         buf.appendIndent(indent).append("}").appendLineSeparator();
@@ -569,7 +569,7 @@ public class IfStatement extends Statement {
         // statement's own: the rest hoisted after them would leave the enclosing else and join
         // the flow the enclosing test branches past. Keep it as the chain's else — javac compiles
         // both readings alike, and the else stays inside the enclosing arm.
-        if (!printElseIfArm(buf, indent, elsestat)) {
+        if (!printElseIfArm(buf, indent, elsestat, null)) {
           buf.appendIndent(indent).append("} else {").appendLineSeparator();
           buf.append(ExprProcessor.jmpWrapper(elsestat, indent + 1, false));
           buf.appendIndent(indent).append("}").appendLineSeparator();
@@ -634,7 +634,7 @@ public class IfStatement extends Statement {
         buf.append(ExprProcessor.jmpWrapper(ifstat, indent, false));
       } else if (appendFlatElse(buf, indent, elsestat, ifstat, false)) {
         // The table proves the source wrote the second arm flat after the first.
-      } else if (!printElseIfArm(buf, indent, ifstat)) {
+      } else if (!printElseIfArm(buf, indent, ifstat, elsestat)) {
         buf.appendIndent(indent).append("} else {").appendLineSeparator();
         buf.append(ExprProcessor.jmpWrapper(ifstat, indent + 1, false));
         buf.appendIndent(indent).append("}").appendLineSeparator();
@@ -703,6 +703,13 @@ public class IfStatement extends Statement {
           else {
             // continue
             buf.appendIndent(indent + 1).append("continue");
+          }
+          int site = condition instanceof IfExprent ifHead ? RoundTrip.continueGoto(ifHead) : -1;
+          if (site < 0) {
+            site = RoundTrip.droppedJumpOffset(this);
+          }
+          if (site >= 0 && !buf.hasBytecodeMapping(site)) {
+            buf.addBytecodeMapping(site);
           }
 
           if (ifedge.labeled) {
@@ -858,6 +865,8 @@ public class IfStatement extends Statement {
   /** Prints the closing brace of the then arm and the else arm, if any, at this indent. */
   private void appendElse(TextBuffer buf, int indent) {
     boolean elseif = false;
+    // Where the arm's print ended: a block's closing brace takes the arm's exit jump.
+    char armLast = buf.lastTokenChar();
 
     if (elsestat != null) {
       if (appendFlatElse(buf, indent, ifstat, elsestat, true)) {
@@ -870,7 +879,15 @@ public class IfStatement extends Statement {
       int split = RoundTrip.isArmOpen(this) ? -1 : RoundTrip.armScopeSplit(elsestat);
       if (split > 0) {
         List<Statement> children = elsestat.getStats();
-        buf.appendIndent(indent).append("} else {").appendLineSeparator();
+        int exit = armExitSite(buf, ifstat, elsestat);
+        if (armLast == '}') {
+          mapArmExit(buf, exit, ifstat, armLast);
+        }
+        buf.appendIndent(indent).append("} else {");
+        if (armLast != '}') {
+          mapArmExit(buf, exit, ifstat, armLast);
+        }
+        buf.appendLineSeparator();
         for (int k = 0; k < split; k++) {
           buf.append(ExprProcessor.jmpWrapper(children.get(k), indent + 1, k == 0));
         }
@@ -888,7 +905,15 @@ public class IfStatement extends Statement {
         TextBuffer content = ExprProcessor.jmpWrapper(elsestat, indent + 1, false);
 
         if (content.length() > 0) {
-          buf.appendIndent(indent).append("} else {").appendLineSeparator();
+          int exit = armExitSite(buf, ifstat, elsestat);
+          if (armLast == '}') {
+            mapArmExit(buf, exit, ifstat, armLast);
+          }
+          buf.appendIndent(indent).append("} else {");
+          if (armLast != '}') {
+            mapArmExit(buf, exit, ifstat, armLast);
+          }
+          buf.appendLineSeparator();
           buf.append(content);
         }
       }
@@ -958,7 +983,8 @@ public class IfStatement extends Statement {
    * remaining statements are the chain's final else.
    */
   static boolean printElseIfArm(TextBuffer buf, int indent, Statement arm, IfStatement owner) {
-    if (printElseIfArm(buf, indent, arm)) {
+    Statement first = owner == null ? null : owner.getIfstat();
+    if (printElseIfArm(buf, indent, arm, first)) {
       return true;
     }
     if (owner == null || !RoundTrip.selector("elseifchain")
@@ -996,7 +1022,7 @@ public class IfStatement extends Statement {
     } finally {
       open = RoundTrip.closeArm(previous);
     }
-    buf.appendIndent(indent).append("} else ");
+    appendElseKeyword(buf, indent, first, arm);
     content.setStart(TextUtil.getIndentString(indent).length());
     buf.append(content);
     // The arm withheld its closing brace for this line: `} else {` closes the inner if.
@@ -1034,13 +1060,15 @@ public class IfStatement extends Statement {
   }
 
   /**
-   * Prints `} else ` and the nested if when the arm still qualifies as an else-if chain, leaving
-   * the closing brace to the caller; false, printing nothing, otherwise.
+   * Prints `} else` and the nested if when the arm still qualifies as an else-if chain, leaving
+   * the closing brace to the caller; false, printing nothing, otherwise. {@code first} is the
+   * arm the caller printed before this one, whose exit jump the brace line carries, or null when
+   * that arm printed nothing.
    */
-  static boolean printElseIfArm(TextBuffer buf, int indent, Statement arm) {
+  static boolean printElseIfArm(TextBuffer buf, int indent, Statement arm, Statement first) {
     if (arm instanceof SequenceStatement sequence && RoundTrip.selector("elseifchain")
         && sequence.printsAsChainArm()) {
-      buf.appendIndent(indent).append("} else ");
+      appendElseKeyword(buf, indent, first, arm);
       TextBuffer content = printElseIfArmContent(arm, indent);
       content.setStart(TextUtil.getIndentString(indent).length());
       buf.append(content);
@@ -1051,7 +1079,7 @@ public class IfStatement extends Statement {
         !arm.isLabeled() &&
         (arm.getSuccessorEdges(STATEDGE_DIRECT_ALL).isEmpty()
          || !arm.getSuccessorEdges(STATEDGE_DIRECT_ALL).get(0).explicit)) { // else if
-      buf.appendIndent(indent).append("} else ");
+      appendElseKeyword(buf, indent, first, arm);
 
       TextBuffer content = printElseIfArmContent(arm, indent);
       content.setStart(TextUtil.getIndentString(indent).length());
@@ -1059,6 +1087,52 @@ public class IfStatement extends Statement {
       return true;
     }
     return false;
+  }
+
+  /**
+   * The exit jump the source ended an arm with, or -1 when the printed text already owns it. A
+   * written continue or break does: the same check the arm's own print uses, so a join edge the
+   * printer suppresses still lets the brace claim the jump.
+   */
+  private static int armExitSite(TextBuffer buf, Statement first, Statement second) {
+    if (first == null || second == null || RoundTrip.printsTerminalJump(first)) {
+      return -1;
+    }
+    int exit = RoundTrip.armExitGoto(first, second);
+    // No entry at the jump means the writer attributed it to no line: a source whose arm block
+    // declares no local and ends on a statement has no brace line there to align.
+    return exit >= 0 && !buf.hasBytecodeMapping(exit) && RoundTrip.hasLineEntryAt(exit) ? exit : -1;
+  }
+
+  /**
+   * Anchors {@code exit} on the line the writer records it on. The jump's line is the one the
+   * closing scope of the outermost block that declares a local ends on: the arm's own block when
+   * it declares one, otherwise the block the arm's print ends with. The plan of an arm that
+   * declares none and ends on a statement rather than a brace has no entry at all.
+   */
+  private static void mapArmExit(TextBuffer buf, int exit, Statement arm, char armLast) {
+    if (exit < 0) {
+      return;
+    }
+    if (RoundTrip.armDeclaresOwnLocal(arm, exit)) {
+      buf.addBytecodeMapping(exit);
+    } else if (armLast == '}') {
+      buf.addBytecodeMappingAtLastToken(exit);
+    }
+  }
+
+  /** Prints `} else` on the line the first arm's exit jump is recorded on. */
+  private static void appendElseKeyword(TextBuffer buf, int indent, Statement first, Statement second) {
+    char armLast = buf.lastTokenChar();
+    int exit = armExitSite(buf, first, second);
+    if (armLast == '}') {
+      mapArmExit(buf, exit, first, armLast);
+    }
+    buf.appendIndent(indent).append("} else");
+    if (armLast != '}') {
+      mapArmExit(buf, exit, first, armLast);
+    }
+    buf.append(" ");
   }
 
   /**
@@ -1192,7 +1266,14 @@ public class IfStatement extends Statement {
           : RoundTrip.negateCondition(printed));
         buf.appendIndent(indent + open).append(nested.toJava(indent + open))
           .append(" {").appendLineSeparator();
-        buf.appendIndent(indent + open + 1).append("continue;").appendLineSeparator();
+        buf.appendIndent(indent + open + 1).append("continue;");
+        int site = group + 1 < groups.size()
+          ? RoundTrip.continueGotoBefore(operands.get(groups.get(group + 1)), arm)
+          : RoundTrip.continueGoto(head);
+        if (site >= 0 && !buf.hasBytecodeMapping(site)) {
+          buf.addBytecodeMapping(site);
+        }
+        buf.appendLineSeparator();
         buf.appendIndent(indent + open).append("}").appendLineSeparator();
         if (group == 0) {
           firstGuard = true;
@@ -1277,7 +1358,14 @@ public class IfStatement extends Statement {
       guard.setCondition(written || i == split.headGroup ? test : complement(test));
       buf.appendIndent(indent);
       buf.append(guard.toJava(indent)).append(" {").appendLineSeparator();
-      buf.appendIndent(indent + 1).append(keyword).appendLineSeparator();
+      buf.appendIndent(indent + 1).append(keyword);
+      int site = i + 1 < split.groups.size()
+        ? RoundTrip.continueGotoBefore(split.groups.get(i + 1).get(0), this)
+        : i == split.groups.size() - 1 && split.headGroup < 0 ? RoundTrip.continueGoto(head) : -1;
+      if (site >= 0 && !buf.hasBytecodeMapping(site)) {
+        buf.addBytecodeMapping(site);
+      }
+      buf.appendLineSeparator();
       buf.appendIndent(indent).append("}").appendLineSeparator();
     }
     return true;

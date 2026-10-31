@@ -463,6 +463,15 @@ public class SwitchStatement extends Statement {
           if (braced.contains(stat) && j == edges.size() - 1) {
             buf.append(" {");
           }
+          if (RoundTrip.firstOffset(stat) < 0) {
+            // An empty `default:` group compiles to the jump its target holds — the table sends
+            // every unmatched value there and the jump continues to the join — and the writer
+            // records that jump on the label's line. Nothing else prints it.
+            int target = defaultTargetOffset();
+            if (target >= 0 && RoundTrip.jumpTargetAt(target) >= 0 && !buf.hasBytecodeMapping(target)) {
+              buf.addBytecodeMapping(target);
+            }
+          }
 
           buf.appendLineSeparator();
         } else {
