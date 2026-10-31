@@ -1335,7 +1335,7 @@ public class InvocationExprent extends Exprent {
             OPTIONAL_MAP_DEMAND_TYPE.set(priorMapDemandType);
           }
 
-          if (isUnboxingCall() && !boxing.forceUnboxing) {
+          if (isUnboxingCall() && !boxing.forceUnboxing && !explicitUnboxingStartsLine()) {
             // we don't print the unboxing call - no need to bother with the instance wrapping / casting
             buf.addBytecodeMapping(bytecode);
             if (instance instanceof FunctionExprent) {
@@ -3062,6 +3062,24 @@ public class InvocationExprent extends Exprent {
 
   public void forceUnboxing(boolean value) {
     boxing.forceUnboxing = value;
+  }
+
+  /**
+   * Whether the target's table starts a line at the unboxing call itself.
+   *
+   * <p>An implicit conversion is generated at the receiver's position and inherits its line, so
+   * the table records nothing at the call. An entry there means the source wrote the conversion
+   * on a line of its own, and the printer has to spell the call out to reproduce it; the chain
+   * break then puts the dot on that line.
+   */
+  private boolean explicitUnboxingStartsLine() {
+    if (!RoundTrip.selector("explicit-unbox") || instance == null
+        || bytecode == null || bytecode.isEmpty()) {
+      return false;
+    }
+    int offset = bytecode.nextSetBit(0);
+    return offset >= 0 && RoundTrip.lineStartsAt(offset)
+      && RoundTrip.sourceLine(this) > RoundTrip.sourceLineEnd(instance);
   }
 
   public boolean shouldForceUnboxing() {

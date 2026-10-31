@@ -3096,6 +3096,35 @@ public final class RoundTrip {
     return firstOffsetOf(exprent);
   }
 
+  /**
+   * Whether the target's table starts a pattern arm's body on a line below its label's.
+   *
+   * <p>The body begins with the instruction after the pattern's binding store. Reading the arm
+   * statement's smallest offset instead would name the first invocation the printer carries bits
+   * for and miss a body that opens with a load or a constant, and would read a continuation the
+   * source wrote below the label as the body's own line.
+   */
+  public static boolean armBodyStartsLater(Exprent label) {
+    StructMethod method = currentMethod();
+    if (method == null || !(label instanceof FunctionExprent function)
+        || function.getFuncType() != FunctionExprent.FunctionType.INSTANCEOF
+        || function.getLstOperands().size() < 3) {
+      return false;
+    }
+    int last = lastInstructionStart(function.getLstOperands().get(2).bytecode, method);
+    int first = firstOffsetOf(label);
+    if (last < 0 || first < 0) {
+      return false;
+    }
+    int body = instructionEnd(method, last);
+    if (body < 0) {
+      return false;
+    }
+    // Only an entry that starts at the body's first instruction proves the break; a line the
+    // body's continuation started belongs to the text inside the arm.
+    return lineStartsAt(body) && lineAt(method, body) > lineAt(method, first);
+  }
+
   /** The smallest instruction offset any part of the expression owns, or -1. */
   private static int firstOffsetOf(Exprent exprent) {
     int first = -1;

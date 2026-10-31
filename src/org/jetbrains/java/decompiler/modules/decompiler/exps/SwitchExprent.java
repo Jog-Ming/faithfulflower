@@ -82,6 +82,7 @@ public class SwitchExprent extends Exprent {
       }
 
       boolean hasEdge = false;
+      Exprent lastLabel = null;
       for (int j = 0; j < edges.size(); j++) {
         Exprent value = edges.get(j) == backing.getDefaultEdge() && values.size() <= j
           ? new ConstExprent(VarType.VARTYPE_NULL, null, null) // a total branch in j17 would act as a null branch too
@@ -136,6 +137,7 @@ public class SwitchExprent extends Exprent {
         }
 
         hasEdge = true;
+        lastLabel = value;
       }
 
       if (guard != null) {
@@ -160,13 +162,24 @@ public class SwitchExprent extends Exprent {
         continue;
       }
 
-      buf.append(" -> ");
-
       boolean simple = stat instanceof BasicBlockStatement;
 
       if (stat.getExprents() != null && stat.getExprents().size() != 1) {
         simple = false;
       }
+
+      // The target's table can prove the arm's body opens a line below the case label: a pattern
+      // label whose binding the source wrote on the next line leaves the test on the case line
+      // and puts the binding, the arrow and the body on the later one. A constant label carries
+      // no test of its own, and its bitset names the comparison's instruction, not its text.
+      if (simple && RoundTrip.selector("arm-body-line")
+          && lastLabel instanceof FunctionExprent labelFunction
+          && labelFunction.getFuncType() == FunctionExprent.FunctionType.INSTANCEOF
+          && RoundTrip.armBodyStartsLater(lastLabel)) {
+        buf.appendLineSeparator().appendIndent(indent + 1);
+      }
+
+      buf.append(" -> ");
 
       // Single yield or throw
       if (simple) {
