@@ -149,6 +149,27 @@ public class InvocationExprent extends Exprent {
     return ARGUMENT_TEXT_START.get()[0];
   }
 
+  /**
+   * Marks the line a vararg element's text starts on while that element prints, returning the
+   * enclosing argument's line to restore. The element is a printed argument of the call the array
+   * belongs to: when the printer broke before it, its text starts on the line its own head call
+   * sits on, so a link on that same line continues the element rather than starting a new one.
+   */
+  public static int enterVarargElement(Exprent element) {
+    int saved = ARGUMENT_TEXT_START.get()[0];
+    if (RoundTrip.selector("arg-head-line")) {
+      int line = firstPrintedLine(element);
+      if (line >= 0 && (saved < 0 || line > saved)) {
+        ARGUMENT_TEXT_START.get()[0] = line;
+      }
+    }
+    return saved;
+  }
+
+  public static void exitVarargElement(int saved) {
+    ARGUMENT_TEXT_START.get()[0] = saved;
+  }
+
   public static void enterAnonymousCreation() {
     ANONYMOUS_CREATION.set(Boolean.TRUE);
   }
@@ -1819,18 +1840,31 @@ public class InvocationExprent extends Exprent {
   private static int firstPrintedLine(Exprent argument) {
     Exprent current = argument;
     int line = -1;
+    // javac marks a line at every invocation's invoke, while the argument loads before it only
+    // inherit the last mark. The text of a call therefore starts on the line of its own invoke,
+    // not on the line of the first load the expression carries.
+    boolean headLine = RoundTrip.selector("arg-head-line");
     while (true) {
       if (current instanceof FunctionExprent func && func.getFuncType() == FunctionExprent.FunctionType.CAST
         && !func.getLstOperands().isEmpty()) {
         current = func.getLstOperands().get(0);
       } else if (current instanceof InvocationExprent invocation) {
-        line = RoundTrip.sourceLine(invocation);
+        line = headLine ? RoundTrip.sourceLineEnd(invocation) : RoundTrip.sourceLine(invocation);
         if (invocation.getInstance() == null) {
           break;
         }
         current = invocation.getInstance();
       } else if (current instanceof FieldExprent field && field.getInstance() != null) {
         current = field.getInstance();
+      } else if (headLine && current instanceof NewExprent created) {
+        // A method reference's text starts at the invokedynamic javac records for it, which is
+        // the line the reference is written on. A creation keeps its own first offset: its
+        // constructor invocation is recorded after the arguments, on the last of their lines,
+        // so it names where the argument list ended, not where the creation's text starts.
+        if (created.isMethodReference()) {
+          line = RoundTrip.sourceLineEnd(created);
+        }
+        break;
       } else {
         break;
       }
@@ -2444,10 +2478,16 @@ public class InvocationExprent extends Exprent {
       // own line after the opening parenthesis, even though the value it loads inherits the
       // statement's line. A nested call in that position has its invoke later than its own
       // argument's inherited line; that is not a break after its parenthesis.
+      // The line a single instruction of the first argument carries can be inherited from
+      // anywhere above, not just from the enclosing statement: when the enclosing argument's text
+      // starts later than the argument's own line, the text before that line is not this call's.
+      boolean inheritedFirst = firstLine < callLine && firstEnd == firstLine
+        && (ARG_AT_LINE_START.get()
+            || RoundTrip.selector("arg-head-line") && ARGUMENT_TEXT_START.get()[0] > firstLine);
       boolean explicitStart = callLine >= 0 && firstLine >= 0
         && (firstLine > callLine
           || firstLine != callLine && RoundTrip.lineStartsHere(lstParameters.get(start))
-             && !(ARG_AT_LINE_START.get() && firstLine < callLine && firstEnd == firstLine));
+             && !inheritedFirst);
       // A constructor's call token sits on its `new`, not on the init invocation, which javac
       // records on the line of the last instruction of the argument list. The first argument's
       // own invoke names the line its text starts on; javac still lays the receiver's loads on
@@ -2576,6 +2616,15 @@ public class InvocationExprent extends Exprent {
         // ended; an argument that starts on it was written on the same source line.
         boolean prevEndGate = RoundTrip.selector("rt-arg-prev-end");
         int previous = prevEndGate ? previousEnd : previousLine;
+        // The enclosing argument's text starts no earlier than the line the printer placed it on;
+        // a previous argument's recorded end below that line is a load inheriting an outer line,
+        // not a break the source had before this argument.
+        if (RoundTrip.selector("arg-base-line")) {
+          int argumentBase = ARGUMENT_TEXT_START.get()[0];
+          if (argumentBase >= 0) {
+            previous = Math.max(previous, argumentBase);
+          }
+        }
         // A lambda's invokedynamic inherits the call's line, but its body is a method of its own:
         // a body line later than the previous argument's end means the source wrote the lambda
         // on that later line, and moving the argument there keeps the arrow with its body. The

@@ -171,6 +171,9 @@ public class SimplifyExprentsHelper {
       // remove getClass() invocation, which is part of a qualified new
       if (DecompilerContext.getOption(IFernflowerPreferences.REMOVE_GET_CLASS_NEW)) {
         if (isQualifiedNewGetClass(current, next)) {
+          if (current instanceof InvocationExprent nullCheck) {
+            attachNullCheckOffsets(nullCheck, next);
+          }
           list.remove(index);
           res = true;
           continue;
@@ -888,6 +891,37 @@ public class SimplifyExprentsHelper {
     }
 
     return false;
+  }
+
+  /**
+   * A captured method reference's null check is written on the reference's own line, and javac
+   * records the line entry at that check rather than at the invokedynamic. The check itself is
+   * removed from the statement, so its offsets move onto the creation the reference prints: the
+   * printed {@code recv::m} then owns an entry of its own, and the aligner can place it on the
+   * line the reference was written on.
+   */
+  private static void attachNullCheckOffsets(InvocationExprent check, Exprent second) {
+    if (!RoundTrip.selector("arg-head-line") || check.bytecode == null || check.bytecode.isEmpty()
+      || check.getLstParameters().isEmpty()) {
+      return;
+    }
+    Exprent target = check.isStatic() ? check.getLstParameters().get(0) : check.getInstance();
+    if (target == null) {
+      return;
+    }
+    Deque<Exprent> lstExprents = new ArrayDeque<>();
+    lstExprents.add(second);
+    while (!lstExprents.isEmpty()) {
+      Exprent expr = lstExprents.removeFirst();
+      lstExprents.addAll(expr.getAllExprents());
+      if (expr instanceof NewExprent newExpr && newExpr.isMethodReference()
+        && newExpr.getConstructor() != null && !newExpr.getConstructor().getLstParameters().isEmpty()
+        && (newExpr.getConstructor().getLstParameters().get(0).equals(target)
+            || isUnambiguouslySameParam(check.isStatic(), target, newExpr.getConstructor().getLstParameters()))) {
+        newExpr.addBytecodeOffsets(check.bytecode);
+        return;
+      }
+    }
   }
 
   private static boolean isUnambiguouslySameParam(boolean isStatic, Exprent target, List<Exprent> parameters) {

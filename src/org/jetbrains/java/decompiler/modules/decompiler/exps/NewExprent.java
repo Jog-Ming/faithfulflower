@@ -642,6 +642,12 @@ public class NewExprent extends Exprent {
         int callLine = InvocationExprent.enclosingCallLine();
         new ClassWriter().classLambdaToJava(child, buf, methodObject, indent,
           callLine >= 0 ? callLine : RoundTrip.sourceLine(this), methodReferenceQualifier(), getFunctionalReturnType());
+        if (isMethodReference() && RoundTrip.selector("arg-head-line")) {
+          // A method reference has no body method whose table could anchor its text: javac records
+          // the invokedynamic (and the null check of a captured receiver) on the line the
+          // reference is written on, and only that entry can tell the aligner where the text sits.
+          buf.addBytecodeMapping(bytecode);
+        }
       }
       else if (!selfReference) {
         String regionClass = child == null || child.classStruct == null ? null : child.classStruct.qualifiedName;
@@ -775,14 +781,15 @@ public class NewExprent extends Exprent {
           && line >= 0 && previousEnd >= 0 && line > previousEnd;
         boolean ownLater = enabled && element instanceof InvocationExprent
           && line >= 0 && previousEnd >= 0 && line <= previousEnd && end > previousEnd;
+        boolean elementStartsLine = later || ownLater;
         if (i > 0) {
           buf.append(",");
-          if (later || ownLater) {
+          if (elementStartsLine) {
             buf.appendLineSeparator();
           } else {
             buf.appendPossibleNewline(" ");
           }
-        } else if (later || ownLater) {
+        } else if (elementStartsLine) {
           buf.appendLineSeparator();
         }
 
@@ -790,7 +797,14 @@ public class NewExprent extends Exprent {
         if (element instanceof NewExprent) {
           ((NewExprent) element).setDirectArrayInit(false);
         }
-        ExprProcessor.getCastedExprent(element, leftType, buf, indent, false);
+        int savedTextStart = elementStartsLine ? InvocationExprent.enterVarargElement(element) : -1;
+        try {
+          ExprProcessor.getCastedExprent(element, leftType, buf, indent, false);
+        } finally {
+          if (elementStartsLine) {
+            InvocationExprent.exitVarargElement(savedTextStart);
+          }
+        }
         if (end >= 0) {
           previousEnd = end;
         }
