@@ -100,6 +100,12 @@ public class InvocationExprent extends Exprent {
    * that line may be compared with the first argument's.
    */
   private int callerEnclosingLine = -1;
+  /**
+   * The line the creation's own text (`new`) sits on, proved from its first argument's first
+   * recorded call. Its allocation only inherits the enclosing line, so that line is not evidence;
+   * the first argument's first printed call names where the text really starts.
+   */
+  private int callerTextLine = -1;
   public boolean forceGenericQualfication = false;
   private final NullableConcurrentHashMap<VarType, VarType> genericsMap = new NullableConcurrentHashMap<>();
   /** Type arguments recorded for a call whose variables the arguments leave unbound. */
@@ -1844,6 +1850,10 @@ public class InvocationExprent extends Exprent {
     // inherit the last mark. The text of a call therefore starts on the line of its own invoke,
     // not on the line of the first load the expression carries.
     boolean headLine = RoundTrip.selector("arg-head-line");
+    // The allocation's own line is only inherited from the enclosing statement, and an inherited
+    // line is not where the creation's text sits; it must not reach the enclosing call's break
+    // decision as if it were one.
+    boolean creationHead = false;
     while (true) {
       if (current instanceof FunctionExprent func && func.getFuncType() == FunctionExprent.FunctionType.CAST
         && !func.getLstOperands().isEmpty()) {
@@ -1860,16 +1870,108 @@ public class InvocationExprent extends Exprent {
         // A method reference's text starts at the invokedynamic javac records for it, which is
         // the line the reference is written on. A creation keeps its own first offset: its
         // constructor invocation is recorded after the arguments, on the last of their lines,
-        // so it names where the argument list ended, not where the creation's text starts.
+        // so it names where the argument list ended, not where the creation's text starts. Its
+        // text starts where its first argument's first printed call sits, when the `new` has no
+        // entry of its own; without one the line stays unknown.
         if (created.isMethodReference()) {
           line = RoundTrip.sourceLineEnd(created);
+        } else if (creationTextProved(created)) {
+          line = creationCallLine(created);
+          creationHead = true;
         }
         break;
       } else {
         break;
       }
     }
-    return line >= 0 ? line : RoundTrip.sourceLine(current);
+    return line >= 0 ? line : creationHead ? -1 : RoundTrip.sourceLine(current);
+  }
+
+  /**
+   * The line of the first invocation the creation's own text prints, or -1 when no line proves
+   * where that text starts. A creation's `new` carries no line entry: its allocation only inherits
+   * the enclosing statement's, and its constructor invocation is recorded after the arguments on
+   * the line the argument list ended with. The first argument's first printed call is the first
+   * token of the creation that javac anchors, so its line is the creation's text line whenever
+   * the source kept them together. A method reference is anchored by its own invokedynamic.
+   */
+  private static int creationCallLine(NewExprent creation) {
+    if (creation.isMethodReference()) {
+      return RoundTrip.sourceLineEnd(creation);
+    }
+    if (!creationTextProved(creation)) {
+      return -1;
+    }
+    return firstCallLine(creation.getConstructor().getLstParameters().get(0));
+  }
+
+  /** The line of the first printed call the argument reaches, skipping casts and receivers. */
+  private static int firstCallLine(Exprent argument) {
+    Exprent current = argument;
+    int line = -1;
+    while (true) {
+      if (current instanceof FunctionExprent func && func.getFuncType() == FunctionExprent.FunctionType.CAST
+        && !func.getLstOperands().isEmpty()) {
+        current = func.getLstOperands().get(0);
+      } else if (current instanceof InvocationExprent invocation) {
+        line = RoundTrip.sourceLineEnd(invocation);
+        if (invocation.getInstance() == null) {
+          break;
+        }
+        current = invocation.getInstance();
+      } else if (current instanceof FieldExprent field && field.getInstance() != null) {
+        current = field.getInstance();
+      } else if (current instanceof NewExprent created) {
+        // The `new` token is not a call; the first call the creation prints is inside its own
+        // first argument, unless it is a lambda or method reference, which never reaches one.
+        line = creationCallLine(created);
+        break;
+      } else {
+        break;
+      }
+    }
+    return line;
+  }
+
+  /** Whether the creation's allocation has a line-table entry of its own (or no offsets at all). */
+  private static boolean creationStartsOwnLine(NewExprent creation) {
+    return creation.bytecode == null || creation.bytecode.isEmpty()
+      || RoundTrip.lineStartsAt(creation.bytecode.nextSetBit(0));
+  }
+
+  /**
+   * Whether the creation is a plain {@code new X(args)} whose own text line the class file can
+   * prove: not a lambda, method reference, anonymous class or enum constant, whose printed head is
+   * not the `new`, and with an allocation that has no line entry of its own and an argument to
+   * read the line from.
+   */
+  private static boolean creationTextProved(NewExprent creation) {
+    if (creation.isMethodReference() || creation.isLambda() || creation.isAnonymous()
+      || creation.isEnumConst() || creationStartsOwnLine(creation)) {
+      return false;
+    }
+    InvocationExprent constructor = creation.getConstructor();
+    return constructor != null && !constructor.getLstParameters().isEmpty();
+  }
+
+  /**
+   * The line a creation's own text starts on, when the class file proves it, or -1. The `new` has
+   * no entry of its own, so only the first argument can name the line: its first printed call (H)
+   * when the printer started the creation on a line of its own or H is the enclosing argument's
+   * text start, else the first argument's own first printed line when that is the text start. When
+   * neither holds, the class file does not say where the creation's text begins.
+   */
+  public static int creationTextLine(NewExprent creation) {
+    if (!creationTextProved(creation)) {
+      return -1;
+    }
+    Exprent first = creation.getConstructor().getLstParameters().get(0);
+    int derived = firstCallLine(first);
+    if (derived >= 0 && (argumentStartedLine() || derived == argumentTextStartLine())) {
+      return derived;
+    }
+    int fallback = firstPrintedLine(first);
+    return fallback >= 0 && fallback == argumentTextStartLine() ? fallback : -1;
   }
 
   /** The first line of an expression lambda's body method, or -1 when it cannot be named. */
@@ -2192,6 +2294,11 @@ public class InvocationExprent extends Exprent {
     callerEnclosingLine = line;
   }
 
+  /** Tells the argument printer the line the creation's own text starts on, or -1 when unknown. */
+  public void setCallerTextLine(int line) {
+    callerTextLine = line;
+  }
+
   public TextBuffer appendParamList(int indent) {
     int savedCallLine = CALL_LINE.get()[0];
     int savedOuterLine = OUTER_CALL_LINE.get()[0];
@@ -2455,7 +2562,11 @@ public class InvocationExprent extends Exprent {
       // the line of the argument list's last instruction: only the creation's line can prove the
       // break, while the init invoke's line would move a lambda the target kept inline.
       boolean insideCall = OUTER_CALL_LINE.get()[0] >= 0 && OUTER_CALL_AT.get()[0] == RoundTrip.currentMethod();
-      int creationLine = callerEnclosingLine > callerOpeningLine ? callerEnclosingLine : callerOpeningLine;
+      // The creation's own text line, proved from its first argument, is the baseline the first
+      // argument's line is compared with; the inherited `new` line and the enclosing call's line
+      // are only fallbacks for a creation the class file does not place.
+      int creationLine = callerTextLine >= 0 ? callerTextLine
+        : Math.max(callerEnclosingLine, callerOpeningLine);
       int callStartLine = functype == Type.INIT && creationLine >= 0 ? creationLine : callLine;
       boolean lambdaStartsLater = lambdaLine >= 0 && callStartLine >= 0 && lambdaLine > callStartLine;
       // A varargs call's array holds the arguments; its elements are printed without a parameter
@@ -2657,10 +2768,12 @@ public class InvocationExprent extends Exprent {
         int callTextLine = CALL_LINE.get()[0];
         // A constructor's invoke carries no entry of its own and inherits the last line its
         // arguments ended with, which can sit below the creation; the creation's own line is the
-        // one the constructor's text is known to sit on.
-        if (functype == Type.INIT && callerOpeningLine >= 0
-          && (callTextLine < 0 || callerOpeningLine < callTextLine)) {
-          callTextLine = callerOpeningLine;
+        // one the constructor's text is known to sit on. The line its first argument proved wins
+        // over the inherited `new` line.
+        int creationBase = callerTextLine >= 0 ? callerTextLine : callerOpeningLine;
+        if (functype == Type.INIT && creationBase >= 0
+          && (callTextLine < 0 || creationBase < callTextLine)) {
+          callTextLine = creationBase;
         }
         ARGUMENT_TEXT_START.get()[0] = startsLine
           ? (i == start ? firstLine : line)

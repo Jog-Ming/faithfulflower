@@ -585,6 +585,7 @@ public class NewExprent extends Exprent {
         try {
           constructor.setCallerOpeningLine(RoundTrip.sourceLine(this));
           constructor.setCallerEnclosingLine(enclosingCreationLine());
+          constructor.setCallerTextLine(InvocationExprent.creationTextLine(this));
           buf.append(constructor.appendParamList(indent));
         } finally {
           if (anonymousCreation) {
@@ -735,6 +736,7 @@ public class NewExprent extends Exprent {
             buf.append("<>");
             constructor.setCallerOpeningLine(RoundTrip.sourceLine(this));
             constructor.setCallerEnclosingLine(enclosingCreationLine());
+            constructor.setCallerTextLine(InvocationExprent.creationTextLine(this));
             buf.append('(').append(constructor.appendParamList(indent)).append(')');
             return buf;
           }
@@ -754,6 +756,7 @@ public class NewExprent extends Exprent {
           }
           constructor.setCallerOpeningLine(RoundTrip.sourceLine(this));
           constructor.setCallerEnclosingLine(enclosingCreationLine());
+          constructor.setCallerTextLine(InvocationExprent.creationTextLine(this));
           buf.append('(').append(constructor.appendParamList(indent)).append(')');
         }
       }
