@@ -759,13 +759,19 @@ public final class LineAlign {
           : values.getAttribute(StructGeneralAttribute.ATTRIBUTE_LINE_NUMBER_TABLE);
         int target = table == null ? -1 : table.findLineNumber(0);
         if (target >= 0) {
-          entryLines.add(declaration);
-          add(shifts, conflicted, declaration, target - declaration);
+          // The target's entry names the first line of the declaration block, annotations
+          // included; javac starts the enum there. Anchoring the keyword alone would leave the
+          // annotation above on its old line and move only the enum.
+          int top = classDeclarationTop(lines, declaration, 0);
+          entryLines.add(top);
+          add(shifts, conflicted, top, target - top);
         }
       }
       // A class that uses assertions carries a synthetic $assertionsDisabled field, and javac
       // writes the <clinit> that fills it with one line entry, the class declaration's. The source
-      // wrote no static initializer block, so no printed construct maps that line.
+      // wrote no static initializer block, so no printed construct maps that line. The prelude is
+      // the first instruction; when nothing printed claims it, its line is the class header's,
+      // whether or not other initializers follow in the same table.
       if (hasAssertionsDisabled(cls)) {
         StructMethod clinit = cls.getMethod(org.jetbrains.java.decompiler.code.CodeConstants.CLINIT_NAME, "()V");
         BytecodeMappingTracer tracer = clinit == null ? null : tracers.get(
@@ -773,7 +779,7 @@ public final class LineAlign {
             clinit.getName(), clinit.getDescriptor())));
         StructLineNumberTableAttribute table = clinit == null ? null
           : clinit.getAttribute(StructGeneralAttribute.ATTRIBUTE_LINE_NUMBER_TABLE);
-        if ((tracer == null || tracer.getMapping().isEmpty()) && table != null && singleLine(table)) {
+        if ((tracer == null || !tracer.getMapping().containsKey(0)) && table != null) {
           int target = table.findLineNumber(0);
           if (target >= 0) {
             int top = classDeclarationTop(lines, declaration, 0);
