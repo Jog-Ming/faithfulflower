@@ -262,26 +262,48 @@ public final class LineAlign {
    * Puts a field initializer's first instruction on the declaration's line.
    *
    * <p>javac records a field's declaration at the position of the initializer expression, and the
-   * first instruction the expression emits inherits that line. The printer records where each
-   * instruction's text was printed instead, and that text may be an argument that landed on a
-   * later line (a class-qualified static call prints its class name on the declaration's line and
-   * the dot on the next one, and the arguments below inherit the declaration's line). The printer
-   * records the declaration anchor under a {@code <field-decl owner>} key; the owner's table gives
-   * the line, and the argument's own position yields to it without losing the printed position
-   * the constant-name pass reads.
+   * first instruction the expression emits inherits that line. For an instance field that line is
+   * the declaration block's first line, annotations included, while the printer writes the
+   * annotation above the signature and records the instruction at the signature's position. The
+   * printer records the declaration anchor under a {@code <field-decl field owner>} key; the
+   * owner's table gives the line, and the argument's own position yields to it without losing the
+   * printed position the constant-name pass reads.
+   *
+   * <p>The anchor is applied to two tracers. The owner's is the constructor the initializer was
+   * lifted from, which carries the instruction's line table. The other is the initializer's own
+   * tracer, keyed {@code <field-init field>}: it is what the aligner walks for a lifted
+   * initializer, and leaving it on the signature's line would contradict the owner's entry.
    */
   private static void applyFieldDeclarationAnchors(
       Map<Pair<String, String>, BytecodeMappingTracer> tracers) {
     Map<Pair<String, String>, Map<Integer, Integer>> anchors = new java.util.HashMap<>();
+    Map<Pair<String, String>, Map<Integer, Integer>> initializerAnchors = new java.util.HashMap<>();
     for (Map.Entry<Pair<String, String>, BytecodeMappingTracer> entry : tracers.entrySet()) {
       String methodKey = entry.getKey().b;
       if (!methodKey.startsWith("<field-decl ") || !methodKey.endsWith(">")) {
         continue;
       }
-      String owner = methodKey.substring("<field-decl ".length(), methodKey.length() - 1);
+      String body = methodKey.substring("<field-decl ".length(), methodKey.length() - 1);
+      // A field name holds no whitespace, so the first space ends it and the owner key -- which
+      // may itself hold one -- follows.
+      int space = body.indexOf(' ');
+      String field = space < 0 ? null : body.substring(0, space);
+      String owner = space < 0 ? body : body.substring(space + 1);
       anchors.computeIfAbsent(Pair.of(entry.getKey().a, owner), k -> new java.util.HashMap<>())
         .putAll(entry.getValue().getMapping());
+      if (field != null && !field.isEmpty()) {
+        initializerAnchors.computeIfAbsent(
+          Pair.of(entry.getKey().a, "<field-init " + field + ">"), k -> new java.util.HashMap<>())
+          .putAll(entry.getValue().getMapping());
+      }
     }
+    applyAnchors(tracers, anchors);
+    applyAnchors(tracers, initializerAnchors);
+  }
+
+  /** Lowers the named tracers' entries to the declaration anchor where the anchor sits earlier. */
+  private static void applyAnchors(Map<Pair<String, String>, BytecodeMappingTracer> tracers,
+      Map<Pair<String, String>, Map<Integer, Integer>> anchors) {
     for (Map.Entry<Pair<String, String>, Map<Integer, Integer>> anchor : anchors.entrySet()) {
       BytecodeMappingTracer tracer = tracers.get(anchor.getKey());
       if (tracer == null) {

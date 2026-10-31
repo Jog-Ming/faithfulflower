@@ -1978,6 +1978,13 @@ public class ClassWriter implements StatementWriter {
     if (javadocProvider != null) {
       appendJavadoc(buffer, javadocProvider.getFieldJavadocStyle(cl, fd), javadocProvider.getFieldDoc(cl, fd), indent);
     }
+    // javac attributes an instance field's initializer code to the first line of the member
+    // declaration block, annotations included: the annotation is the declaration's first token,
+    // and the signature line below it is not what pc0's instruction gets. A static field's code
+    // runs in <clinit>, where the initializer expression's own line is the one javac records, so
+    // its anchor stays on the signature. The instance anchor is taken before the annotations so
+    // the aligner can put padding in front of the block instead of between it and its signature.
+    int declarationStart = buffer.length();
     Set<String> writtenAnnotations = appendAnnotations(buffer, indent, fd, TypeAnnotation.FIELD);
 
     buffer.appendIndent(indent);
@@ -2029,9 +2036,6 @@ public class ClassWriter implements StatementWriter {
         // A lifted initializer keeps the offsets of the method it came from; its instructions
         // belong to this declaration's line, both in a constructor and in <clinit>.
         boolean staticInitializer = fd.hasModifier(CodeConstants.ACC_STATIC);
-        if (!staticInitializer && initializer.bytecode != null) {
-          buffer.addBytecodeMapping(initializer.bytecode);
-        }
         // A declaration's line is the one javac gave the initializer's first instruction: the
         // declaration's position is the last line set before the expression starts emitting, so
         // an argument or a chain head that carries a later line of its own does not move the
@@ -2049,12 +2053,37 @@ public class ClassWriter implements StatementWriter {
           // would otherwise keep the argument's printed position as the anchor. An instance
           // initializer is anchored on the constructor it was lifted from the same way, so the
           // declaration's own line — not the line its arguments wrapped onto — takes the line the
-          // constructor's table gives the initializer.
-          int end = RoundTrip.instructionEnd(RoundTrip.currentMethod(), firstInstruction);
-          for (int offset = firstInstruction; offset < (end > firstInstruction ? end : firstInstruction + 1); offset++) {
-            buffer.addBytecodeMappingAt(buffer.length(), offset, cl.qualifiedName,
-              "<field-decl " + declarationKey + ">");
+          // constructor's table gives the initializer. The field's name rides in the key because
+          // the aligner applies the anchor to the initializer's own tracer as well, and that
+          // tracer's key names the field, not the constructor.
+          //
+          // An instance store opens with the receiver load, and javac gives that instruction the
+          // declaration's line while the expression keeps its own. When the table separates the
+          // two, the load is the anchor: it is the only instruction carrying the declaration's
+          // line, and moving the expression's own entry onto that line would overshoot by the
+          // distance between the annotation and the signature. A constant or a field read emits
+          // no entry of its own, so the expression inherits the declaration's line and is what
+          // the anchor moves.
+          StructMethod anchorOwner = staticInitializer ? RoundTrip.currentMethod() : declarationOwner;
+          int anchorOffset = firstInstruction;
+          if (!staticInitializer) {
+            int store = RoundTrip.instructionEndingAt(declarationOwner, firstInstruction);
+            StructLineNumberTableAttribute table = declarationOwner == null ? null
+              : declarationOwner.getAttribute(StructGeneralAttribute.ATTRIBUTE_LINE_NUMBER_TABLE);
+            if (store >= 0 && table != null
+                && table.findLineNumber(store) != table.findLineNumber(firstInstruction)) {
+              anchorOffset = store;
+            }
           }
+          int anchor = staticInitializer ? buffer.length() : declarationStart;
+          int end = RoundTrip.instructionEnd(anchorOwner, anchorOffset);
+          for (int offset = anchorOffset; offset < (end > anchorOffset ? end : anchorOffset + 1); offset++) {
+            buffer.addBytecodeMappingAt(anchor, offset, cl.qualifiedName,
+              "<field-decl " + fd.getName() + " " + declarationKey + ">");
+          }
+        }
+        if (!staticInitializer && initializer.bytecode != null) {
+          buffer.addBytecodeMapping(initializer.bytecode);
         }
         // A chained initializer's creation prologue (the `new`) is the receiver chain's root,
         // and the target attributes it to the declaration's line; the top-level set omits it,
@@ -2522,7 +2551,10 @@ public class ClassWriter implements StatementWriter {
               hideMethod = code.length() == 0 && (clInit || dInit || hideConstructor(node, init, throwsExceptions, paramCount, flags, mt));
               // javac puts a constructor's pc0 on its declaration line unless the body opens with
               // an explicit this(...)/super(...) call, which makes the call's line pc0's instead.
-              if (init && declStart >= 0 && !startsWithDelegation(root)) {
+              // The body shape alone does not settle it: an inner class's synthetic outer-field
+              // store is pc0's instruction and javac keeps it on the declaration line while the
+              // call below carries its own. The target's table says which of the two it did.
+              if (init && declStart >= 0 && (!startsWithDelegation(root) || declarationOwnsPc0(root, mt))) {
                 buffer.addBytecodeMappingAt(declStart, 0, cl.qualifiedName,
                   InterpreterUtil.makeUniqueKey(mt.getName(), mt.getDescriptor()));
               }
@@ -3113,14 +3145,43 @@ public class ClassWriter implements StatementWriter {
 
   /** Whether the constructor body opens with this(...) or super(...). */
   private static boolean startsWithDelegation(RootStatement root) {
+    return firstDelegation(root) != null;
+  }
+
+  /** The this(...)/super(...) call a constructor body opens with, or null when it opens with anything else. */
+  private static InvocationExprent firstDelegation(RootStatement root) {
     Statement first = root == null ? null : root.getFirst();
     if (!(first instanceof BasicBlockStatement) || first.getExprents() == null
         || first.getExprents().isEmpty()) {
-      return false;
+      return null;
     }
     Exprent exprent = first.getExprents().get(0);
-    return exprent instanceof InvocationExprent
-      && ((InvocationExprent)exprent).getFunctype() == InvocationExprent.Type.INIT;
+    return exprent instanceof InvocationExprent invocation
+      && invocation.getFunctype() == InvocationExprent.Type.INIT ? invocation : null;
+  }
+
+  /**
+   * Whether the target's table still gives pc0 the declaration's line although the body opens
+   * with a this(...)/super(...) call.
+   *
+   * <p>The two entries are what settles it. javac attributes the synthetic store of an inner
+   * class's outer reference to the declaration line, and the call below it keeps its own line;
+   * only when pc0's entry is the call's does the call own pc0, and only then must the declaration
+   * not be anchored to it.
+   */
+  private static boolean declarationOwnsPc0(RootStatement root, StructMethod mt) {
+    InvocationExprent delegation = firstDelegation(root);
+    StructLineNumberTableAttribute table =
+      mt.getAttribute(StructGeneralAttribute.ATTRIBUTE_LINE_NUMBER_TABLE);
+    if (delegation == null || delegation.bytecode == null || delegation.bytecode.isEmpty() || table == null) {
+      return false;
+    }
+    // The invocation's bits include its operand bytes; a line entry covers a whole instruction,
+    // so the last byte names the call's line as well as its start does.
+    int call = delegation.bytecode.previousSetBit(Integer.MAX_VALUE);
+    int pc0Line = table.findLineNumber(0);
+    int callLine = table.findLineNumber(call);
+    return pc0Line >= 0 && callLine >= 0 && pc0Line != callLine;
   }
 
   private static boolean explicitEmptyConstructor(StructMethod method, ClassWrapper wrapper) {

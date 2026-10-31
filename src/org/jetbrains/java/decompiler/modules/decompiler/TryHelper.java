@@ -110,6 +110,14 @@ public class TryHelper {
 
         // Only merge try statements without catches, otherwise we might produce invalid code
         if (inner.getStats().size() == 1) {
+          // The printed header belongs to the outer statement once the inner one is gone. A
+          // statement that had no resources of its own is the shell around the nested trial, and
+          // the inner close handler is the store javac attributed to the header's line; one that
+          // already had resources keeps its own, which closes outside this one.
+          if (stat.getResources().isEmpty()
+              && ((CatchStatement) inner).getResourceHandlerOffset() >= 0) {
+            stat.setResourceHandlerOffset(((CatchStatement) inner).getResourceHandlerOffset());
+          }
           // Set the outer try to be resources, and initialize
           stat.getResources().addAll(resources);
           stat.getVarDefinitions().addAll(inner.getVarDefinitions());

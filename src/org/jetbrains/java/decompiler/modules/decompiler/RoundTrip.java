@@ -3393,6 +3393,13 @@ public final class RoundTrip {
     return end == null ? -1 : end;
   }
 
+  /** The start offset of the instruction that ends exactly where this offset begins, or -1. */
+  public static int instructionEndingAt(StructMethod method, int offset) {
+    java.util.Map<Integer, Integer> byEnd = method == null ? null : INSTRUCTION_BY_END.get(method);
+    Integer start = byEnd == null ? null : byEnd.get(offset);
+    return start == null ? -1 : start;
+  }
+
   /** The slot a store instruction at this start offset writes, or -1. */
   public static int storeSlotAt(StructMethod method, int offset) {
     java.util.Map<Integer, Integer> map = method == null ? null : STORE_SLOTS.get(method);

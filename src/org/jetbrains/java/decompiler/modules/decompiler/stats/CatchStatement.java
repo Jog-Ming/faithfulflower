@@ -29,6 +29,12 @@ public class CatchStatement extends Statement {
   private final List<List<String>> exctstrings = new ArrayList<>();
   private final List<VarExprent> vars = new ArrayList<>();
   private final List<Exprent> resources = new ArrayList<>();
+  /**
+   * The store that opens the synthetic catch closing a try-with-resources, or -1. The closer is
+   * not printed, and javac attributes its store to the {@code try} line, so that line needs the
+   * mapping or the aligner cannot place it.
+   */
+  private int resourceHandlerOffset = -1;
 
   // *****************************************************************************
   // constructors
@@ -61,6 +67,10 @@ public class CatchStatement extends Statement {
     if (next != null) {
       post = next;
     }
+    // javac attributes the catch-all that closes a try-with-resources to the `try` line. The
+    // handler exists here, before any pass flattens it away, so record its store now; a later
+    // pass that replaces the block cannot recover the offset.
+    resourceHandlerOffset = firstHandlerOffset();
   }
 
   // *****************************************************************************
@@ -155,6 +165,12 @@ public class CatchStatement extends Statement {
     }
     else {
       buf.appendIndent(indent).append("try (");
+      if (resourceHandlerOffset >= 0) {
+        // The synthetic close's store is the line's only instruction: the closer itself prints
+        // nothing, so without this mapping the aligner pays the gap at the first resource and
+        // the padding lands inside the parentheses instead of in front of them.
+        buf.addBytecodeMapping(resourceHandlerOffset);
+      }
 
       if (resources.size() > 1) {
         buf.appendLineSeparator();
@@ -611,6 +627,14 @@ public class CatchStatement extends Statement {
 
   public List<Exprent> getResources() {
     return resources;
+  }
+
+  public int getResourceHandlerOffset() {
+    return resourceHandlerOffset;
+  }
+
+  public void setResourceHandlerOffset(int resourceHandlerOffset) {
+    this.resourceHandlerOffset = resourceHandlerOffset;
   }
 
   @Override

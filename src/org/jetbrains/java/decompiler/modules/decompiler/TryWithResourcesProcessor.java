@@ -1,5 +1,7 @@
 package org.jetbrains.java.decompiler.modules.decompiler;
 
+import org.jetbrains.java.decompiler.code.CodeConstants;
+import org.jetbrains.java.decompiler.code.cfg.BasicBlock;
 import org.jetbrains.java.decompiler.main.DecompilerContext;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.*;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.FunctionExprent.FunctionType;
@@ -83,6 +85,10 @@ public final class TryWithResourcesProcessor {
           }
 
           initBlock.getExprents().remove(ass);
+          // The old-style shape closes through a finally block, not through this statement's
+          // own handler: the store the constructor recorded belongs to a written catch and says
+          // nothing about the header's line.
+          child.setResourceHandlerOffset(-1);
           child.getResources().add(0, resourceDef);
 
           if (!finallyStat.getVarDefinitions().isEmpty()) {
@@ -251,6 +257,15 @@ public final class TryWithResourcesProcessor {
 
       // Get catch block
       Statement remove = tryStatement.getStats().get(1);
+      // javac attributes the synthetic close's store to the `try` line; the handler and its store
+      // disappear from the printed text when the catch is destroyed, so record where it was.
+      int handler = handlerStoreOffset(remove);
+      if (handler >= 0) {
+        // A pass may already have folded the store away -- the handler block can open with the
+        // load that reads it instead. The constructor recorded the store before that, and that
+        // offset is the one javac gave the try line, so a failed recovery keeps it.
+        tryStatement.setResourceHandlerOffset(handler);
+      }
 
       // Flatten references to statement
       SequenceHelper.destroyAndFlattenStatement(remove);
@@ -437,6 +452,17 @@ public final class TryWithResourcesProcessor {
     }
 
     return null;
+  }
+
+  /** The offset of the store that opens a synthetic handler block, or -1 when it opens with anything else. */
+  private static int handlerStoreOffset(Statement handler) {
+    BasicBlockStatement head = handler.getBasichead();
+    BasicBlock block = head == null ? null : head.getBlock();
+    if (block == null || block.getSeq().isEmpty() || block.getInstruction(0).opcode != CodeConstants.opc_astore) {
+      return -1;
+    }
+    Integer offset = block.getOldOffset(0);
+    return offset == null ? -1 : offset;
   }
 
   private static boolean isCloseable(Exprent exp) {
