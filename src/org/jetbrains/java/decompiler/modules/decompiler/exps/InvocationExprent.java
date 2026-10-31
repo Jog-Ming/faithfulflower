@@ -2461,8 +2461,17 @@ public class InvocationExprent extends Exprent {
       // the first argument's -- otherwise an argument the target kept inline is moved away.
       boolean constructorStartLater = callerOpeningLine >= 0 && start < lstParameters.size()
         && RoundTrip.sourceLine(lstParameters.get(start)) > creationLine;
+      // An anonymous class's own constructor is recorded on the line the source closed its
+      // argument list on; when that line is later than the line the call's text sits on, its text
+      // did not start there and the source broke the line instead. A creation with its own lambda
+      // argument breaks below its start by itself, and moving the start would overshoot.
+      int anonymousLine = firstArgument instanceof NewExprent createdAnonymous
+        ? createdAnonymous.anonymousConstructorLine() : -1;
+      boolean anonymousStartLater = anonymousLine >= 0 && openingLine >= 0 && anonymousLine > openingLine
+        && !printsInternallyBroken(firstArgument);
       breakBeforeFirst = (!lambdaArgument || lambdaStartsLater)
-        && (elementStartsLater || explicitStart || constructorStartLater || lambdaStartsLater);
+        && (elementStartsLater || explicitStart || constructorStartLater || lambdaStartsLater
+            || anonymousStartLater);
       if (breakBeforeFirst) {
         buf.appendLineSeparator();
       } else {
@@ -2535,6 +2544,15 @@ public class InvocationExprent extends Exprent {
         Exprent argument = lstParameters.get(i);
         int ownLine = RoundTrip.sourceLine(argument);
         int line = i > start ? firstPrintedLine(argument) : ownLine;
+        // An anonymous class's text closes on the line its constructor is recorded on, later than
+        // the allocation instruction's inherited line when the source broke before the creation.
+        if (argument instanceof NewExprent createdAnonymous && createdAnonymous.isAnonymous()
+            && !printsInternallyBroken(createdAnonymous)) {
+          int createdLine = createdAnonymous.anonymousConstructorLine();
+          if (createdLine > line) {
+            line = createdLine;
+          }
+        }
         // A constructor argument's own offsets stop at its new; the invoke at the end of its
         // argument list is what the target's table places on the last line of the expression.
         int end = argument instanceof NewExprent created && created.getConstructor() != null
@@ -2652,6 +2670,28 @@ public class InvocationExprent extends Exprent {
     }
 
     return buf;
+  }
+
+  /**
+   * Whether printing this argument breaks a line inside it on its own. An anonymous class whose
+   * constructor takes a lambda prints the lambda's body on a later line, so the creation's
+   * closing parenthesis already lands below its start; moving the start would overshoot the line
+   * the target recorded for it.
+   */
+  private static boolean printsInternallyBroken(Exprent argument) {
+    if (!(argument instanceof NewExprent created) || !created.isAnonymous() || created.isLambda()) {
+      return false;
+    }
+    InvocationExprent constructor = created.getConstructor();
+    if (constructor == null) {
+      return false;
+    }
+    for (Exprent parameter : constructor.getLstParameters()) {
+      if (parameter instanceof NewExprent nested && nested.isLambda()) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /** An argument's recorded parameter type names variables no source can spell at this call. */

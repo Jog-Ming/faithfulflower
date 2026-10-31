@@ -403,6 +403,37 @@ public class NewExprent extends Exprent {
     return -1;
   }
 
+  /**
+   * The line the anonymous class's own constructor is recorded on, or -1. javac emits that code
+   * after the creation's arguments, so the line is where the source closed the argument list —
+   * the `new` line for a creation written on one line, later when the arguments span lines.
+   */
+  public int anonymousConstructorLine() {
+    MethodWrapper wrapper = anonymousConstructor();
+    return wrapper == null ? -1 : RoundTrip.methodLine(wrapper.methodStruct);
+  }
+
+  /**
+   * The implicit constructor of the anonymous class this creation allocates, or null. A lambda is
+   * an anonymous class too, but its code lives in the enclosing class file, and that file's
+   * constructors say nothing about the lambda's line.
+   */
+  private MethodWrapper anonymousConstructor() {
+    if (!anonymous || lambda || newType == null) {
+      return null;
+    }
+    ClassNode child = DecompilerContext.getClassProcessor().getMapRootClasses().get(newType.value);
+    if (child == null || child.getWrapper() == null) {
+      return null;
+    }
+    for (MethodWrapper wrapper : child.getWrapper().getMethods()) {
+      if (CodeConstants.INIT_NAME.equals(wrapper.methodStruct.getName())) {
+        return wrapper;
+      }
+    }
+    return null;
+  }
+
   /** An element whose first token is on its own line: not a chained call's later qualifier. */
   private static boolean startsOnItsLine(Exprent element) {
     if (element instanceof InvocationExprent invocation && invocation.getInstance() != null) {
@@ -479,7 +510,9 @@ public class NewExprent extends Exprent {
       boolean selfReference = DecompilerContext.getContextProperty(DecompilerContext.CURRENT_CLASS_NODE) == child;
 
       // IDEA-204310 - avoid backtracking later on for lambdas (causes spurious imports)
+      int headLines = -1;
       if (!enumConst && (!lambda || DecompilerContext.getOption(IFernflowerPreferences.LAMBDA_TO_ANONYMOUS_CLASS))) {
+        headLines = buf.countLines();
         TextBuffer enclosing = null;
 
         if (!lambda && constructor != null) {
@@ -568,6 +601,22 @@ public class NewExprent extends Exprent {
       }
 
       buf.append(')');
+
+      // The anonymous class's implicit constructor prints no text of its own: javac records its
+      // first instruction on the line the source closed the creation's argument list on, so that
+      // entry anchors to the closing parenthesis. Without it the line aligner cannot place a
+      // creation moved to its own line, and the movement would shift every line below instead.
+      // The creation has to print its head on one line to own the anchor: a receiver in a chain
+      // continues on later lines, and those entries say where its text ends, not this one.
+      if (!selfReference && !lambda && child != null && !isQualifier && headLines >= 0
+          && buf.countLines() == headLines) {
+        MethodWrapper anonymousInit = anonymousConstructor();
+        if (anonymousInit != null) {
+          buf.addBytecodeMappingAt(buf.length(), 0, child.classStruct.qualifiedName,
+            InterpreterUtil.makeUniqueKey(anonymousInit.methodStruct.getName(),
+              anonymousInit.methodStruct.getDescriptor()));
+        }
+      }
 
       if (enumConst && buf.length() == 2) {
         buf.setLength(0);
