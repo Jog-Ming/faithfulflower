@@ -3830,6 +3830,20 @@ public final class RoundTrip {
     return declaresLocalBetween(stat, false);
   }
 
+  /**
+   * True when the statement declares a local at its own level, so that printing it one block out
+   * would widen the variable's scope. A declaration inside a nested block keeps its own braces,
+   * and a leading if's head block runs in the statement's scope, so those count as its own.
+   */
+  public static boolean declaresLocalAtOwnLevel(Statement stat) {
+    if (stat == null) {
+      return false;
+    }
+    java.util.List<LocalVariable> rows = new java.util.ArrayList<>();
+    collectArmRows(stat, rows);
+    return !rows.isEmpty();
+  }
+
   /** As {@link #declaresLocal} but over the statement's own exprent offsets, not its block's end. */
   public static boolean declaresLocalIn(Statement stat) {
     return declaresLocalBetween(stat, true);

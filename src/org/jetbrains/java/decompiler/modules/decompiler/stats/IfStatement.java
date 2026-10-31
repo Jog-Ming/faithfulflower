@@ -1236,7 +1236,7 @@ public class IfStatement extends Statement {
                               int indent, boolean elseSemicolon) {
     List<Integer> groups = nestedIfGroups(head, arm);
     if (groups.isEmpty() || (arm == null && elseArm != null)
-        || (elseArm != null && (!endsWithExit(arm) || RoundTrip.declaresLocal(elseArm)))) {
+        || (elseArm != null && (!endsWithExit(arm) || RoundTrip.declaresLocalAtOwnLevel(elseArm)))) {
       return false;
     }
     if (printNestedIfs(buf, head, arm, groups, indent, elseArm == null)) {
@@ -1328,14 +1328,15 @@ public class IfStatement extends Statement {
   }
 
   /**
-   * The operand groups a written guard's test splits into, or null. A guard holds no statement
-   * for its arm — the continue is the guard's own jump — so a line entry at a later operand's
-   * first instruction, on a line after the text before it ends, is the only proof the source
-   * wrote that test as a statement of its own. A pattern operand stays flat unless its slot is
-   * fresh, since the guard offers no slot evidence to corroborate the line.
+   * The operand groups a condition splits into when the target's line table proves a later
+   * operand began a statement of its own, or null when it does not split. This is the line
+   * evidence of {@link #nestedIfGroups} without the arm-dependent checks, for the printers that
+   * supply their own guarded statements (a continue guard, a swapped tail). A pattern operand
+   * stays flat unless its slot is fresh, since nothing here offers slot evidence to corroborate
+   * the line.
    */
-  private static List<Integer> guardIfGroups(Exprent test) {
-    List<Exprent> operands = booleanOperands(test);
+  static List<Integer> splitGroups(Exprent condition) {
+    List<Exprent> operands = booleanOperands(condition);
     if (operands.size() < 2) {
       return null;
     }
@@ -1353,12 +1354,29 @@ public class IfStatement extends Statement {
   }
 
   /**
+   * Prints one `if (…test…) {` per group of the condition, nested on the caller's indent, and
+   * returns how many braces are left open. The caller prints the guarded statements at the
+   * returned depth and closes the braces.
+   */
+  static int printSplitHeaders(TextBuffer buf, IfExprent head, List<Integer> groups, int indent) {
+    List<Exprent> operands = booleanOperands(head.getCondition());
+    for (int group = 0; group < groups.size(); group++) {
+      int to = group + 1 < groups.size() ? groups.get(group + 1) : operands.size();
+      IfExprent nested = (IfExprent) head.copy();
+      nested.setCondition(andOf(operands, groups.get(group), to));
+      buf.appendIndent(indent + group).append(nested.toJava(indent + group))
+        .append(" {").appendLineSeparator();
+    }
+    return groups.size();
+  }
+
+  /**
    * Prints one written guard, `if (test) { continue; }`, or the nested ifs the target's line
    * table proves the source wrote inside it. {@code site} is the jump the guard's continue
    * compiled to, or -1 when the target keeps none for this group.
    */
   private static void printGuard(TextBuffer buf, IfExprent head, Exprent test, int indent, int site) {
-    List<Integer> groups = guardIfGroups(test);
+    List<Integer> groups = splitGroups(test);
     IfExprent guard = (IfExprent) head.copy();
     guard.setCondition(test);
     if (groups != null) {

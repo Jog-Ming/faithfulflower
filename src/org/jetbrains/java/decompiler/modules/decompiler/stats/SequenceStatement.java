@@ -1262,10 +1262,21 @@ public class SequenceStatement extends Statement {
             ? RoundTrip.armScopeSplit(ifStatement.getIfstat()) : -1;
           IfExprent head = (IfExprent) ifStatement.getHeadexprent().copy();
           head.setCondition(RoundTrip.negateCondition(head.getCondition()));
+          // A test the target's table anchors at a later operand's first instruction was written
+          // as a statement of its own: the returning tail prints inside the nested ifs.
+          List<Integer> split = armSplit <= 0 ? IfStatement.splitGroups(head.getCondition()) : null;
           buf.append(ExprProcessor.listToJava(ifStatement.varDefinitions, indent));
           buf.append(ifStatement.getFirst().toJava(indent));
-          buf.appendIndent(indent).append(head.toJava(indent)).append(" {").appendLineSeparator();
-          buf.append(ExprProcessor.jmpWrapper(tail, indent + 1, true));
+          int open = 0;
+          if (split == null) {
+            buf.appendIndent(indent).append(head.toJava(indent)).append(" {").appendLineSeparator();
+          } else {
+            open = IfStatement.printSplitHeaders(buf, head, split, indent);
+          }
+          buf.append(ExprProcessor.jmpWrapper(tail, indent + (split == null ? 1 : open), true));
+          for (int level = open - 1; level >= 1; level--) {
+            buf.appendIndent(indent + level).append("}").appendLineSeparator();
+          }
           if (armSplit > 0) {
             // The table closes a block inside the arm before a trailing return: those
             // statements ran outside the source's brace, so print the else and the tail after it.
@@ -1777,11 +1788,26 @@ public class SequenceStatement extends Statement {
           head.setCondition(RoundTrip.negateCondition(head.getCondition()));
           buf.append(ExprProcessor.listToJava(ifStatement.varDefinitions, indent));
           buf.append(ifStatement.getFirst().toJava(indent));
-          buf.appendIndent(indent).append(head.toJava(indent)).append(" {").appendLineSeparator();
+          // A test the target's table anchors at a later operand's first instruction was written
+          // as a statement of its own: the tail prints inside the nested ifs, not in one brace.
+          List<Integer> split = IfStatement.splitGroups(head.getCondition());
+          int open = 0;
+          if (split == null) {
+            buf.appendIndent(indent).append(head.toJava(indent)).append(" {").appendLineSeparator();
+          } else {
+            open = IfStatement.printSplitHeaders(buf, head, split, indent);
+          }
           // A guard whose arm ends in a returning block, followed by a lone throw, is the
           // De Morgan twin of the source's `if (positive) throw; else return`: the tail's own
           // two statements print swapped when the target's branch proves it.
-          if (stats.size() != i + 3
+          if (split != null) {
+            for (int k = i + 1; k < stats.size(); k++) {
+              buf.append(ExprProcessor.jmpWrapper(stats.get(k), indent + open, k == i + 1));
+            }
+            for (int level = open - 1; level >= 1; level--) {
+              buf.appendIndent(indent + level).append("}").appendLineSeparator();
+            }
+          } else if (stats.size() != i + 3
               || !printSwappedThrow(buf, indent + 1, stats.get(i + 1), stats.get(i + 2))) {
             for (int k = i + 1; k < stats.size(); k++) {
               buf.append(ExprProcessor.jmpWrapper(stats.get(k), indent + 1, k == i + 1));
