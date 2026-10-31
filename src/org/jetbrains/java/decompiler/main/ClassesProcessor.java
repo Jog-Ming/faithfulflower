@@ -607,6 +607,9 @@ public class ClassesProcessor implements CodeConstants {
   }
 
   private static void destroyWrappers(ClassNode node) {
+    if (node.wrapper != null) {
+      node.dynamicInitializerOwner = node.wrapper.getDynamicInitializerOwner();
+    }
     node.wrapper = null;
     node.classStruct.releaseResources();
     node.classStruct.getMethods().forEach(m -> m.clearVariableNamer());
@@ -630,6 +633,13 @@ public class ClassesProcessor implements CodeConstants {
     public @Nullable String simpleName;
     public final StructClass classStruct;
     private @Nullable ClassWrapper wrapper;
+    /**
+     * The constructor a lifted instance-field initializer's offsets were recorded from, kept
+     * across {@code destroyWrappers}: the line aligner runs after a class is written, when the
+     * wrapper that held it is gone, and still needs that constructor's line table to place the
+     * field declarations.
+     */
+    public @Nullable StructMethod dynamicInitializerOwner;
     public String enclosingMethod;
     public InvocationExprent superInvocation;
     public final Map<String, VarVersionPair> mapFieldsToVars = new HashMap<>();

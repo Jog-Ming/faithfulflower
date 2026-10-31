@@ -4,8 +4,10 @@ package org.jetbrains.java.decompiler.main;
 import org.jetbrains.java.decompiler.code.FullInstructionSequence;
 import org.jetbrains.java.decompiler.code.Instruction;
 import org.jetbrains.java.decompiler.main.collectors.BytecodeMappingTracer;
+import org.jetbrains.java.decompiler.main.rels.ClassWrapper;
 import org.jetbrains.java.decompiler.modules.decompiler.RoundTrip;
 import org.jetbrains.java.decompiler.struct.StructClass;
+import org.jetbrains.java.decompiler.struct.StructField;
 import org.jetbrains.java.decompiler.struct.StructMethod;
 import org.jetbrains.java.decompiler.struct.attr.StructGeneralAttribute;
 import org.jetbrains.java.decompiler.struct.attr.StructLineNumberTableAttribute;
@@ -90,9 +92,13 @@ public final class LineAlign {
       String methodKey = tracerEntry.getKey().b;
       Map<Integer, Integer> mapping = tracerEntry.getValue().getMapping();
       if (methodKey.startsWith("<field-init ")) {
-        // The initializer's own offsets say which constructor generated it; that constructor's
-        // table places each declaration separately, so a block of fields is not stuck on one line.
-        StructLineNumberTableAttribute owner = initializerTable(className, mapping.keySet());
+        // The initializer was lifted out of one constructor, whose table places each declaration
+        // separately; only when the decompiler no longer knows that constructor do the offsets
+        // have to say which one it was, and several may cover them by accident.
+        StructLineNumberTableAttribute owner = dynamicInitializerTable(className, methodKey);
+        if (owner == null) {
+          owner = initializerTable(className, mapping.keySet());
+        }
         if (owner != null && gapAlign) {
           addMethodConstraints(owner, mapping, lines, candidates, entryLines);
           continue;
@@ -445,11 +451,51 @@ public final class LineAlign {
   }
 
   /**
-   * The original source line of an instance field initializer. Its offsets belong to one of the
-   * constructors, and in that constructor the whole initializer maps to the field's line; other
-   * constructors map those offsets to unrelated lines, so the line every offset agrees on is the
-   * field's.
+   * The line table of the constructor a lifted field initializer's offsets were recorded from.
+   *
+   * <p>Every constructor's offsets start at zero, so the byte ranges alone cannot name the owner:
+   * a small delegating constructor can cover the initializer's offsets by accident. The printer
+   * lifted the initializer expression out of the first constructor that reaches it, and the
+   * decompiler kept that constructor on the wrapper; its table is the one that places the
+   * declarations, whichever other constructors share the offsets.
    */
+  private static StructLineNumberTableAttribute dynamicInitializerTable(String className,
+      String methodKey) {
+    if (!methodKey.startsWith("<field-init ") || !methodKey.endsWith(">")) {
+      return null;
+    }
+    String field = methodKey.substring("<field-init ".length(), methodKey.length() - 1);
+    StructClass cls = DecompilerContext.getStructContext().getClass(className);
+    boolean known = false;
+    if (cls != null) {
+      for (StructField fd : cls.getFields()) {
+        if (fd.getName().equals(field)) {
+          known = true;
+          break;
+        }
+      }
+    }
+    if (!known) {
+      // The key exists for every instance field, initializer or not; a name the class does not
+      // declare carries no initializer whose offsets a constructor's table could describe.
+      return null;
+    }
+    ClassesProcessor.ClassNode node =
+      DecompilerContext.getClassProcessor().getMapRootClasses().get(className);
+    if (node == null) {
+      return null;
+    }
+    // The class being written has already had its wrapper destroyed, so the owner it was given
+    // survives on the node; a nested class's wrapper is still alive when its file is written.
+    StructMethod owner = node.dynamicInitializerOwner;
+    if (owner == null) {
+      ClassWrapper wrapper = node.getWrapper();
+      owner = wrapper == null ? null : wrapper.getDynamicInitializerOwner();
+    }
+    return owner == null ? null
+      : owner.getAttribute(StructGeneralAttribute.ATTRIBUTE_LINE_NUMBER_TABLE);
+  }
+
   /**
    * The line table of the constructor a lifted field initializer was generated into, or null when
    * several constructors contain its offsets or none does. The printer records the initializer
@@ -503,6 +549,12 @@ public final class LineAlign {
     return remaining.isEmpty();
   }
 
+  /**
+   * The original source line of an instance field initializer. Its offsets belong to one of the
+   * constructors, and in that constructor the whole initializer maps to the field's line; other
+   * constructors map those offsets to unrelated lines, so the line every offset agrees on is the
+   * field's.
+   */
   private static Integer fieldInitLine(String className, java.util.Set<Integer> offsets) {
     StructClass cls = DecompilerContext.getStructContext().getClass(className);
     if (cls == null) {
