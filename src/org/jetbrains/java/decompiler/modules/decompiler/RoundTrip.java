@@ -4445,6 +4445,62 @@ public final class RoundTrip {
   }
 
   /**
+   * The last test of a loop condition the source wrote as the body's guard with a break else:
+   * {@code for (A; B; i++) { if (C) { body } else break; }}. The fused `B && C` condition's last
+   * test branches straight out of the loop and leaves no goto after it, exactly as the fused
+   * condition does, so only the line table separates the two forms: the guarded test began a
+   * statement of its own, anchored at its first instruction on a later line. Returns C, or null.
+   */
+  public static Exprent foldedElseBreak(Exprent condition, Statement loop, Statement body) {
+    if (!selector("elsebreak") || !(condition instanceof FunctionExprent function)
+        || function.getFuncType() != FunctionExprent.FunctionType.BOOLEAN_AND
+        || function.getLstOperands().size() != 2) {
+      return null;
+    }
+    Exprent before = function.getLstOperands().get(0);
+    Exprent test = function.getLstOperands().get(1);
+    if (!operandStartsStatement(before, test)) {
+      return null;
+    }
+    StructMethod method = currentMethod();
+    if (method == null) {
+      return null;
+    }
+    java.util.Map<Integer, Integer> ends = INSTRUCTION_ENDS.get(method);
+    java.util.Map<Integer, Integer> targets = BRANCH_TARGETS.get(method);
+    java.util.Map<Integer, Integer> gotos = GOTO_TARGETS.get(method);
+    // The loop's header exprents count, as in foldedBreakGuard: the for-update sits past the body.
+    BitSet loopBits = statementOffsets(loop);
+    if (ends == null || targets == null || gotos == null || loopBits == null
+        || test.bytecode == null || test.bytecode.isEmpty()) {
+      return null;
+    }
+    int loopEnd = loopBits.length() - 1;
+    if (loopEnd < 0) {
+      return null;
+    }
+    int lastStart = -1;
+    int lastEnd = -1;
+    for (int offset = test.bytecode.nextSetBit(0); offset >= 0;
+         offset = test.bytecode.nextSetBit(offset + 1)) {
+      Integer end = ends.get(offset);
+      if (end != null && targets.containsKey(end) && offset > lastStart) {
+        lastStart = offset;
+        lastEnd = end;
+      }
+    }
+    if (lastStart < 0) {
+      return null;
+    }
+    Integer target = targets.get(lastEnd);
+    // The test's branch leaves the loop and no goto follows it: the break else's signature.
+    if (target == null || target <= loopEnd || gotos.containsKey(lastEnd)) {
+      return null;
+    }
+    return test;
+  }
+
+  /**
    * The remainder-loop layout: the condition's branch targets the body, the tail's statements fill
    * the exit block between the condition and the body, and the back edge jumps behind the tail.
    * The source wrote {@code while (true) { if (!cond) { tail } body }}.

@@ -317,6 +317,7 @@ public class DoStatement extends Statement {
         buf.appendIndent(indent);
         Exprent condition = conditionExprent.get(0);
         Exprent forGuard = RoundTrip.foldedBreakGuard(condition, this, first);
+        Exprent elseBreak = forGuard == null ? RoundTrip.foldedElseBreak(condition, this, first) : null;
         buf.pushNewlineGroup(indent, 1);
         buf.append("for (");
         if (initExprent.get(0) != null) {
@@ -324,7 +325,7 @@ public class DoStatement extends Statement {
         } else if (headerDecl != null) {
           buf.append(headerDecl.toJava(indent));
         }
-        TextBuffer conditionText = forGuard != null
+        TextBuffer conditionText = forGuard != null || elseBreak != null
           ? ((FunctionExprent) condition).getLstOperands().get(0).toJava(indent)
           : condition == null ? new TextBuffer() : condition.toJava(indent);
         buf.append(";").appendPossibleNewline(" ")
@@ -336,8 +337,19 @@ public class DoStatement extends Statement {
         buf.append(") {").appendLineSeparator();
         if (forGuard != null) {
           appendBreakGuard(buf, forGuard, indent + 1);
+          buf.append(ExprProcessor.jmpWrapper(first, indent + 1, false));
+        } else if (elseBreak != null) {
+          // The guarded test the merge folded into the condition: the body is its then arm and
+          // the loop's exit is the break its else wrote.
+          buf.appendIndent(indent + 1).append("if (")
+            .append(elseBreak.toJava(indent + 1)).append(") {").appendLineSeparator();
+          buf.append(ExprProcessor.jmpWrapper(first, indent + 2, false));
+          buf.appendIndent(indent + 1).append("} else {").appendLineSeparator();
+          buf.appendIndent(indent + 2).append("break;").appendLineSeparator();
+          buf.appendIndent(indent + 1).append("}").appendLineSeparator();
+        } else {
+          buf.append(ExprProcessor.jmpWrapper(first, indent + 1, false));
         }
-        buf.append(ExprProcessor.jmpWrapper(first, indent + 1, false));
         appendLoopClose(buf, indent);
         break;
       case FOR_EACH:
