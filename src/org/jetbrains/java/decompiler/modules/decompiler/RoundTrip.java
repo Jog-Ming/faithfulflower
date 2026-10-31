@@ -3168,7 +3168,12 @@ public final class RoundTrip {
     if (first < 0 || !lineStartsAt(first)) {
       return false;
     }
+    // A variable has no child exprents, so lastLine sees no offset of its own; the instruction
+    // its load owns is what its text ends on.
     int end = lastLine(before);
+    if (end < 0) {
+      end = sourceLineEnd(before);
+    }
     int start = lineAtOffset(first);
     return end >= 0 && start > end;
   }
