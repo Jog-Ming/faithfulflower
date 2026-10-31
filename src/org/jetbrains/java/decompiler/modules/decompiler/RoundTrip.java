@@ -122,6 +122,8 @@ public final class RoundTrip {
   private static final java.util.Map<StructMethod, java.util.Map<Integer, BitSet>> STORE_SITES = new java.util.concurrent.ConcurrentHashMap<>();
   /** Start offsets of every load of a slot, keyed by the slot. */
   private static final java.util.Map<StructMethod, java.util.Map<Integer, BitSet>> LOAD_SITES = new java.util.concurrent.ConcurrentHashMap<>();
+  /** Start offsets of every load instruction, the compact operand-less forms included. */
+  private static final java.util.Map<StructMethod, BitSet> LOAD_STARTS = new java.util.concurrent.ConcurrentHashMap<>();
   /** The slot a store at this start offset writes. */
   private static final java.util.Map<StructMethod, java.util.Map<Integer, Integer>> STORE_SLOTS = new java.util.concurrent.ConcurrentHashMap<>();
   /** The slot of every store at its start offset, the compact operand-less forms included. */
@@ -156,6 +158,7 @@ public final class RoundTrip {
     java.util.Map<Integer, Integer> dupStores = new java.util.HashMap<>();
     java.util.Map<Integer, BitSet> storeSites = new java.util.HashMap<>();
     java.util.Map<Integer, BitSet> loadSites = new java.util.HashMap<>();
+    BitSet loadStarts = new BitSet();
     java.util.Map<Integer, Integer> storeSlots = new java.util.HashMap<>();
     java.util.Map<Integer, Integer> allStoreSlots = new java.util.HashMap<>();
     java.util.List<int[]> finallyCopies = new java.util.ArrayList<>();
@@ -185,6 +188,9 @@ public final class RoundTrip {
       }
       if (instr.opcode >= CodeConstants.opc_iload && instr.opcode <= CodeConstants.opc_aload) {
         loadSites.computeIfAbsent(instr.operand(0), k -> new BitSet()).set(instr.startOffset);
+      }
+      if (isLoad(instr.opcode)) {
+        loadStarts.set(instr.startOffset);
       }
       if (instr.opcode >= CodeConstants.opc_istore && instr.opcode <= CodeConstants.opc_astore) {
         storeSites.computeIfAbsent(instr.operand(0), k -> new BitSet()).set(instr.startOffset);
@@ -568,6 +574,7 @@ public final class RoundTrip {
     DUP_STORES.put(method, dupStores);
     STORE_SITES.put(method, storeSites);
     LOAD_SITES.put(method, loadSites);
+    LOAD_STARTS.put(method, loadStarts);
     STORE_SLOTS.put(method, storeSlots);
     ALL_STORE_SLOTS.put(method, allStoreSlots);
     MATCH_CATCH_SLOTS.put(method, matchCatchSlots);
@@ -3015,7 +3022,10 @@ public final class RoundTrip {
       if (part.bytecode == null || part.bytecode.isEmpty()) {
         continue;
       }
-      int line = lineAtOffset(part.bytecode.previousSetBit(Integer.MAX_VALUE));
+      int last = part.bytecode.previousSetBit(Integer.MAX_VALUE);
+      // The first instruction of a method can carry a marker for the statement's end instead of
+      // its own text line; the entry that follows it names the line the expression is written on.
+      int line = lineAtOffset(last == 0 ? 1 : last);
       if (line > end) {
         end = line;
       }
@@ -3105,13 +3115,54 @@ public final class RoundTrip {
    * The target's line at which the operand's text begins, or -1 when its table has no entry of
    * its own. Only an entry at the operand's own first instruction proves the source broke before
    * it; an entry found anywhere else belongs to a sub-expression that changed line inside it.
+   *
+   * <p>An operand whose leftmost leaf is a local, a {@code this} field or a parameter begins with
+   * a load the exprent carries no bits for: the printer emits that load as part of the operand's
+   * text, and the entry the original's table starts there is the only proof of the break. The
+   * loads feeding the operand's first instruction are contiguous, so walking back over them finds
+   * the leaf; an entry at a later link would belong to a wrapped argument instead.
    */
   public static int operandStartLine(Exprent exprent) {
     int first = firstOffsetOf(exprent);
-    if (first < 0 || !lineStartsAt(first)) {
+    if (first < 0) {
       return -1;
     }
-    return lineAtOffset(first);
+    if (lineStartsAt(first)) {
+      return lineAtOffset(first);
+    }
+    StructMethod method = currentMethod();
+    int start = first;
+    int leaf = -1;
+    for (int step = 0; step < 32; step++) {
+      int previous = instructionEndingAt(method, start);
+      if (previous < 0 || !loadStartsAt(method, previous)) {
+        break;
+      }
+      leaf = previous;
+      start = previous;
+    }
+    if (leaf >= 0 && lineStartsAt(leaf)) {
+      return lineAtOffset(leaf);
+    }
+    // A pattern test starts with the value's load and the writer marks the line at the pattern's
+    // binding instead, which follows the test. Its store inherits that entry whether or not the
+    // store itself starts one, so the line is the operand's when the source broke before it and
+    // the test's own line otherwise.
+    if (exprent instanceof FunctionExprent function
+        && function.getFuncType() == FunctionExprent.FunctionType.INSTANCEOF
+        && function.getLstOperands().size() > 2) {
+      int pattern = firstOffsetOf(function.getLstOperands().get(2));
+      if (pattern >= 0) {
+        return lineAtOffset(pattern);
+      }
+    }
+    return -1;
+  }
+
+  /** Whether the instruction at this start offset is a load, the compact forms included. */
+  private static boolean loadStartsAt(StructMethod method, int offset) {
+    BitSet starts = method == null ? null : LOAD_STARTS.get(method);
+    return starts != null && starts.get(offset);
   }
 
   /** The target of the last branch instruction inside {@code [from, to)}, or -1. */

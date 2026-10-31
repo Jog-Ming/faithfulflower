@@ -396,8 +396,13 @@ public final class LineAlign {
       Integer aboveResolved = resolvedTarget(line - 1, targets, exact);
       boolean inheritsAbove = !exact.containsKey(line) && resolved != null
         && resolved.equals(aboveResolved);
+      // The line above may belong to this one only when both hold instructions the table places
+      // on the same source lines: the merge then moves no instruction onto a line it never had.
+      // Two operands the table splits across lines keep their break.
       boolean absorbsAbove = !exact.containsKey(line - 1) && aboveResolved == null
-        && resolved != null && targets.containsKey(line - 1) && continuesAbove(lines[line - 1]);
+        && resolved != null && targets.containsKey(line - 1)
+        && targets.get(line - 1).equals(targets.get(line))
+        && continuesAbove(lines[line - 1]);
       if (same || inheritsAbove || absorbsAbove) {
         joins.add(line);
       }
