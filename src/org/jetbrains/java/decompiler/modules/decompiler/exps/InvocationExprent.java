@@ -2386,10 +2386,16 @@ public class InvocationExprent extends Exprent {
         && lstParameters.get(start) instanceof NewExprent created
         && created.isLambda() && !created.isMethodReference();
       // A lambda's invokedynamic inherits the call's line, but its body is a method whose first
-      // line says where the text sits: a body line later than the call means the source broke
-      // after the opening parenthesis.
+      // line says where the text sits: a body line later than the line the call's own token sits
+      // on means the source broke after the opening parenthesis.
       int lambdaLine = lambdaArgument ? lambdaBodyLine((NewExprent) lstParameters.get(start)) : -1;
-      boolean lambdaStartsLater = lambdaLine >= 0 && callLine >= 0 && lambdaLine > callLine;
+      // A constructor's own token is its `new`, not the init invocation, which javac records on
+      // the line of the argument list's last instruction: only the creation's line can prove the
+      // break, while the init invoke's line would move a lambda the target kept inline.
+      boolean insideCall = OUTER_CALL_LINE.get()[0] >= 0 && OUTER_CALL_AT.get()[0] == RoundTrip.currentMethod();
+      int creationLine = callerEnclosingLine > callerOpeningLine ? callerEnclosingLine : callerOpeningLine;
+      int callStartLine = functype == Type.INIT && creationLine >= 0 ? creationLine : callLine;
+      boolean lambdaStartsLater = lambdaLine >= 0 && callStartLine >= 0 && lambdaLine > callStartLine;
       // A varargs call's array holds the arguments; its elements are printed without a parameter
       // of their own. A first element whose own invoke is on a later line than the call started
       // the element on that later line: javac emits an invocation's line at its invoke, and the
@@ -2421,12 +2427,10 @@ public class InvocationExprent extends Exprent {
       // argument on its own line. The `new` instruction itself inherits the preceding entry's
       // line, so when the creation is itself an argument the enclosing call's line is the one
       // its text sits on, and a later first argument only says a chain inside it broke.
-      boolean insideCall = OUTER_CALL_LINE.get()[0] >= 0 && OUTER_CALL_AT.get()[0] == RoundTrip.currentMethod();
       // A creation's `new` carries a line of its own only when the target's table starts one
       // there; an inherited line is not where the creation's text sits. A creation written as
       // an argument sits on the enclosing call's line, and only that line may be compared with
       // the first argument's -- otherwise an argument the target kept inline is moved away.
-      int creationLine = callerEnclosingLine > callerOpeningLine ? callerEnclosingLine : callerOpeningLine;
       boolean constructorStartLater = callerOpeningLine >= 0 && start < lstParameters.size()
         && RoundTrip.sourceLine(lstParameters.get(start)) > creationLine;
       breakBeforeFirst = (!lambdaArgument || lambdaStartsLater)
@@ -2527,11 +2531,14 @@ public class InvocationExprent extends Exprent {
         boolean prevEndGate = RoundTrip.selector("rt-arg-prev-end");
         int previous = prevEndGate ? previousEnd : previousLine;
         // A lambda's invokedynamic inherits the call's line, but its body is a method of its own:
-        // a body line later than the call means the source wrote the lambda on that later line,
-        // and moving the argument there keeps the arrow with its body.
+        // a body line later than the previous argument's end means the source wrote the lambda
+        // on that later line, and moving the argument there keeps the arrow with its body. The
+        // call's own opening line still gates it: a body at or above the line the call started
+        // on belongs to that line, not to a break.
         int argumentBodyLine = argument instanceof NewExprent lambda && lambda.isLambda()
           && !lambda.isMethodReference() ? lambdaBodyLine((NewExprent) argument) : -1;
-        boolean lambdaLater = argumentBodyLine >= 0 && callLine >= 0 && argumentBodyLine > callLine;
+        boolean lambdaLater = argumentBodyLine >= 0 && previous >= 0 && argumentBodyLine > previous
+          && (openingLine < 0 || argumentBodyLine > openingLine);
         boolean forced = !firstParameter
           && (lambdaLater || line >= 0 && previous >= 0 && line > previous
               && (!callLineGate || openingLine < 0 || line > openingLine));
