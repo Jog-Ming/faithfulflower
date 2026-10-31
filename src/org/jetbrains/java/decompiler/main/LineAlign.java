@@ -9,6 +9,7 @@ import org.jetbrains.java.decompiler.modules.decompiler.RoundTrip;
 import org.jetbrains.java.decompiler.struct.StructClass;
 import org.jetbrains.java.decompiler.struct.StructField;
 import org.jetbrains.java.decompiler.struct.StructMethod;
+import org.jetbrains.java.decompiler.struct.StructRecordComponent;
 import org.jetbrains.java.decompiler.struct.attr.StructGeneralAttribute;
 import org.jetbrains.java.decompiler.struct.attr.StructLineNumberTableAttribute;
 import org.jetbrains.java.decompiler.util.Pair;
@@ -714,23 +715,30 @@ public final class LineAlign {
       TreeMap<Integer, Integer> shifts, Set<Integer> conflicted, Set<Integer> entryLines) {
     {
       // A record's generated members (hashCode, equals, toString, accessors) are all attributed to
-      // the record declaration line, which no printed construct maps.
+      // the first line of the record declaration -- annotations included, which no printed
+      // construct maps; the keyword alone would leave the annotation behind and move only half
+      // the declaration.
       if (cls.getRecordComponents() != null) {
+        int top = classDeclarationTop(lines, declaration, 0);
+        int target = -1;
         for (String[] generated : RECORD_MEMBERS) {
-          String key = org.jetbrains.java.decompiler.util.InterpreterUtil.makeUniqueKey(
-            generated[0], generated[1]);
-          if (tracers.containsKey(Pair.of(className, key))) {
-            continue; // an explicit declaration carries its own line
-          }
-          StructMethod method = cls.getMethod(generated[0], generated[1]);
-          StructLineNumberTableAttribute table = method == null ? null
-            : method.getAttribute(StructGeneralAttribute.ATTRIBUTE_LINE_NUMBER_TABLE);
-          int target = table == null ? -1 : table.findLineNumber(0);
+          target = generatedTarget(cls, className, tracers, generated[0], generated[1]);
           if (target >= 0) {
-            entryLines.add(declaration);
-            add(shifts, conflicted, declaration, target - declaration);
             break;
           }
+        }
+        if (target < 0) {
+          for (StructRecordComponent component : cls.getRecordComponents()) {
+            target = generatedTarget(cls, className, tracers,
+              component.getName(), "()" + component.getDescriptor());
+            if (target >= 0) {
+              break;
+            }
+          }
+        }
+        if (target >= 0) {
+          entryLines.add(top);
+          add(shifts, conflicted, top, target - top);
         }
       }
       // An enum's values() and $values() are anchored to the enum declaration line, which no
@@ -778,6 +786,23 @@ public final class LineAlign {
         add(shifts, conflicted, anchor, target - anchor);
       }
     }
+  }
+
+  /**
+   * The line a record's generated member is attributed to, or minus one when the source wrote
+   * that member itself. A generated member is not printed, so its single entry names the record
+   * declaration's first line; an explicit one carries its own constraints and is left alone.
+   */
+  private static int generatedTarget(StructClass cls, String className,
+      Map<Pair<String, String>, BytecodeMappingTracer> tracers, String name, String descriptor) {
+    String key = org.jetbrains.java.decompiler.util.InterpreterUtil.makeUniqueKey(name, descriptor);
+    if (tracers.containsKey(Pair.of(className, key))) {
+      return -1;
+    }
+    StructMethod method = cls.getMethod(name, descriptor);
+    StructLineNumberTableAttribute table = method == null ? null
+      : method.getAttribute(StructGeneralAttribute.ATTRIBUTE_LINE_NUMBER_TABLE);
+    return table == null ? -1 : table.findLineNumber(0);
   }
 
   /**
@@ -914,13 +939,64 @@ public final class LineAlign {
       if (text.isEmpty() || text.equals(PADDING)) {
         continue;
       }
-      if (text.startsWith("@")) {
+      if (annotationOnly(text)) {
         top = i + 1;
         continue;
       }
       break;
     }
     return top;
+  }
+
+  /**
+   * Whether the line holds nothing but annotations.
+   *
+   * <p>A member carrying an annotation on the same line as its signature -- {@code @Nullable
+   * PlayerChatMessage getArgument(String name);} -- is the preceding member, not part of the
+   * declaration below it. Only a line that ends after its annotation(s) belongs to the block.
+   */
+  private static boolean annotationOnly(String text) {
+    int i = 0;
+    while (true) {
+      while (i < text.length() && Character.isWhitespace(text.charAt(i))) {
+        i++;
+      }
+      if (i >= text.length() || text.charAt(i) != '@') {
+        break;
+      }
+      i++;
+      while (i < text.length() && (Character.isJavaIdentifierPart(text.charAt(i)) || text.charAt(i) == '.')) {
+        i++;
+      }
+      while (i < text.length() && Character.isWhitespace(text.charAt(i))) {
+        i++;
+      }
+      if (i < text.length() && text.charAt(i) == '(') {
+        int depth = 0;
+        while (i < text.length()) {
+          char c = text.charAt(i++);
+          if (c == '(') {
+            depth++;
+          }
+          else if (c == ')') {
+            depth--;
+            if (depth == 0) {
+              break;
+            }
+          }
+          else if (c == '"') {
+            while (i < text.length() && text.charAt(i) != '"') {
+              if (text.charAt(i) == '\\') {
+                i++;
+              }
+              i++;
+            }
+            i++;
+          }
+        }
+      }
+    }
+    return i >= text.length();
   }
 
   private static StructLineNumberTableAttribute lineTable(String className, String methodKey) {
