@@ -398,6 +398,67 @@ public class SwitchStatement extends Statement {
     // the typeSwitch labels and change the dispatch. Spill each such label back to the block its
     // own table entry points at.
     List<int[]> spilled = spilledCaseLabels();
+    // An arrow rule's implicit break carries no statement line: javac emits the jump without a
+    // statBegin, while a written `break;` gives the jump the line it stands on. So an arm whose
+    // join jump has no table entry was written as an arrow rule. Javac allows one kind per
+    // switch, so every arm converts or none does; a braced rule's jump carries the closing
+    // brace's line instead, and the brace is printed onto that line.
+    boolean arrowSwitch = RoundTrip.selector("switcharrow") && !yields && !orderUnknown
+      && !isPhantom() && caseGuards.stream().noneMatch(Objects::nonNull)
+      && defaultBreakJump < 0 && defaultBody.isEmpty() && joinArm == null && updateArm == null
+      && caseJoinArm == null && spilled.isEmpty();
+    if (arrowSwitch) {
+      boolean witness = false;
+      for (int i : order) {
+        Statement arm = caseStatements.get(i);
+        // A label standing only for the arm's own break to the join disappears with the break;
+        // any other label is a name the arrow form cannot carry.
+        if (arm == null || arm.isLabeled() && !labelsBreakToJoin(arm)) {
+          arrowSwitch = false;
+          break;
+        }
+        List<StatEdge> armEdges = caseEdges.get(i);
+        int jump = armBreakJump(arm, armEdges, switchEnd);
+        boolean empty = RoundTrip.firstOffset(arm) < 0;
+        boolean defaults = armEdges.stream().anyMatch(edge -> edge == defaultEdge);
+        // A fall onto the table's default target is only a group when that target sits inside the
+        // switch; a target at the join is where every completing arm falls and the source wrote
+        // no default rule (the arrow rules simply end there).
+        boolean falls = defaultEdge != null && defaultEdge.getDestination() != arm
+          && RoundTrip.blockEnd(arm) >= 0 && RoundTrip.blockEnd(arm) == defaultTargetOffset()
+          && defaultTargetOffset() != switchEnd;
+        if (falls || (i < joinedReturns.length && joinedReturns[i] != null)
+            || RoundTrip.synthesizedMatchThrow(arm)
+            || (empty && !(defaults && armEdges.size() == 1))
+            || (!empty && defaults)) {
+          arrowSwitch = false;
+          break;
+        }
+        if (empty) {
+          continue;
+        }
+        if (braced.contains(arm)) {
+          // The brace stands where the jump's own line says it does; anything else is a written
+          // break whose line simply coincides with the block's close.
+          if (jump >= 0 && !RoundTrip.lineStartsAt(jump)) {
+            arrowSwitch = false;
+            break;
+          }
+        } else if (!singleExpressionArm(arm)) {
+          // An unbraced rule carries one expression; a returned value or several statements
+          // need a block, whose implicit break would gain the brace's line.
+          arrowSwitch = false;
+          break;
+        } else if (jump >= 0) {
+          if (RoundTrip.lineStartsAt(jump)) {
+            arrowSwitch = false;
+            break;
+          }
+          witness = true;
+        }
+      }
+      arrowSwitch = arrowSwitch && witness;
+    }
     int spilledAt = 0;
     for (int i : order) {
 
@@ -437,7 +498,33 @@ public class SwitchStatement extends Statement {
           && function.getFuncType() == FunctionType.INSTANCEOF);
 
       boolean anyLabel = false;
-      if (patternLabels) {
+      boolean emptyArrowArm = arrowSwitch && RoundTrip.firstOffset(stat) < 0;
+      if (arrowSwitch) {
+        anyLabel = true;
+        boolean defaultLabel = edges.size() == 1 && edges.get(0) == defaultEdge;
+        buf.appendIndent(indent + 1);
+        if (defaultLabel) {
+          buf.append("default");
+        } else {
+          buf.append("case ");
+          for (int j = 0; j < values.size(); j++) {
+            if (j > 0) {
+              buf.append(", ");
+            }
+            printCaseLabelValue(buf, values.get(j), stat, indent, switch_type);
+          }
+        }
+        buf.append(" ->");
+        if (emptyArrowArm) {
+          buf.append(" {}");
+        } else if (braced.contains(stat)) {
+          buf.append(" {");
+        }
+        buf.appendLineSeparator();
+        if (emptyArrowArm) {
+          continue;
+        }
+      } else if (patternLabels) {
         anyLabel = true;
         buf.appendIndent(indent + 1).append("case ");
         for (int j = 0; j < values.size(); j++) {
@@ -452,7 +539,7 @@ public class SwitchStatement extends Statement {
         }
         buf.appendLineSeparator();
       }
-      for (int j = 0; j < edges.size() && !patternLabels; j++) {
+      for (int j = 0; j < edges.size() && !patternLabels && !arrowSwitch; j++) {
         if (edges.get(j) == defaultEdge) {
           if (defaultIsJoin || stat == joinArm || stat == updateArm) {
             continue;
@@ -585,9 +672,13 @@ public class SwitchStatement extends Statement {
       boolean fallsIntoDefault = defaultEdge != null && defaultEdge.getDestination() != stat
         && RoundTrip.blockEnd(stat) >= 0
         && RoundTrip.blockEnd(stat) == defaultTargetOffset();
-      Statement previousJump = breakOutside || fallsIntoDefault ? RoundTrip.suppressJump(stat) : null;
+      // An arrow arm prints no jump of its own: its break is the compiler's, so the arm must
+      // not print the edge that compiles to one.
+      boolean suppressArmJump = arrowSwitch || breakOutside || fallsIntoDefault;
+      Statement previousJump = suppressArmJump ? RoundTrip.suppressJump(stat) : null;
       Statement previousDefer = deferredBreak > 0 ? RoundTrip.deferBreakTo(labelArm ? stat : this) : null;
-      Statement previousLabel = labelArm ? RoundTrip.hideLabel(stat) : null;
+      boolean hideArmLabel = labelArm || arrowSwitch && stat.isLabeled();
+      Statement previousLabel = hideArmLabel ? RoundTrip.hideLabel(stat) : null;
       // A shared join return is not this arm's statement: the arm's jump is, and it prints as the
       // `break;` below. Keep the return out of the page while the arm prints.
       Exprent joinedReturn = i < joinedReturns.length ? joinedReturns[i] : null;
@@ -599,7 +690,8 @@ public class SwitchStatement extends Statement {
       }
       TextBuffer armBuf;
       try {
-        armBuf = ExprProcessor.jmpWrapper(stat, indent + 2, false);
+        armBuf = ExprProcessor.jmpWrapper(stat,
+          arrowSwitch && !braced.contains(stat) ? indent + 1 : indent + 2, false);
       } finally {
         if (returnSuppressed) {
           stat.getExprents().add(joinedReturn);
@@ -607,14 +699,29 @@ public class SwitchStatement extends Statement {
         if (deferredBreak > 0) {
           RoundTrip.restoreDeferredBreak(previousDefer);
         }
-        if (labelArm) {
+        if (hideArmLabel) {
           RoundTrip.restoreLabel(previousLabel);
         }
-        if (breakOutside) {
+        if (suppressArmJump) {
           RoundTrip.restoreJump(previousJump);
         }
       }
       buf.append(armBuf);
+      if (arrowSwitch) {
+        // The arrow arm's implicit break prints no `break;`. A braced arm's jump carries the
+        // closing brace's line, so the brace is pinned there for the alignment.
+        if (i == lastPrinted) {
+          lastJoins = breakJump >= 0;
+        }
+        if (braced.contains(stat)) {
+          buf.appendIndent(indent + 1).append("}");
+          if (breakJump >= 0 && RoundTrip.lineStartsAt(breakJump)) {
+            buf.addBytecodeMappingAt(buf.length(), breakJump, null, null);
+          }
+          buf.appendLineSeparator();
+        }
+        continue;
+      }
       if (joinedReturn != null) {
         buf.append(breakLine(indent + 2, joinedReturn.bytecode == null ? -1
           : joinedReturn.bytecode.previousSetBit(Integer.MAX_VALUE)));
@@ -740,8 +847,12 @@ public class SwitchStatement extends Statement {
         && switchEnd >= 0 && !defaultPrinted && lastPrinted >= 0 && lastJoins
         && !yields && !orderUnknown && !isPattern() && caseGuards.stream().noneMatch(Objects::nonNull)
         && defaultTargetOffset() == switchEnd) {
-      buf.appendIndent(indent + 1).append("default:").appendLineSeparator();
-      buf.appendIndent(indent + 2).append("break;").appendLineSeparator();
+      if (arrowSwitch) {
+        buf.appendIndent(indent + 1).append("default -> {}").appendLineSeparator();
+      } else {
+        buf.appendIndent(indent + 1).append("default:").appendLineSeparator();
+        buf.appendIndent(indent + 2).append("break;").appendLineSeparator();
+      }
     }
 
     // A spilled label whose table target stands after every arm's block still has to print, in
@@ -762,6 +873,19 @@ public class SwitchStatement extends Statement {
     }
 
     return buf;
+  }
+
+  /**
+   * True when the arm prints one expression statement, which an unbraced arrow rule can carry.
+   * Anything else — a declaration, several statements, a nested block — needs a block of its
+   * own in the arrow form, and the block's implicit break would gain the closing brace's line.
+   */
+  private static boolean singleExpressionArm(Statement stat) {
+    if (stat == null || !stat.getStats().isEmpty() || !stat.getVarDefinitions().isEmpty()) {
+      return false;
+    }
+    List<Exprent> exprents = stat.getExprents();
+    return exprents != null && exprents.size() == 1;
   }
 
   /**
