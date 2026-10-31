@@ -3203,6 +3203,41 @@ public final class RoundTrip {
   }
 
   /**
+   * True when the target's table proves the source put the boolean operator on a line of its own:
+   * javac anchors a conditional expression at its operator token, so the entry at the chain's
+   * first instruction carries the operator's line, while the pattern binding the test declares
+   * carries the line the test was written on. The two differ only when the operator stood on a
+   * later line, after the test's own text ended.
+   */
+  public static boolean operatorStartsLine(Exprent before, Exprent after) {
+    if (!enabled() || !(after instanceof InvocationExprent) || before == null) {
+      return false;
+    }
+    int first = firstOffsetOf(before);
+    if (first < 0) {
+      return false;
+    }
+    int operator = lineAtOffset(first);
+    if (operator < 0) {
+      return false;
+    }
+    for (Exprent part : before.getAllExprents(true, true)) {
+      if (!(part instanceof FunctionExprent function)
+          || function.getFuncType() != FunctionExprent.FunctionType.INSTANCEOF
+          || function.getLstOperands().size() < 3
+          || !(function.getLstOperands().get(2) instanceof VarExprent var)
+          || var.getLVT() == null) {
+        continue;
+      }
+      int test = lineAtOffset(var.getLVT().getStart());
+      if (test >= 0 && operator > test) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
    * The source line the operand's text begins on, or -1 when its first part anchors no line of
    * its own. An invocation is anchored at its invoke, the line javac records after its arguments;
    * following a compound's first operand reaches the call its text starts with.

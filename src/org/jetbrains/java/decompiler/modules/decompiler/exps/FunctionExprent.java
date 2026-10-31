@@ -725,8 +725,9 @@ public class FunctionExprent extends Exprent {
       }
       buf.append(wrapOperandString(left, false, indent, true));
       boolean isBoolean = funcType == FunctionType.BOOLEAN_AND || funcType == FunctionType.BOOLEAN_OR;
-      boolean breakHere = isBoolean ? RoundTrip.newlineBeforeOperand(left, right)
-                                    : RoundTrip.newlineBetween(left, right);
+      boolean breakHere = isBoolean
+        ? RoundTrip.newlineBeforeOperand(left, right) || RoundTrip.operatorStartsLine(left, right)
+        : RoundTrip.newlineBetween(left, right);
       if (breakHere) {
         buf.appendLineSeparator().appendIndent(indent + 1).append(funcType.operator).append(" ");
       } else {
