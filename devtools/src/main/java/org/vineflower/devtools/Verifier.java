@@ -205,7 +205,7 @@ public final class Verifier {
    * and two {@code javap} runs.
    */
   public boolean diff(String version, Path tree, List<String> classes, int threads,
-                      boolean dumpBytes) throws Exception {
+                      boolean dumpBytes, String note) throws Exception {
     Path client = minecraft.clientJar(version, false);
     Path originalClasses = minecraft.extractedClasses(version, false);
     List<Path> classpath = minecraft.classpath(version, false);
@@ -221,7 +221,7 @@ public final class Verifier {
       files.addAll(found);
     }
     System.out.println("tree:   " + tree);
-    System.out.println("note:   a subset decompile; the whole-tree score is the only evidence");
+    System.out.println("note:   " + note);
     boolean ok = true;
     Path compileCache = workspace.cache.resolve("compile");
     for (Path source : files) {

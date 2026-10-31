@@ -112,7 +112,7 @@ public final class Main {
         if (positional.size() < 2) {
           throw new IllegalArgumentException(
             "usage: diff <version> <Class> [<Class>...] [--no-cache] [--options \"...\"]"
-              + " [--dump] [--dump-bytes]");
+              + " [--full|--tree <dir>] [--dump] [--dump-bytes]");
         }
         String version = positional.get(0);
         List<String> classes = List.copyOf(positional.subList(1, positional.size()));
@@ -120,8 +120,23 @@ public final class Main {
         int threads = intFlag(rest, "--threads", threadsDefault());
         ClassDiff.dump = rest.contains("--dump");
         boolean dumpBytes = rest.contains("--dump-bytes");
-        Path tree = decompiler.tree(version, threads, noCache, classes, optionsFlag(rest));
-        boolean ok = new Verifier(workspace, minecraft).diff(version, tree, classes, threads, dumpBytes);
+        // A subset tree can print a class differently from the whole-tree run the score measures,
+        // so a byte or line-table diagnosis must be able to name the score's own tree.
+        boolean full = rest.contains("--full");
+        // --tree verifies a hand-edited scratch copy of a tree, the experiment a research step
+        // runs to prove a source form before any decompiler code is written.
+        String treePath = stringFlag(rest, "--tree", null);
+        Path tree = treePath != null
+          ? Path.of(treePath)
+          : full
+            ? decompiler.tree(version, threads, noCache, (String) null, optionsFlag(rest))
+            : decompiler.tree(version, threads, noCache, classes, optionsFlag(rest));
+        String note = treePath != null
+          ? "a scratch tree (a hand-edited copy, not the decompiler's output)"
+          : full
+            ? "the whole tree, as the score measures it"
+            : "a subset decompile; the whole-tree score is the only evidence";
+        boolean ok = new Verifier(workspace, minecraft).diff(version, tree, classes, threads, dumpBytes, note);
         if (!ok) {
           System.exit(1);
         }
@@ -813,7 +828,7 @@ public final class Main {
     List<String> values = new ArrayList<>();
     for (int i = 0; i < args.size(); i++) {
       String arg = args.get(i);
-      if (arg.equals("--threads") || arg.equals("--only")
+      if (arg.equals("--threads") || arg.equals("--only") || arg.equals("--tree")
           || arg.equals("--options") || arg.equals("--timeout") || arg.equals("--since")) {
         i++;
         continue;
@@ -862,7 +877,11 @@ public final class Main {
         score     <version> [<version>...] [--no-cache] [--only Class] [--threads N] [--json] [--timeout minutes] [--since Tree]
                                              several versions run one at a time;
                                              --since lists what changed against an earlier tree
-        diff      <version> <Class> [<Class>...] verify classes and explain every failing attribute
+        diff      <version> <Class> [<Class>...] [--full|--tree <dir>] [--dump] [--dump-bytes]
+                                             verify classes and explain every failing attribute;
+                                             --full verifies against the whole-tree source the
+                                             score measures instead of a subset decompile;
+                                             --tree verifies a scratch copy of a tree
         compile   <version> <Class>            compile that one class with the verifier's javac
                                              settings and print its errors
         corpus    <version> --ground-truth D  write the class-to-ground-truth corpus

@@ -141,6 +141,11 @@ public final class ClassDiff {
       List<String> ourLines = lnt(ours);
       if (!originalLines.equals(ourLines)) {
         diff.fail("lnt", entry.getKey() + " " + lntSummary(originalLines, ourLines));
+        if (dump) {
+          System.err.println("LNT " + original.name + " " + entry.getKey()
+            + "  entries jar/ours " + originalLines.size() + "/" + ourLines.size());
+          lntDump(originalLines, ourLines, theirs);
+        }
       }
       if (!lvt(theirs).equals(lvt(ours))) {
         diff.fail("lvt", entry.getKey());
@@ -1002,6 +1007,32 @@ public final class ClassDiff {
   private static int lineOf(List<String> entries, int index) {
     String entry = entries.get(index);
     return Integer.parseInt(entry.substring(entry.indexOf(':') + 1));
+  }
+
+  /** The two line tables side by side, one row per anchored instruction, for --dump. */
+  private static void lntDump(List<String> original, List<String> ours, MethodNode method) {
+    List<String> rendered = renderedInstructions(method);
+    java.util.TreeMap<Integer, int[]> byPosition = new java.util.TreeMap<>();
+    for (String entry : original) {
+      int colon = entry.indexOf(':');
+      byPosition.computeIfAbsent(Integer.parseInt(entry.substring(0, colon)), k -> new int[]{-1, -1})[0]
+        = Integer.parseInt(entry.substring(colon + 1));
+    }
+    for (String entry : ours) {
+      int colon = entry.indexOf(':');
+      byPosition.computeIfAbsent(Integer.parseInt(entry.substring(0, colon)), k -> new int[]{-1, -1})[1]
+        = Integer.parseInt(entry.substring(colon + 1));
+    }
+    for (java.util.Map.Entry<Integer, int[]> entry : byPosition.entrySet()) {
+      int[] pair = entry.getValue();
+      String delta = pair[0] >= 0 && pair[1] >= 0 && pair[0] != pair[1]
+        ? (pair[0] - pair[1] > 0 ? "  +" : "  ") + (pair[0] - pair[1]) : "";
+      int position = entry.getKey();
+      String insn = position >= 0 && position < rendered.size() ? rendered.get(position) : "?";
+      System.err.println("LNT   @" + position + "  " + clip(insn)
+        + "\tjar " + (pair[0] < 0 ? "-" : pair[0])
+        + "\tours " + (pair[1] < 0 ? "-" : pair[1]) + delta);
+    }
   }
 
   private static String localRows(MethodNode method) {
