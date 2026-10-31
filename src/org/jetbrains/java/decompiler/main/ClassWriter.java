@@ -1398,6 +1398,51 @@ public class ClassWriter implements StatementWriter {
             }
           }
         }
+        // A static block's own line is a real declaration line from the target's table, but the
+        // carry above gives an uninitialised field the next lined member's line — the first method
+        // after it, past the block. The initializer clamp below then drags the block past every
+        // field, and the source cannot have had the block after a member it precedes. No field
+        // reads anything, so an uninitialised field may sit before the block: cap its carried line
+        // at the block's own line, and the field monotonic pass below keeps the class order. Only
+        // when the clamp would move the block anyway: a block whose line it treats as a real
+        // declaration (a lifted tail precedes a later field, InputConstants' UNKNOWN) must keep
+        // the field lines clean, because the clamp reads them as evidence, and an enum block is
+        // exempt from the clamp altogether.
+        int blockAt = -1;
+        for (int i = 0; i < planSize; i++) {
+          if (plan.get(i)[0] == 1 && original[i] >= 0
+              && CodeConstants.CLINIT_NAME.equals(methods.get(plan.get(i)[1]).getName())) {
+            blockAt = i;
+            break;
+          }
+        }
+        if (blockAt >= 0 && (cl.getAccessFlags() & CodeConstants.ACC_ENUM) == 0
+            && !blockSequences.contains(plan.get(blockAt)[3])) {
+          int blockLine = original[blockAt];
+          int lineLastField = -1;
+          int lineFirstField = Integer.MAX_VALUE;
+          java.util.Set<Integer> linesOfFields = new java.util.HashSet<>();
+          for (int[] member : plan) {
+            if (member[0] == 0 && member[2] >= 0) {
+              lineLastField = Math.max(lineLastField, member[2]);
+              lineFirstField = Math.min(lineFirstField, member[2]);
+              linesOfFields.add(member[2]);
+            }
+          }
+          // Mirrors the clamp below with the values it would read, before any cap changes them.
+          String blockCtorMode = System.getenv("NEUROFLOWER_CTORLINE");
+          boolean blockScoped = "all".equals(blockCtorMode)
+            || endsWithLiftedInitializer(wrapper.getMethodWrapper(plan.get(blockAt)[1]), wrapper);
+          boolean blockRealLine = !"off".equals(blockCtorMode) && blockScoped
+            && (blockLine < lineFirstField || !linesOfFields.contains(blockLine));
+          if (blockLine < lineLastField && !blockRealLine) {
+            for (int i = 0; i < planSize; i++) {
+              if (plan.get(i)[0] == 0 && original[i] < 0) {
+                plan.get(i)[2] = Math.min(plan.get(i)[2], blockLine);
+              }
+            }
+          }
+        }
         // Fields keep their declaration order: a forward reference from an initializer to a later
         // field is illegal, and their own lines are only as trustworthy as their initializers.
         int previousField = -1;
