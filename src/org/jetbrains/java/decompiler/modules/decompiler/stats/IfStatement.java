@@ -1121,7 +1121,11 @@ public class IfStatement extends Statement {
     }
   }
 
-  /** Prints `} else` on the line the first arm's exit jump is recorded on. */
+  /**
+   * Prints `} else` on the line the first arm's exit jump is recorded on. When the target put
+   * that jump on a line of its own, the next test starts the following line: merging the two
+   * would print the jump and the test on one line, which no alignment can undo.
+   */
   private static void appendElseKeyword(TextBuffer buf, int indent, Statement first, Statement second) {
     char armLast = buf.lastTokenChar();
     int exit = armExitSite(buf, first, second);
@@ -1132,7 +1136,11 @@ public class IfStatement extends Statement {
     if (armLast != '}') {
       mapArmExit(buf, exit, first, armLast);
     }
-    buf.append(" ");
+    if (RoundTrip.armExitStartsLine(first, second)) {
+      buf.appendLineSeparator().appendIndent(indent);
+    } else {
+      buf.append(" ");
+    }
   }
 
   /**

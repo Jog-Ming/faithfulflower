@@ -10677,12 +10677,98 @@ public final class RoundTrip {
     StructMethod method = currentMethod();
     java.util.Map<Integer, Integer> gotos = method == null ? null : GOTO_TARGETS.get(method);
     java.util.Map<Integer, Integer> byEnd = method == null ? null : INSTRUCTION_BY_END.get(method);
-    int limit = firstOffset(next);
+    int limit = armEntryOffset(next);
     if (gotos == null || byEnd == null || limit < 0) {
       return -1;
     }
     Integer candidate = byEnd.get(limit);
     return candidate != null && gotos.containsKey(candidate) ? candidate : -1;
+  }
+
+  /**
+   * The first instruction the next arm executes: its printed prelude when it opens with
+   * statements merged into a following if, otherwise the statement's own first offset. The
+   * jump over an arm ends exactly here.
+   */
+  public static int armEntryOffset(Statement arm) {
+    Statement cur = arm;
+    while (cur instanceof org.jetbrains.java.decompiler.modules.decompiler.stats.SequenceStatement sequence) {
+      if (!sequence.getVarDefinitions().isEmpty()) {
+        break;
+      }
+      Statement lead = null;
+      for (Statement child : sequence.getStats()) {
+        if (!printsNothing(child)) {
+          lead = child;
+          break;
+        }
+      }
+      if (!(lead instanceof org.jetbrains.java.decompiler.modules.decompiler.stats.IfStatement)) {
+        break;
+      }
+      cur = lead;
+    }
+    if (cur instanceof org.jetbrains.java.decompiler.modules.decompiler.stats.IfStatement ifStatement) {
+      // Only an else-if that prints no prelude starts at its test; one with a merged prelude
+      // starts where the prelude does, and that is its own first offset below.
+      if (ifStatement.getFirst() != null && ifStatement.getFirst().getExprents() != null
+          && ifStatement.getFirst().getExprents().isEmpty()) {
+        Exprent head = ifStatement.getHeadexprent();
+        int start = head == null ? -1 : exprentStart(head);
+        if (start >= 0) {
+          return start;
+        }
+      }
+    }
+    return firstOffset(arm);
+  }
+
+  /**
+   * The first instruction of the next arm's printed test: an else-if's condition, not its
+   * body. A statement's own first offset comes from its arms rather than its condition, so the
+   * branch over the arm would not be found at it.
+   */
+  public static int armStartOffset(Statement arm) {
+    Statement cur = arm;
+    while (cur instanceof org.jetbrains.java.decompiler.modules.decompiler.stats.SequenceStatement sequence) {
+      Statement lead = null;
+      for (Statement child : sequence.getStats()) {
+        if (!printsNothing(child)) {
+          lead = child;
+          break;
+        }
+      }
+      if (lead == null) {
+        break;
+      }
+      cur = lead;
+    }
+    if (cur instanceof org.jetbrains.java.decompiler.modules.decompiler.stats.IfStatement ifStatement) {
+      Exprent head = ifStatement.getHeadexprent();
+      int start = head == null ? -1 : exprentStart(head);
+      if (start >= 0) {
+        return start;
+      }
+    }
+    return firstOffset(arm);
+  }
+
+  /**
+   * True when the target records the arm's exit jump on a line of its own, before the next arm's
+   * test: the source closed the branch and started the next `if` on the following line, so the
+   * printed `}` and `else` stay where the jump is and only the test starts the next line.
+   */
+  public static boolean armExitStartsLine(Statement arm, Statement next) {
+    int exit = armExitGoto(arm, next);
+    int nextStart = next == null ? -1 : armStartOffset(next);
+    // No entry at the jump means the writer put it on a line another instruction already
+    // marked; the test then starts no separate line either.
+    if (exit < 0 || nextStart < 0 || !hasLineEntryAt(exit)) {
+      return false;
+    }
+    int exitLine = lineAtOffset(exit);
+    int nextLine = lineAtOffset(nextStart);
+    return exitLine >= 0 && nextLine >= 0 && exitLine < nextLine;
   }
 
   /**
