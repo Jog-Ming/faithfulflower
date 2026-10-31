@@ -2961,17 +2961,16 @@ public final class RoundTrip {
 
   /**
    * Whether the original wrote this catch clause on a line of its own. A try-with-resources'
-   * synthetic close sits on the closing brace's line, so the greatest line between the block's
-   * last exprent and the handler belongs to the closing brace. A brace written on the catch's
-   * line puts that entry on the handler's line. A try without resources emits nothing there,
-   * and the brace's line is not in the class file at all.
+   * synthetic close sits on the closing brace's line, wherever inside the protected range the
+   * writer put it, so the brace's line is the greatest one the table records before the handler.
+   * A source that wrote `} catch` on one line gives the handler that same line; one that broke
+   * the line leaves the brace's line behind. A try without resources records no brace line.
    */
   public static boolean catchOnNewLine(Statement previous, int handlerOffset, boolean resources) {
     if (!resources || previous == null || handlerOffset < 0) {
       return false;
     }
-    int end = previous.getStartEndRange().end;
-    int braceLine = Math.max(lineAtOffset(end), highestLineBetween(end, handlerOffset));
+    int braceLine = highestLineBetween(0, handlerOffset);
     int handlerLine = lineAtOffset(handlerOffset);
     return braceLine >= 0 && handlerLine > braceLine;
   }
