@@ -35,7 +35,7 @@ public final class RootStatement extends Statement {
   @Override
   public TextBuffer toJava(int indent) {
     RoundTrip.clearConsumedStatements();
-    Runnable restoreReturn = RoundTrip.hideImplicitFinalReturn(first);
+    Runnable restoreReturn = RoundTrip.hideImplicitFinalReturn(first, dummyExit);
     try {
       return ExprProcessor.listToJava(varDefinitions, indent).append(first.toJava(indent));
     }

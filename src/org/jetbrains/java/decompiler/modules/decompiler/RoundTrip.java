@@ -5768,8 +5768,18 @@ public final class RoundTrip {
    * the return: its flow fell out of the body and javac laid the method's one return past the
    * synthetic code — a record pattern's match handler sits there — so the closing brace compiles
    * to the same instruction. Returns an action that puts the exprent back, or null.
+   *
+   * <p>The return a flattened guard leaves past the rest of the body is hidden the same way: the
+   * guard printer hoists the body's tail out of the test, and when nothing branches to the
+   * method's last return every path reaches it by falling out of that tail. The source closed the
+   * body with its brace, which compiles to the same instruction.
    */
   public static Runnable hideImplicitFinalReturn(Statement body) {
+    return hideImplicitFinalReturn(body, null);
+  }
+
+  /** As {@link #hideImplicitFinalReturn(Statement)}, giving a hidden return's offsets to the exit. */
+  public static Runnable hideImplicitFinalReturn(Statement body, DummyExitStatement dummyExit) {
     if (!selector("silentreturn") || body == null) {
       return null;
     }
@@ -5778,6 +5788,10 @@ public final class RoundTrip {
     java.util.Map<Integer, Integer> gotos = method == null ? null : GOTO_TARGETS.get(method);
     if (last == null || gotos == null) {
       return null;
+    }
+    Runnable flattened = hideFlattenedFinalReturn(body, method, last, dummyExit);
+    if (flattened != null) {
+      return flattened;
     }
     Statement tail = body;
     while (true) {
@@ -5829,6 +5843,98 @@ public final class RoundTrip {
       }
       tail = next;
     }
+  }
+
+  /**
+   * Hides the bare void return a flattened guard leaves at the body's tail. The walk follows only
+   * the statements whose text the enclosing print puts last — a sequence's final child and the arm
+   * of an if without an else, which the guard printer prints after the test's closing brace. The
+   * return must be the method's last instruction, and no goto or switch arm may land on it: a
+   * conditional branch there is the test that skips the tail statement, whose other path still
+   * falls out of the body, but a goto or an arm reaching it is a written path of its own.
+   */
+  private static Runnable hideFlattenedFinalReturn(Statement body, StructMethod method, int last,
+                                                   DummyExitStatement dummyExit) {
+    Statement tail = body;
+    while (tail != null) {
+      List<Exprent> exprents = tail.getExprents();
+      if (exprents != null) {
+        if (exprents.isEmpty()) {
+          return null;
+        }
+        Exprent candidate = exprents.get(exprents.size() - 1);
+        if (!(candidate instanceof ExitExprent exit)
+            || exit.getExitType() != ExitExprent.Type.RETURN || exit.getValue() != null
+            || exit.bytecode == null || exit.bytecode.isEmpty()) {
+          return null;
+        }
+        int exitStart = exit.bytecode.nextSetBit(0);
+        if (exitStart != last || isGotoOrSwitchTarget(method, exitStart)) {
+          return null;
+        }
+        // The closing brace stands where the return was, so the exit's anchor is this return's
+        // offsets alone. Offsets an earlier removal left there belong to returns the guards print
+        // on lines of their own, and their entries would drag the brace to those lines instead.
+        if (dummyExit != null) {
+          dummyExit.bytecode = (BitSet) exit.bytecode.clone();
+        }
+        int index = exprents.size() - 1;
+        exprents.remove(index);
+        return () -> exprents.add(index, candidate);
+      }
+      if (tail instanceof IfStatement branching) {
+        // An if with an else arm prints that arm last only in its plain form; the arm the guard
+        // rules hoist past the braces makes the other one last, and the walk cannot tell here.
+        if (branching.getElsestat() != null) {
+          return null;
+        }
+        tail = branching.getIfstat();
+      }
+      else if (tail instanceof SequenceStatement) {
+        // A statement that prints nothing does not end the text: the empty block a flattened
+        // guard's condition branch reached stands after the if that prints its return, and the
+        // body the guard hoisted past the braces is what the method's brace follows.
+        List<Statement> children = tail.getStats();
+        Statement lastPrinted = null;
+        for (int i = children.size() - 1; i >= 0 && lastPrinted == null; i--) {
+          if (!printsNothing(children.get(i))) {
+            lastPrinted = children.get(i);
+          }
+        }
+        tail = lastPrinted;
+      }
+      else {
+        return null;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Whether a goto or a switch arm of the method lands on this instruction. A conditional branch
+   * to it is the test that skips the tail statement — the source's control still falls out of the
+   * body to the return — but a goto from synthetic code or a switch arm reaching it is a written
+   * path of its own.
+   */
+  private static boolean isGotoOrSwitchTarget(StructMethod method, int offset) {
+    java.util.Map<Integer, Integer> gotos = GOTO_TARGETS.get(method);
+    if (gotos != null && gotos.containsValue(offset)) {
+      return true;
+    }
+    java.util.Map<Integer, int[]> switches = SWITCH_TARGETS.get(method);
+    if (switches != null) {
+      for (int[] targets : switches.values()) {
+        if (targets == null) {
+          continue;
+        }
+        for (int target : targets) {
+          if (target == offset) {
+            return true;
+          }
+        }
+      }
+    }
+    return false;
   }
 
   /** Records the statements an if prints after its closing brace, so the arm prints nothing there. */
