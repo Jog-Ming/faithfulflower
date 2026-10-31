@@ -26,8 +26,10 @@ import org.jetbrains.java.decompiler.modules.decompiler.vars.VarVersionPair;
 import org.jetbrains.java.decompiler.struct.StructClass;
 import org.jetbrains.java.decompiler.struct.StructField;
 import org.jetbrains.java.decompiler.struct.StructMethod;
+import org.jetbrains.java.decompiler.struct.StructRecordComponent;
 import org.jetbrains.java.decompiler.struct.attr.StructEnclosingMethodAttribute;
 import org.jetbrains.java.decompiler.struct.attr.StructGeneralAttribute;
+import org.jetbrains.java.decompiler.struct.attr.StructLineNumberTableAttribute;
 import org.jetbrains.java.decompiler.struct.attr.StructLocalVariableTableAttribute.LocalVariable;
 import org.jetbrains.java.decompiler.struct.attr.StructMethodParametersAttribute;
 import org.jetbrains.java.decompiler.struct.attr.StructNestHostAttribute;
@@ -1184,9 +1186,21 @@ public class NestedClassProcessor {
       return;
     }
 
-    Set<Statement> setStats = new HashSet<>();
     VarType classType = new VarType(node.classStruct.qualifiedName, true);
 
+    // A local class is declared at its own source line, which is the line the members javac
+    // generates for it carry; the first reference to the type can come much later in the method.
+    // Without such a line the declaration keeps the reference order.
+    int declarationLine = localClassDeclarationLine(node);
+    StructLineNumberTableAttribute table = declarationLine < 0 ? null
+      : method.methodStruct.getAttribute(StructGeneralAttribute.ATTRIBUTE_LINE_NUMBER_TABLE);
+    InsertPoint point = table == null ? null : insertionPoint(root, table, declarationLine);
+    if (point != null) {
+      point.list.add(point.index, classDefinition(method, classType));
+      return;
+    }
+
+    Set<Statement> setStats = new HashSet<>();
     Statement statement = getDefStatement(root, classType, setStats);
     if (statement == null) {
       // unreferenced local class
@@ -1214,11 +1228,89 @@ public class NestedClassProcessor {
       addIndex++;
     }
 
+    lst.add(addIndex, classDefinition(method, classType));
+  }
+
+  private static VarExprent classDefinition(MethodWrapper method, VarType classType) {
     VarExprent var = new VarExprent(method.counter.getCounterAndIncrement(CounterContainer.VAR_COUNTER), classType, method.varproc);
     var.setDefinition(true);
     var.setClassDef(true);
+    return var;
+  }
 
-    lst.add(addIndex, var);
+  /**
+   * Where a local class declaration belongs: before the first statement the source wrote after
+   * the class's own line. An exprent with no line of its own inherits one and cannot place the
+   * declaration; the earliest line wins so a block printed out of source order does not take the
+   * declaration with it.
+   */
+  private static InsertPoint insertionPoint(Statement stat,
+      StructLineNumberTableAttribute table, int line) {
+    InsertPoint best = null;
+    List<Exprent> exprents = stat.getExprents();
+    if (exprents != null) {
+      for (int i = 0; i < exprents.size(); i++) {
+        int source = exprentSourceLine(exprents.get(i), table);
+        if (source > line && (best == null || source < best.line)) {
+          best = new InsertPoint(exprents, i, source);
+        }
+      }
+    }
+    for (Statement child : stat.getStats()) {
+      InsertPoint found = insertionPoint(child, table, line);
+      if (found != null && (best == null || found.line < best.line)) {
+        best = found;
+      }
+    }
+    return best;
+  }
+
+  /** A statement position: the exprent list, the index in it, and the source line there. */
+  private static final class InsertPoint {
+    private final List<Exprent> list;
+    private final int index;
+    private final int line;
+
+    private InsertPoint(List<Exprent> list, int index, int line) {
+      this.list = list;
+      this.index = index;
+      this.line = line;
+    }
+  }
+
+  /**
+   * The source line a local class is declared on, or minus one when the class file does not
+   * name it. A local record's canonical constructor is generated from the declaration and is
+   * attributed to its first line; a class with no such member leaves the printed order alone.
+   */
+  private static int localClassDeclarationLine(ClassNode node) {
+    StructClass cls = node.classStruct;
+    if (cls == null || cls.getRecordComponents() == null) {
+      return -1;
+    }
+    StringBuilder descriptor = new StringBuilder("(");
+    for (StructRecordComponent component : cls.getRecordComponents()) {
+      descriptor.append(component.getDescriptor());
+    }
+    descriptor.append(")V");
+    StructMethod constructor = cls.getMethod(CodeConstants.INIT_NAME, descriptor.toString());
+    return constructor == null ? -1 : tableLine(constructor);
+  }
+
+  /** The line the method's first instruction is attributed to, or minus one when it has no table. */
+  private static int tableLine(StructMethod method) {
+    StructLineNumberTableAttribute table =
+      method.getAttribute(StructGeneralAttribute.ATTRIBUTE_LINE_NUMBER_TABLE);
+    return table == null ? -1 : table.findLineNumber(0);
+  }
+
+  /** The source line of the expression's first instruction, or minus one when it has none. */
+  private static int exprentSourceLine(Exprent exprent, StructLineNumberTableAttribute table) {
+    if (table == null || exprent.bytecode == null || exprent.bytecode.isEmpty()) {
+      return -1;
+    }
+    int offset = exprent.bytecode.nextSetBit(0);
+    return offset < 0 ? -1 : table.findLineNumber(offset);
   }
 
   private static Statement findFirstBlock(Statement stat, Set<Statement> setStats) {

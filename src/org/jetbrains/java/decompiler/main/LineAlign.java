@@ -682,6 +682,12 @@ public final class LineAlign {
       if (dollar >= 0) {
         simple = simple.substring(dollar + 1);
       }
+      if (!simple.isEmpty() && !Character.isJavaIdentifierStart(simple.charAt(0))
+          && node.simpleName != null) {
+        // A local class's binary name numbers it -- FillCommand$1UpdatedPosition -- while the
+        // source, and the InnerClasses entry, call it UpdatedPosition.
+        simple = node.simpleName;
+      }
       if (!simple.isEmpty() && Character.isJavaIdentifierStart(simple.charAt(0))) {
         declaration = classDeclarationLine(lines, simple, enclosingLine,
           firstMemberLine(className, tracers, lines), declarationHint(node.classStruct, className, tracers));
