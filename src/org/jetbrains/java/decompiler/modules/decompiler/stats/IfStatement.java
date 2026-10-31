@@ -378,17 +378,7 @@ public class IfStatement extends Statement {
       // line the source wrote it on; the line alignment has to see that jump to place it.
       int gotoOffset = groups.size() == 1 ? RoundTrip.continueGoto(ifHead) : -1;
       for (List<Exprent> group : groups) {
-        IfExprent guard = (IfExprent) ifHead.copy();
-        guard.setCondition(orOf(group));
-        buf.appendIndent(indent);
-        buf.append(guard.toJava(indent)).append(" {").appendLineSeparator();
-        TextBuffer continueLine = new TextBuffer();
-        continueLine.appendIndent(indent + 1).append("continue;").appendLineSeparator();
-        if (gotoOffset >= 0) {
-          continueLine.addStartBytecodeMapping(gotoOffset);
-        }
-        buf.append(continueLine);
-        buf.appendIndent(indent).append("}").appendLineSeparator();
+        printGuard(buf, ifHead, orOf(group), indent, gotoOffset);
       }
       buf.append(ExprProcessor.jmpWrapper(ifstat, indent, false));
       return buf;
@@ -666,6 +656,19 @@ public class IfStatement extends Statement {
     // wrote the statements nested; print that run of ifs back.
     if (ifstat != null && !isLabeled() && condition instanceof IfExprent ifHead
         && printSplitIf(buf, ifHead, ifstat, elsestat, indent, false)) {
+      return buf;
+    }
+
+    // The same fold with the arm reduced to the loop's jump: `if (a) { if (b) continue; }` keeps
+    // no statement for the arm, so the merged condition's head is all the tree has. The innermost
+    // brace prints the continue, pinned to the jump the target records after the last test.
+    if (ifstat == null && elsestat == null && !isLabeled() && ifedge != null
+        && condition instanceof IfExprent ifHead
+        && (ifedge.getType() == StatEdge.TYPE_CONTINUE
+            || ifedge.getType() == StatEdge.TYPE_BREAK
+               && RoundTrip.printContinueGuardAtHead(ifHead, this))
+        && RoundTrip.continueGoto(ifHead) >= 0
+        && printSplitIf(buf, ifHead, null, null, indent, false)) {
       return buf;
     }
 
@@ -1232,7 +1235,7 @@ public class IfStatement extends Statement {
   static boolean printSplitIf(TextBuffer buf, IfExprent head, Statement arm, Statement elseArm,
                               int indent, boolean elseSemicolon) {
     List<Integer> groups = nestedIfGroups(head, arm);
-    if (groups.isEmpty()
+    if (groups.isEmpty() || (arm == null && elseArm != null)
         || (elseArm != null && (!endsWithExit(arm) || RoundTrip.declaresLocal(elseArm)))) {
       return false;
     }
@@ -1254,8 +1257,18 @@ public class IfStatement extends Statement {
    */
   static boolean printNestedIfs(TextBuffer buf, IfExprent head, Statement arm, List<Integer> groups, int indent,
                                 boolean allowContinueGuard) {
+    return printNestedIfs(buf, head, arm, groups, indent, allowContinueGuard, null, -1);
+  }
+
+  /**
+   * As above, with the arm reduced to a jump the caller already identified: {@code jump} is the
+   * written keyword (with its semicolon) and {@code jumpSite} the instruction it compiled to, or
+   * -1 to pin the continue the condition's own last branch falls into.
+   */
+  static boolean printNestedIfs(TextBuffer buf, IfExprent head, Statement arm, List<Integer> groups, int indent,
+                                boolean allowContinueGuard, String jump, int jumpSite) {
     List<Exprent> operands = booleanOperands(head.getCondition());
-    boolean guards = allowContinueGuard && RoundTrip.endsLoopBody(arm);
+    boolean guards = arm != null && allowContinueGuard && RoundTrip.endsLoopBody(arm);
     int open = 0;
     boolean firstGuard = false;
     for (int group = 0; group < groups.size(); group++) {
@@ -1294,13 +1307,74 @@ public class IfStatement extends Statement {
         open++;
       }
     }
-    buf.append(ExprProcessor.jmpWrapper(arm, indent + open, true));
+    if (arm == null) {
+      // The arm is the loop's own jump, which the merge folded into the condition's last branch.
+      TextBuffer jumpLine = new TextBuffer();
+      jumpLine.appendIndent(indent + open).append(jump == null ? "continue;" : jump).appendLineSeparator();
+      int site = jumpSite >= 0 ? jumpSite : RoundTrip.continueGoto(head);
+      if (site >= 0) {
+        jumpLine.addStartBytecodeMapping(site);
+      }
+      buf.append(jumpLine);
+    } else {
+      buf.append(ExprProcessor.jmpWrapper(arm, indent + open, true));
+    }
     // The caller closes the outermost brace (and prints the else arm after it) unless the first
     // group was a guard: then every test here is closed and the arm already returned to its level.
     for (int level = open - 1; level >= (firstGuard ? 0 : 1); level--) {
       buf.appendIndent(indent + level).append("}").appendLineSeparator();
     }
     return !firstGuard;
+  }
+
+  /**
+   * The operand groups a written guard's test splits into, or null. A guard holds no statement
+   * for its arm — the continue is the guard's own jump — so a line entry at a later operand's
+   * first instruction, on a line after the text before it ends, is the only proof the source
+   * wrote that test as a statement of its own. A pattern operand stays flat unless its slot is
+   * fresh, since the guard offers no slot evidence to corroborate the line.
+   */
+  private static List<Integer> guardIfGroups(Exprent test) {
+    List<Exprent> operands = booleanOperands(test);
+    if (operands.size() < 2) {
+      return null;
+    }
+    List<Integer> groups = new ArrayList<>();
+    groups.add(0);
+    for (int i = 1; i < operands.size(); i++) {
+      if (declaresPattern(operands.get(i)) && !RoundTrip.patternSlotFresh(operands.get(i))) {
+        continue;
+      }
+      if (RoundTrip.operandStartsStatement(andOf(operands, 0, i), operands.get(i))) {
+        groups.add(i);
+      }
+    }
+    return groups.size() > 1 ? groups : null;
+  }
+
+  /**
+   * Prints one written guard, `if (test) { continue; }`, or the nested ifs the target's line
+   * table proves the source wrote inside it. {@code site} is the jump the guard's continue
+   * compiled to, or -1 when the target keeps none for this group.
+   */
+  private static void printGuard(TextBuffer buf, IfExprent head, Exprent test, int indent, int site) {
+    List<Integer> groups = guardIfGroups(test);
+    IfExprent guard = (IfExprent) head.copy();
+    guard.setCondition(test);
+    if (groups != null) {
+      printNestedIfs(buf, guard, null, groups, indent, false, "continue;", site);
+      buf.appendIndent(indent).append("}").appendLineSeparator();
+      return;
+    }
+    buf.appendIndent(indent);
+    buf.append(guard.toJava(indent)).append(" {").appendLineSeparator();
+    TextBuffer continueLine = new TextBuffer();
+    continueLine.appendIndent(indent + 1).append("continue;").appendLineSeparator();
+    if (site >= 0) {
+      continueLine.addStartBytecodeMapping(site);
+    }
+    buf.append(continueLine);
+    buf.appendIndent(indent).append("}").appendLineSeparator();
   }
 
   /**
