@@ -755,6 +755,25 @@ public final class LineAlign {
           add(shifts, conflicted, declaration, target - declaration);
         }
       }
+      // A class that uses assertions carries a synthetic $assertionsDisabled field, and javac
+      // writes the <clinit> that fills it with one line entry, the class declaration's. The source
+      // wrote no static initializer block, so no printed construct maps that line.
+      if (hasAssertionsDisabled(cls)) {
+        StructMethod clinit = cls.getMethod(org.jetbrains.java.decompiler.code.CodeConstants.CLINIT_NAME, "()V");
+        BytecodeMappingTracer tracer = clinit == null ? null : tracers.get(
+          Pair.of(className, org.jetbrains.java.decompiler.util.InterpreterUtil.makeUniqueKey(
+            clinit.getName(), clinit.getDescriptor())));
+        StructLineNumberTableAttribute table = clinit == null ? null
+          : clinit.getAttribute(StructGeneralAttribute.ATTRIBUTE_LINE_NUMBER_TABLE);
+        if ((tracer == null || tracer.getMapping().isEmpty()) && table != null && singleLine(table)) {
+          int target = table.findLineNumber(0);
+          if (target >= 0) {
+            int top = classDeclarationTop(lines, declaration, 0);
+            entryLines.add(top);
+            add(shifts, conflicted, top, target - top);
+          }
+        }
+      }
       for (StructMethod method : cls.getMethods()) {
         boolean bridge = (method.getAccessFlags() & org.jetbrains.java.decompiler.code.CodeConstants.ACC_BRIDGE) != 0;
         boolean accessor = isSyntheticAccessor(method);
@@ -786,6 +805,17 @@ public final class LineAlign {
         add(shifts, conflicted, anchor, target - anchor);
       }
     }
+  }
+
+  /** Whether javac generated the class's synthetic {@code $assertionsDisabled} field. */
+  private static boolean hasAssertionsDisabled(StructClass cls) {
+    for (StructField field : cls.getFields()) {
+      if ("$assertionsDisabled".equals(field.getName())
+          && (field.getAccessFlags() & org.jetbrains.java.decompiler.code.CodeConstants.ACC_SYNTHETIC) != 0) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**
