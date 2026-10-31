@@ -93,6 +93,8 @@ public final class RoundTrip {
    * body's scopes close, so N records which local slots were still held when they did.
    */
   private static final java.util.Map<StructMethod, BitSet> MATCH_CATCH_SLOTS = new java.util.concurrent.ConcurrentHashMap<>();
+  /** Entry offsets of those handlers: the store that opens the synthesized catch. */
+  private static final java.util.Map<StructMethod, BitSet> MATCH_CATCH_ENTRIES = new java.util.concurrent.ConcurrentHashMap<>();
   /** The method's last instruction start offset. */
   private static final java.util.Map<StructMethod, Integer> LAST_INSTRUCTION = new java.util.concurrent.ConcurrentHashMap<>();
   /** The method's first instruction start offset: the entry a dominance check starts from. */
@@ -158,6 +160,7 @@ public final class RoundTrip {
     java.util.Map<Integer, Integer> allStoreSlots = new java.util.HashMap<>();
     java.util.List<int[]> finallyCopies = new java.util.ArrayList<>();
     BitSet matchCatchSlots = new BitSet();
+    BitSet matchCatchEntries = new BitSet();
     BitSet noFallThrough = new BitSet();
     BitSet popSites = new BitSet();
     BitSet closeCalls = new BitSet();
@@ -282,6 +285,10 @@ public final class RoundTrip {
         int slot = i > 0 ? astoreSlot(seq.getInstr(i - 1)) : -1;
         if (slot >= 0) {
           matchCatchSlots.set(slot);
+          // The store is the handler's entry. javac's entry point closes every live range at
+          // that pc and reopens it after the handler, so a local's row ending here is the
+          // compiler's split, not a source block's closing brace.
+          matchCatchEntries.set(seq.getInstr(i - 1).startOffset);
         }
       }
       if (isConditional(instr.opcode)) {
@@ -564,6 +571,7 @@ public final class RoundTrip {
     STORE_SLOTS.put(method, storeSlots);
     ALL_STORE_SLOTS.put(method, allStoreSlots);
     MATCH_CATCH_SLOTS.put(method, matchCatchSlots);
+    MATCH_CATCH_ENTRIES.put(method, matchCatchEntries);
     HANDOVER_STARTS.put(method, handoverStarts(method));
   }
 
@@ -10560,6 +10568,17 @@ public final class RoundTrip {
   }
 
   /**
+   * True when the offset is the entry of javac's synthetic record-pattern {@code MatchException}
+   * handler. Its entry point closes every live range and the skip-goto reopens them after the
+   * handler, so a local's row ending there records the compiler's split, not a source brace.
+   */
+  public static boolean matchCatchEntry(int offset) {
+    StructMethod method = currentMethod();
+    BitSet entries = method == null ? null : MATCH_CATCH_ENTRIES.get(method);
+    return entries != null && offset >= 0 && entries.get(offset);
+  }
+
+  /**
    * The first local declared at or inside this statement whose target scope ends before the
    * enclosing block does, as {@code {start, end}}, or null. Such a local was declared inside a
    * nested block whose closing brace stood where its scope ends.
@@ -10584,6 +10603,9 @@ public final class RoundTrip {
     return table.getRange(start, Integer.MAX_VALUE)
       .filter(v -> v.getStart() >= start && v.getStart() <= windowEnd)
       .filter(v -> v.getEnd() > v.getStart() && v.getEnd() < blockEnd)
+      // A row that stops at the synthetic record-pattern handler closes there because javac's
+      // entry point ends the live range; the source wrote no brace.
+      .filter(v -> !matchCatchEntry(v.getEnd()))
       .min(java.util.Comparator.comparingInt(v -> v.getStart()))
       .map(v -> new int[]{v.getStart(), v.getEnd(), v.getIndex()})
       .orElse(null);
