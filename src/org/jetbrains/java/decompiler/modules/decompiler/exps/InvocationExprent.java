@@ -136,10 +136,17 @@ public class InvocationExprent extends Exprent {
   private static final ThreadLocal<Boolean> ANONYMOUS_CREATION = ThreadLocal.withInitial(() -> Boolean.FALSE);
   /** The argument now being printed starts a source line (the enclosing printer broke before it). */
   private static final ThreadLocal<Boolean> ARG_AT_LINE_START = ThreadLocal.withInitial(() -> Boolean.FALSE);
+  /** The target line the argument now being printed starts its text on, or -1. */
+  private static final ThreadLocal<int[]> ARGUMENT_TEXT_START = ThreadLocal.withInitial(() -> new int[]{-1});
 
   /** Whether the argument being printed was placed at the start of its own line. */
   public static boolean argumentStartedLine() {
     return ARG_AT_LINE_START.get();
+  }
+
+  /** The target line the argument now being printed starts its text on, or -1 outside one. */
+  public static int argumentTextStartLine() {
+    return ARGUMENT_TEXT_START.get()[0];
   }
 
   public static void enterAnonymousCreation() {
@@ -1400,9 +1407,10 @@ public class InvocationExprent extends Exprent {
 
         if (buf.length() > 0) {
           // A chain link whose invoke the original put on a later line than the receiver starts
-          // a line of its own. Inside an argument list javac attributes the invoke to the first
-          // argument's line, so an inherited entry proves nothing about the dot; the source's
-          // own break is a receiver with its own exact entry exactly one line before the link.
+          // a line of its own. Inside an argument list javac attributes the invoke to the line of
+          // its dot, after the argument's own text, so a link later than the text the printer
+          // wrote for the receiver is the source's break. The printed text's last entry can also
+          // be a load inheriting an earlier line, which the argument's first printed call floors.
           // A lambda argument's body is another method, so the receiver's own offsets stop at the
           // call that carries it; the receiver's text still ends on the body's last line, and a
           // link on that line continues the receiver rather than starting a line of its own.
@@ -1410,13 +1418,13 @@ public class InvocationExprent extends Exprent {
           // that line; a chain or qualifier break here would spend one line too many, putting the
           // invoke past the line the table records for it.
           boolean leadingOperand = RoundTrip.isLeadingOperand(this);
+          int receiverEnd = instance == null ? -1 : textEndLine(instance);
+          int linkLine = RoundTrip.sourceLine(this);
           boolean chainBreak = !leadingOperand && instance != null && RoundTrip.newlineBetween(instance, this)
-            && textEndLine(instance) < RoundTrip.sourceLine(this)
+            && receiverEnd < linkLine
             && (!insideOwnArgumentList()
-              || (instance instanceof InvocationExprent
-                       && (RoundTrip.sourceLine(this) == RoundTrip.sourceLineEnd(instance) + 1
-                           || RoundTrip.sourceLine(this) == printedEndLine(buf) + 1)
-                     || chainReceiverBreak(instance, this)));
+              || chainReceiverBreak(instance, this)
+              || argumentChainBreak(buf, receiverEnd, linkLine));
           boolean staticQualifiedBreak = !leadingOperand && breaksBeforeQualifier();
           if (chainBreak) {
             buf.appendLineSeparator().appendIndent(indent);
@@ -2055,6 +2063,22 @@ public class InvocationExprent extends Exprent {
   }
 
   /**
+   * A chain link inside an argument list starts a line of its own only when it sits below the
+   * text the printer already wrote for the receiver: the link's own line is the line of its dot,
+   * so a dot below the text's last line is a source break. The last printed mapping is the
+   * text's real end, and the argument's first printed call floors it because the last mapping
+   * can be a field or variable load that inherits an earlier line: a link on the argument's own
+   * line then continues that text instead of starting a line.
+   */
+  private static boolean argumentChainBreak(TextBuffer printed, int receiverEnd, int linkLine) {
+    int end = printedEndLine(printed);
+    if (end < 0) {
+      end = receiverEnd;
+    }
+    return linkLine > Math.max(end, argumentTextStartLine());
+  }
+
+  /**
    * The target's source line for the last instruction printed in this text. An inlined lambda body
    * carries its own method's mappings, so the printed end of a receiver can be later than the last
    * instruction the enclosing method owns.
@@ -2552,11 +2576,33 @@ public class InvocationExprent extends Exprent {
         boolean sameLine = !firstParameter && line >= 0 && previous >= 0 && line == previous;
 
         boolean savedAtLineStart = ARG_AT_LINE_START.get();
-        ARG_AT_LINE_START.set(i == start ? breakBeforeFirst : forced);
+        int savedTextStart = ARGUMENT_TEXT_START.get()[0];
+        boolean startsLine = i == start ? breakBeforeFirst : forced;
+        ARG_AT_LINE_START.set(startsLine);
+        // Where the argument's text begins: its first printed call on a line the printer broke
+        // to, the call's line when the first argument follows the open parenthesis on it, and the
+        // end of the argument before when a later one continues that line. A later argument
+        // cannot precede the line the call's own dot sits on, and the previous argument's
+        // recorded line can be a load inheriting an earlier line, so the call's line floors it.
+        // A load at the argument's head inherits the line of whatever preceded it, so a link the
+        // source kept on the argument's own line would otherwise stand below the text it
+        // continues; the argument's own first call is where its text is known to sit.
+        int callTextLine = CALL_LINE.get()[0];
+        // A constructor's invoke carries no entry of its own and inherits the last line its
+        // arguments ended with, which can sit below the creation; the creation's own line is the
+        // one the constructor's text is known to sit on.
+        if (functype == Type.INIT && callerOpeningLine >= 0
+          && (callTextLine < 0 || callerOpeningLine < callTextLine)) {
+          callTextLine = callerOpeningLine;
+        }
+        ARGUMENT_TEXT_START.get()[0] = startsLine
+          ? (i == start ? firstLine : line)
+          : i == start ? callTextLine : Math.max(previous, callTextLine);
         try {
           ExprProcessor.getCastedExprent(lstParameters.get(i), argumentType, buff, indent, ambiguous ? ExprProcessor.NullCastType.CAST : ExprProcessor.NullCastType.DONT_CAST_AT_ALL, ambiguous, true, true);
         } finally {
           ARG_AT_LINE_START.set(savedAtLineStart);
+          ARGUMENT_TEXT_START.get()[0] = savedTextStart;
           if (unbound != null) {
             UNBOUND_ARGUMENT.get().pop();
           }
