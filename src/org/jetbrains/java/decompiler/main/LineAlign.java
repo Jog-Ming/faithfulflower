@@ -86,6 +86,8 @@ public final class LineAlign {
     boolean gapAlign = RoundTrip.selector("rt-gap-align");
     TreeMap<Integer, Integer> shifts = new TreeMap<>();
     Set<Integer> conflicted = new HashSet<>();
+    Set<Integer> unmergeable = new HashSet<>();
+    Set<Integer> inherited = new HashSet<>();
     Set<Integer> entryLines = new HashSet<>();
     Map<Integer, List<int[]>> candidates = new TreeMap<>();
     for (Map.Entry<Pair<String, String>, BytecodeMappingTracer> tracerEntry : tracers.entrySet()) {
@@ -140,7 +142,7 @@ public final class LineAlign {
     // class declaration's line. Without this constraint the declaration never moves, and every
     // class with a default constructor stays shifted by however far the original header was.
     addImplicitConstructorConstraints(tracers, lines, shifts, conflicted, entryLines, root);
-    resolveCandidates(candidates, shifts, conflicted);
+    resolveCandidates(candidates, shifts, conflicted, unmergeable, inherited);
 
     if (System.getenv("NEUROFLOWER_ML_BREAKS") != null) {
       logModelAgreement(tracers);
@@ -158,7 +160,7 @@ public final class LineAlign {
     List<Integer> joins = new ArrayList<>();
 
     if (gapAlign) {
-      if (!walkGaps(lines, shifts, entryLines, inserts, removals, joins)) {
+      if (!walkGaps(lines, shifts, unmergeable, inherited, entryLines, inserts, removals, joins)) {
         return text;
       }
     }
@@ -188,7 +190,7 @@ public final class LineAlign {
           }
           for (int i = Math.min(index - 1, lines.length - 1); i > lowest && need > 0; i--) {
             // A join moves line i onto line i-1, so neither may be a line another edit deletes.
-            if (joinable(lines, i, entryLines) && !removals.contains(i) && !removals.contains(i - 1)
+            if (joinable(lines, i, entryLines, false) && !removals.contains(i) && !removals.contains(i - 1)
                 && !joins.contains(i)) {
               joins.add(i);
               need--;
@@ -1091,18 +1093,19 @@ public final class LineAlign {
       if (entry[1] < previousLine && entry[2] >= highest && entry[2] <= highest + 1) {
         highest = entry[2];
         entryLines.add(previousLine);
-        candidate(candidates, previousLine, entry[2] - previousLine, entry[3]);
+        candidate(candidates, previousLine, entry[2] - previousLine, entry[3], entry[0]);
         continue;
       }
       previousLine = entry[1];
       highest = Math.max(highest, entry[2]);
       entryLines.add(entry[1]);
-      candidate(candidates, entry[1], entry[2] - entry[1], entry[3]);
+      candidate(candidates, entry[1], entry[2] - entry[1], entry[3], entry[0]);
     }
   }
 
-  private static void candidate(Map<Integer, List<int[]>> candidates, int line, int shift, int exact) {
-    candidates.computeIfAbsent(line, k -> new ArrayList<>()).add(new int[]{shift, exact});
+  private static void candidate(Map<Integer, List<int[]>> candidates, int line, int shift, int exact,
+      int offset) {
+    candidates.computeIfAbsent(line, k -> new ArrayList<>()).add(new int[]{shift, exact, offset});
   }
 
   /**
@@ -1117,7 +1120,8 @@ public final class LineAlign {
    * them does, which is the statement's own line rather than an operand's continuation.
    */
   private static void resolveCandidates(Map<Integer, List<int[]>> candidates,
-      TreeMap<Integer, Integer> shifts, Set<Integer> conflicted) {
+      TreeMap<Integer, Integer> shifts, Set<Integer> conflicted, Set<Integer> unmergeable,
+      Set<Integer> inherited) {
     for (Map.Entry<Integer, List<int[]>> line : candidates.entrySet()) {
       Set<Integer> all = new java.util.TreeSet<>();
       Set<Integer> exact = new java.util.TreeSet<>();
@@ -1128,11 +1132,35 @@ public final class LineAlign {
         }
       }
       if (all.size() == 1) {
+        if (exact.isEmpty()) {
+          // The line carries no entry of its own: every offset on it inherits an earlier line.
+          inherited.add(line.getKey());
+        }
         add(shifts, conflicted, line.getKey(), all.iterator().next());
       }
       else if (!exact.isEmpty()) {
         // The line's first token is the statement's start, and the instructions printed before
         // the operands that continue it carry the earliest original line among its own entries.
+        // A javac line table may also place a statement's first instruction on the enclosing
+        // construct's line -- a call's receiver load on the call's own line, or an expression
+        // lambda's implicit return on the line the expression ends on. That entry belongs to the
+        // smallest offset alone; when the remaining entries split across lines the text really
+        // did span them, and one merged line cannot hold it.
+        if (exact.size() > 1) {
+          int[] firstExact = null;
+          for (int[] candidate : line.getValue()) {
+            if (candidate[1] != 0 && (firstExact == null || candidate[2] < firstExact[2])) {
+              firstExact = candidate;
+            }
+          }
+          int earliest = exact.iterator().next();
+          for (int[] candidate : line.getValue()) {
+            if (candidate[1] != 0 && candidate != firstExact && candidate[0] != earliest) {
+              unmergeable.add(line.getKey());
+              break;
+            }
+          }
+        }
         add(shifts, conflicted, line.getKey(), exact.iterator().next());
       }
       else {
@@ -1152,7 +1180,8 @@ public final class LineAlign {
    * must stay as printed.
    */
   private static boolean walkGaps(String[] lines, TreeMap<Integer, Integer> shifts,
-      Set<Integer> entryLines, List<int[]> inserts, List<Integer> removals, List<Integer> joins) {
+      Set<Integer> unmergeable, Set<Integer> inherited, Set<Integer> entryLines, List<int[]> inserts,
+      List<Integer> removals, List<Integer> joins) {
     List<int[]> placed = new ArrayList<>(); // {index, paid shift, required shift}
     int previous = 0;
     int previousIndex = -1;
@@ -1179,9 +1208,15 @@ public final class LineAlign {
             need--;
           }
         }
-        for (int i = Math.min(index - 1, lines.length - 1); i > lowest && need > 0; i--) {
+        // The anchor's own line is the first candidate: joining it onto the line above lifts the
+        // anchor by one, which is exactly what a negative gap wants. It is an entry line itself,
+        // so the entry-line veto is waived for it alone -- but only where the merge cannot put
+        // the anchor's text on a line the table places somewhere else.
+        for (int i = Math.min(index, lines.length - 1); i > lowest && need > 0; i--) {
+          boolean anchorLine = i == index
+            && selfJoinSafe(entry.getKey(), desired, shifts, unmergeable, inherited, entryLines);
           // A join moves line i onto line i-1, so neither may be a line another edit deletes.
-          if (joinable(lines, i, entryLines) && !removals.contains(i) && !removals.contains(i - 1)
+          if (joinable(lines, i, entryLines, anchorLine) && !removals.contains(i) && !removals.contains(i - 1)
               && !joins.contains(i)) {
             joins.add(i);
             need--;
@@ -1237,11 +1272,44 @@ public final class LineAlign {
     return found;
   }
 
-  private static boolean joinable(String[] lines, int index, Set<Integer> entryLines) {
+  /**
+   * Whether the current anchor's own line may be joined onto the line above it.
+   *
+   * <p>Both printed lines become one source line, so the anchor's entry would move onto whatever
+   * line the text above ends up on. Merging is harmless when the line above carries no entry of
+   * its own: its text inherits a line, and the merged line settles on the anchor's target either
+   * way. When it does carry an entry, the merge is only safe if that entry stands on the anchor's
+   * own target line -- the source itself kept both texts on one line -- and the anchor's own shift
+   * is backed by an entry rather than inherited: an inherited shift is a guess, and the walk's
+   * underpayment is what places such a line correctly. An entry whose shift is unknown cannot
+   * prove either.
+   */
+  private static boolean selfJoinSafe(int key, int desired, TreeMap<Integer, Integer> shifts,
+      Set<Integer> unmergeable, Set<Integer> inherited, Set<Integer> entryLines) {
+    if (unmergeable.contains(key)) {
+      // The line's own entries sit on several source lines; no single merged line can hold them.
+      return false;
+    }
+    // The line above the anchor is one-based line `key - 1`.
+    int above = key - 1;
+    if (!entryLines.contains(above)) {
+      return true;
+    }
+    if (inherited.contains(key)) {
+      // The line above carries an entry and the anchor's own shift is only inherited: the
+      // walk's underpayment is what places it, and paying the gap by a merge would move the
+      // text onto the line above's entry.
+      return false;
+    }
+    Integer aboveShift = shifts.get(above);
+    return aboveShift != null && aboveShift == desired + 1;
+  }
+
+  private static boolean joinable(String[] lines, int index, Set<Integer> entryLines, boolean anchorLine) {
     if (index <= 0 || index >= lines.length) {
       return false;
     }
-    if (entryLines.contains(index + 1)) {
+    if (!anchorLine && entryLines.contains(index + 1)) {
       return false;
     }
     if (index == lines.length - 1 && lines[index].isEmpty()) {
