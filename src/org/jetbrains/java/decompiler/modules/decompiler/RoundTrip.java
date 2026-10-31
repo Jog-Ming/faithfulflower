@@ -10783,9 +10783,7 @@ public final class RoundTrip {
     }
     StructLocalVariableTableAttribute table =
       method.getAttribute(StructGeneralAttribute.ATTRIBUTE_LOCAL_VARIABLE_TABLE);
-    java.util.Map<Integer, Integer> ends = INSTRUCTION_ENDS.get(method);
     int end = lastEnd(arm);
-    Integer exitEnd = ends == null ? null : ends.get(exit);
     if (table == null || end < 0) {
       return false;
     }
@@ -10801,8 +10799,9 @@ public final class RoundTrip {
       if (row.getStart() > limit) {
         continue;
       }
-      if (row.getEnd() == end || row.getEnd() == exit
-          || (exitEnd != null && row.getEnd() == exitEnd)) {
+      // The track closes where the arm's own scope does: the exit jump's start, or the end of
+      // the arm's last instruction when the writer recorded the scope that way.
+      if (row.getEnd() == end || row.getEnd() == exit) {
         return true;
       }
     }
