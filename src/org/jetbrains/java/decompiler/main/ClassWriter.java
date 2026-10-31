@@ -436,9 +436,19 @@ public class ClassWriter implements StatementWriter {
               } else if (firstStat instanceof BasicBlockStatement && firstStat.getExprents() != null && firstStat.getExprents().isEmpty()) {
                 // An empty body is still a body: when the target's method starts on a later line
                 // than the lambda was created on, the braces were written on that later line.
+                // The empty body's only instruction is its return, and the target's single table
+                // entry is the closing brace's line. Without a mapping the aligner cannot see the
+                // braces at all: it can neither pad up to their target line nor keep the joins
+                // from folding them into another line.
+                java.util.BitSet emptyExit = root.getDummyExit() == null ? null : root.getDummyExit().bytecode;
+                int emptyOffset = emptyExit == null || emptyExit.nextSetBit(0) < 0 ? 0 : emptyExit.nextSetBit(0);
+                String emptyKey = InterpreterUtil.makeUniqueKey(methodWrapper.methodStruct.getName(), methodWrapper.methodStruct.getDescriptor());
                 if (creationLine >= 0 && RoundTrip.methodLine(methodWrapper.methodStruct) > creationLine) {
-                  buffer.appendLineSeparator().append("{}");
+                  buffer.appendLineSeparator();
+                  buffer.addBytecodeMappingAt(buffer.length(), emptyOffset, node.classStruct.qualifiedName, emptyKey);
+                  buffer.append("{}");
                 } else {
+                  buffer.addBytecodeMappingAt(buffer.length(), emptyOffset, node.classStruct.qualifiedName, emptyKey);
                   buffer.append(" {}");
                 }
                 simpleLambda = true;
