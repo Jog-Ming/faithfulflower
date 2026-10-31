@@ -2990,8 +2990,13 @@ public final class RoundTrip {
       end = sourceLineEnd(before);
     }
     // Only a line the operand's own text begins at proves the source broke before it: a later
-    // entry inside the operand may belong to a sub-expression that starts its own line.
-    int start = operandStartLine(after);
+    // entry inside the operand may belong to a sub-expression that starts its own line. The first
+    // call on the operand's leftmost chain anchors the line its text begins on; without one, fall
+    // back to an entry exactly at the operand's first instruction.
+    int start = operandOwnLine(after);
+    if (start < 0) {
+      start = operandStartLine(after);
+    }
     return start >= 0 && end >= 0 && start > end;
   }
 
@@ -3210,21 +3215,28 @@ public final class RoundTrip {
   }
 
   /**
-   * The call whose text starts an operand that the printer has just moved to a line of its own.
-   * The operand's own break already puts that call on the new line, so the receiver must not
-   * also break at the dot: the call's own line is the operand's line, not one past the receiver.
+   * The calls whose text starts an operand that the printer has just moved to a line of its
+   * own: the receiver spine of the operand's first expression, every link of which the table
+   * puts on the operand's line. The operand's own break already places them there, so none may
+   * also break at its dot and push the invoke one line past where the table records it.
    */
-  private static final ThreadLocal<Exprent> LEADING_OPERAND = new ThreadLocal<>();
+  private static final ThreadLocal<java.util.Set<Exprent>> LEADING_OPERAND = new ThreadLocal<>();
 
   /** Opens the print of an operand that begins a line, returning the previous scope. */
-  public static Exprent enterLeadingOperand(Exprent operand) {
-    Exprent prior = LEADING_OPERAND.get();
-    LEADING_OPERAND.set(leadingCall(operand));
+  public static java.util.Set<Exprent> enterLeadingOperand(Exprent operand) {
+    java.util.Set<Exprent> prior = LEADING_OPERAND.get();
+    int line = operandOwnLine(operand);
+    java.util.Set<Exprent> leading =
+      java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+    if (line >= 0) {
+      collectLeadingCalls(operand, line, leading);
+    }
+    LEADING_OPERAND.set(leading);
     return prior;
   }
 
   /** Closes the scope {@link #enterLeadingOperand} opened. */
-  public static void exitLeadingOperand(Exprent prior) {
+  public static void exitLeadingOperand(java.util.Set<Exprent> prior) {
     if (prior == null) {
       LEADING_OPERAND.remove();
     } else {
@@ -3232,20 +3244,33 @@ public final class RoundTrip {
     }
   }
 
-  /** Whether this call begins an operand the printer placed on a line of its own. */
+  /** Whether this call sits on the leading spine of an operand the printer placed on its own line. */
   public static boolean isLeadingOperand(Exprent exprent) {
-    return exprent != null && LEADING_OPERAND.get() == exprent;
+    java.util.Set<Exprent> leading = LEADING_OPERAND.get();
+    return exprent != null && leading != null && leading.contains(exprent);
   }
 
-  /** The call on the leftmost chain of the operand's text, or null. */
-  private static Exprent leadingCall(Exprent exprent) {
-    if (exprent instanceof InvocationExprent) {
-      return exprent;
+  /**
+   * Collects the calls whose text begins the operand and whose own line is the operand's line:
+   * the first operand of each compound, and the receiver chain of each call. A link the table
+   * puts on a later line broke inside the operand and keeps its own break.
+   */
+  private static void collectLeadingCalls(Exprent exprent, int line, java.util.Set<Exprent> out) {
+    if (exprent instanceof InvocationExprent call) {
+      int first = call.bytecode == null || call.bytecode.isEmpty() ? -1 : call.bytecode.nextSetBit(0);
+      if (first >= 0 && lineAtOffset(first) == line) {
+        out.add(call);
+      }
+      collectLeadingCalls(call.getInstance(), line, out);
+      return;
+    }
+    if (exprent instanceof FieldExprent field) {
+      collectLeadingCalls(field.getInstance(), line, out);
+      return;
     }
     if (exprent instanceof FunctionExprent function && !function.getLstOperands().isEmpty()) {
-      return leadingCall(function.getLstOperands().get(0));
+      collectLeadingCalls(function.getLstOperands().get(0), line, out);
     }
-    return null;
   }
 
   /** Whether the original source started the second expression on a later line than the first ended. */

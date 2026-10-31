@@ -733,7 +733,7 @@ public class FunctionExprent extends Exprent {
         buf.appendPossibleNewline(" ").append(funcType.operator).append(" ");
       }
       if (isBoolean && breakHere) {
-        Exprent prior = RoundTrip.enterLeadingOperand(right);
+        java.util.Set<Exprent> prior = RoundTrip.enterLeadingOperand(right);
         try {
           buf.append(wrapOperandString(right, true, indent, true));
         } finally {
