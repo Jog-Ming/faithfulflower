@@ -436,6 +436,28 @@ public final class InitializerProcessor {
     return stat.type == Statement.StatementType.BASIC_BLOCK && stat.getExprents() != null ? stat : null;
   }
 
+  /**
+   * The exprent list that opens with this constructor's delegation call, or null. The leading
+   * stores javac emits before the call and any try block between the two keep the call out of
+   * the first data statement, so the whole tree is searched.
+   */
+  private static List<Exprent> delegationExprents(Statement stat, MethodWrapper method,
+                                                   ClassWrapper wrapper) {
+    List<Exprent> exprents = stat.getExprents();
+    if (exprents != null && !exprents.isEmpty()
+        && exprents.get(0) instanceof InvocationExprent invocation
+        && Statements.isInvocationInitConstructor(invocation, method, wrapper, false)) {
+      return exprents;
+    }
+    for (Statement child : stat.getStats()) {
+      List<Exprent> found = delegationExprents(child, method, wrapper);
+      if (found != null) {
+        return found;
+      }
+    }
+    return null;
+  }
+
   private static void extractDynamicInitializers(ClassWrapper wrapper) {
     StructClass cl = wrapper.getClassStruct();
 
@@ -451,14 +473,23 @@ public final class InitializerProcessor {
           continue;
         }
 
-        Exprent exprent = firstData.getExprents().get(0);
+        // The delegation call need not open the first data statement: a store javac emits
+        // before it (a creation's own field) puts the call behind that statement, and a try
+        // block in between splits the exprents entirely. The initializer run is the block that
+        // starts with the delegation, wherever the tree put it.
+        List<Exprent> runList = isAnonymous ? firstData.getExprents()
+          : delegationExprents(method.root, method, wrapper);
+        if (runList == null || runList.isEmpty()) {
+          continue;
+        }
         if (!isAnonymous) { // FIXME: doesn't make sense
-          if (!(exprent instanceof InvocationExprent) ||
-              !Statements.isInvocationInitConstructor((InvocationExprent)exprent, method, wrapper, false)) {
+          Exprent exprent = runList.get(0);
+          if (!(exprent instanceof InvocationExprent invocation) ||
+              !Statements.isInvocationInitConstructor(invocation, method, wrapper, false)) {
             continue;
           }
         }
-        lstFirst.add(firstData.getExprents());
+        lstFirst.add(runList);
         lstMethodWrappers.add(method);
       }
     }
