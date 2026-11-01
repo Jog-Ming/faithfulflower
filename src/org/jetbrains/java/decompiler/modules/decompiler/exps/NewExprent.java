@@ -653,9 +653,20 @@ public class NewExprent extends Exprent {
         // whose creation the target puts on another line from being pulled to the call's. The
         // anchor is for the line aligner only: as a pool-order position it would move the
         // constant-name pass's nearest-item point inside the body.
+        // A lambda whose head stands outside any call -- the expression of a switch arm, a
+        // field initializer, a return value -- has enclosingCallLine() == -1, so the gate above
+        // can never hold and the head's line is only inherited from the dispatching statement.
+        // The invokedynamic still records the head token's own line; when the target's table
+        // starts a line exactly at it, the text start may anchor to it. An entry that does not
+        // start a line says nothing about where the head sits, so it is not used.
+        boolean headOnItsLine = RoundTrip.sourceLine(this) == InvocationExprent.enclosingCallLine();
+        if (!headOnItsLine && InvocationExprent.enclosingCallLine() < 0
+            && bytecode != null && !bytecode.isEmpty()) {
+          int creation = bytecode.nextSetBit(0);
+          headOnItsLine = RoundTrip.hasLineEntryAt(creation) && RoundTrip.lineStartsAt(creation);
+        }
         if (!isMethodReference() && !InvocationExprent.enclosingCallIsInit()
-            && bytecode != null && !bytecode.isEmpty()
-            && RoundTrip.sourceLine(this) == InvocationExprent.enclosingCallLine()) {
+            && bytecode != null && !bytecode.isEmpty() && headOnItsLine) {
           buf.addAlignOnlyBytecodeMapping(bytecode);
         }
         new ClassWriter().classLambdaToJava(child, buf, methodObject, indent,
