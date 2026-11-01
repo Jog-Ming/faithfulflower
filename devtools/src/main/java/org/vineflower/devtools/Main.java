@@ -27,8 +27,6 @@ import java.util.concurrent.Future;
  *   score     &lt;version&gt; [&lt;version&gt;...] [--no-cache] [--only Class] [--threads N] [--json] [--since Tree]
  *   diff      &lt;version&gt; &lt;Class&gt; [&lt;Class&gt;...]
  *   compile   &lt;version&gt; &lt;Class&gt;
- *   corpus    &lt;version&gt; --ground-truth &lt;dir&gt;
- *   dataset   &lt;version&gt;
  *   clean     [--trees] [--compile] [--downloads] [--all]
  *   reports   [--version V] [--limit N]
  *   cache
@@ -170,35 +168,6 @@ public final class Main {
         if (!ok) {
           System.exit(1);
         }
-      }
-      case "dataset" -> {
-        String version = positional(rest);
-        String only = stringFlag(rest, "--only", null);
-        int threads = intFlag(rest, "--threads", threadsDefault());
-        Path tree = decompiler.tree(version, threads, false, only, List.of());
-        List<Path> classpath = minecraft.classpath(version, false);
-        int release = Verifier.releaseOf(minecraft.clientJar(version, false));
-        Path out = workspace.dev.resolve("datasets").resolve(version + "-methods.jsonl");
-        Dataset.Result result = Dataset.write(tree, minecraft.extractedClasses(version, false),
-          classpath, release, only, threads, out);
-        System.out.printf(java.util.Locale.ROOT,
-          "methods %d from %d files in %.1fs -> %s%n", result.methods(), result.files(),
-          result.millis() / 1000.0, out);
-      }
-      case "corpus" -> {
-        String version = positional(rest);
-        String groundTruth = stringFlag(rest, "--ground-truth", null);
-        if (groundTruth == null) {
-          throw new IllegalArgumentException("corpus needs --ground-truth <minecraft source tree>");
-        }
-        String only = stringFlag(rest, "--only", null);
-        int threads = intFlag(rest, "--threads", threadsDefault());
-        Path tree = decompiler.tree(version, threads, false, only, List.of());
-        List<Verifier.FileResult> results =
-          new Verifier(workspace, minecraft).score(version, tree, only, threads, false);
-        Path manifest = Corpus.write(workspace.dev.resolve("corpus"), version, tree,
-          Path.of(groundTruth), results);
-        System.out.println(manifest);
       }
       case "reports" -> reports(workspace, rest);
       case "clean" -> clean(workspace, rest);
@@ -587,7 +556,7 @@ public final class Main {
 
   private static boolean needsTargetJdk(String command) {
     return switch (command) {
-      case "score", "dataset", "corpus", "compile", "diff" -> true;
+      case "score", "compile", "diff" -> true;
       default -> false;
     };
   }
@@ -884,8 +853,6 @@ public final class Main {
                                              --tree verifies a scratch copy of a tree
         compile   <version> <Class>            compile that one class with the verifier's javac
                                              settings and print its errors
-        corpus    <version> --ground-truth D  write the class-to-ground-truth corpus
-        dataset   <version>                   export per-instruction line alignment for the model
         clean     [--trees] [--compile] [--downloads] [--all]
         reports   [--version V] [--limit N]   list past scores
         cache                                 show cache usage (file counts and sizes)

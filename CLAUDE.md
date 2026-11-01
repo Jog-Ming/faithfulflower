@@ -17,10 +17,9 @@ allowed to change as the work does.
 - **The decompile path never compiles.** Neither the `javac` binary nor the `javax.tools.JavaCompiler`
   API may be called while decompiling. A decompile is one Vineflower run plus deterministic passes
   that decide from the class file alone; compiling belongs to the verifier, and a repair that needs a
-  compile to choose between candidates is a search loop, not a decompiler. Offline training and data
-  export may compile — that is not the decompile path.
-- **devtools is the experiment pipeline only.** It downloads, decompiles, scores, and exports the
-  corpus and dataset. No decompilation logic lives there — no source rewriting, no line alignment, no
+  compile to choose between candidates is a search loop, not a decompiler.
+- **devtools is the experiment pipeline only.** It downloads, decompiles, and scores. No
+  decompilation logic lives there — no source rewriting, no line alignment, no
   cast or name selection; those belong in the fork. If a pass would change the generated source, it
   is decompiler code and moves into `src/org/jetbrains/java/decompiler`.
 - **The verifier is the only judge.** A repair counts when the verifier says the bytes match; no other
@@ -37,8 +36,8 @@ allowed to change as the work does.
   the generic shape and can alter inference elsewhere, so producing one is a bug even where it
   compiles and even if the tree score rises.
 - **The compile gate is deterministic.** A file that fails to compile is repaired only by facts
-  recorded in the class file or by static language rules — never by a model, and never by compiling
-  candidates and keeping one. A repair that would need either is reported as blocked instead.
+  recorded in the class file or by static language rules, and never by compiling candidates and
+  keeping one. A repair that would need a search loop is reported as blocked instead.
 - **Never `sleep` to wait.** A long command is launched in the background and its completion
   notification is the wait; a short readiness check polls with a bounded number of attempts and a
   timeout. Never a blind `sleep N` before a check.
@@ -136,8 +135,6 @@ devtools/cli diff      <version> <Class> [<Class>...] [--full] [--dump] [--dump-
                                              rows, --dump-bytes writes the compiled classes under
                                              .dev/tmp/compiled
 devtools/cli compile   <version> <Class>             compile that one class like the verifier does
-devtools/cli corpus    <version> --ground-truth <dir> write the class-to-ground-truth corpus
-devtools/cli dataset   <version>                      export per-instruction line alignment for the model
 devtools/cli reports   [--version V] [--limit N]      list past scores
 devtools/cli clean     [--trees] [--compile] [--downloads] [--all]
 devtools/cli cache     [--measure]                    show cache usage; --measure sizes old trees once
