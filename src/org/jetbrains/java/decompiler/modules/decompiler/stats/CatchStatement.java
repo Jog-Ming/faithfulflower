@@ -216,6 +216,16 @@ public class CatchStatement extends Statement {
     finally {
       RoundTrip.popTryBody(outerTry);
     }
+    if (!resources.isEmpty() && resourceHandlerOffset >= 0) {
+      // javac gives a try-with-resources' synthetic close the closing brace's line, and the close
+      // is not part of any statement: without this mapping the brace has no line of its own and
+      // the aligner pays the gap after it instead of before it. The handler's store is read from
+      // the offset recorded before the passes flattened the handler away.
+      BitSet braceCloses = RoundTrip.closeCallsOnBraceLine(resourceHandlerOffset);
+      if (braceCloses != null) {
+        buf.addBytecodeMapping(braceCloses);
+      }
+    }
     buf.appendIndent(indent).append("}");
 
     for (int i = 1; i < stats.size(); i++) {

@@ -3000,6 +3000,32 @@ public final class RoundTrip {
   }
 
   /**
+   * The try-with-resources synthetic close() calls the target records on the closing brace's line:
+   * the greatest line the table gives an instruction before the handler, matched against each close
+   * before it. A close is not part of any statement, so the printer has to map the brace it stands
+   * for itself. Null when no close sits on that line.
+   */
+  public static BitSet closeCallsOnBraceLine(int firstHandlerOffset) {
+    StructMethod method = currentMethod();
+    BitSet closes = method == null ? null : CLOSE_CALLS.get(method);
+    if (closes == null || firstHandlerOffset < 0) {
+      return null;
+    }
+    int braceLine = highestLineBetween(0, firstHandlerOffset);
+    if (braceLine < 0) {
+      return null;
+    }
+    BitSet onLine = new BitSet();
+    for (int close = closes.nextSetBit(0); close >= 0 && close < firstHandlerOffset;
+         close = closes.nextSetBit(close + 1)) {
+      if (lineAtOffset(close) == braceLine) {
+        onLine.set(close);
+      }
+    }
+    return onLine.isEmpty() ? null : onLine;
+  }
+
+  /**
    * Whether a boolean operator's right operand starts on a line of its own. Both operands' own
    * bitsets can cover only a short-circuit branch, laid on the line the whole expression ends
    * on, so the line the operand's text begins and ends on is read from its parts, and the
