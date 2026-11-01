@@ -695,6 +695,21 @@ public class SwitchStatement extends Statement {
           && countBreaksTo(stat, this) == 1) {
         deferredBreak = breakJump;
       }
+      // A braced arm whose own declaration row ends exactly at its tail jump: the block closed
+      // before the break, and the jump lands on the enclosing loop's own latch (a written
+      // `break;` and `continue;` compile alike there). The tree kept no explicit break edge, so
+      // the arm's jump reads as the loop's back edge; the table's row is the record that the
+      // source wrote `} break;`, and the break belongs after the brace.
+      if (deferredBreak < 0 && braced.contains(stat) && !stat.isLabeled() && !breakOutside
+          && !yields && !orderUnknown && guard == null && !patternArm
+          && RoundTrip.selector("switchbreak")
+          && !RoundTrip.printsExplicitJump(stat) && countBreaksTo(stat, this) == 0
+          && RoundTrip.canCompleteNormally(stat) && continuesToEnclosingLoop(stat)) {
+        int tail = RoundTrip.tailJumpOffset(stat);
+        if (tail >= 0 && rowEndsAt(armRows.get(i), tail)) {
+          deferredBreak = tail;
+        }
+      }
       // An arm whose code ends exactly where the table's default target begins falls into the
       // empty default group printed after it: the source wrote one `break;`, in that group, and
       // the arm reaches it by falling through. Printing the arm's break too would add a jump.
@@ -793,8 +808,8 @@ public class SwitchStatement extends Statement {
       // compiles to the same jump) stands after the arm.
       int loopJoinJump = -1;
       boolean loopJoin = false;
-      if (breakJump < 0 && !breakPrinted && !yields && guard == null && !patternArm
-          && RoundTrip.selector("switchjump")
+      if (breakJump < 0 && !breakPrinted && deferredBreak < 0 && !yields && guard == null
+          && !patternArm && RoundTrip.selector("switchjump")
           && RoundTrip.canCompleteNormally(stat) && !armLeaves
           && continuesToEnclosingLoop(stat)) {
         if (switchEnd >= 0 && RoundTrip.loopBackEdge(this, switchEnd)) {
