@@ -14,6 +14,7 @@ import org.jetbrains.java.decompiler.struct.*;
 import org.jetbrains.java.decompiler.struct.attr.StructAnnotationAttribute;
 import org.jetbrains.java.decompiler.struct.attr.StructAnnotationParameterAttribute;
 import org.jetbrains.java.decompiler.struct.attr.StructGeneralAttribute;
+import org.jetbrains.java.decompiler.struct.attr.StructLineNumberTableAttribute;
 import org.jetbrains.java.decompiler.struct.attr.StructMethodParametersAttribute;
 import org.jetbrains.java.decompiler.struct.attr.StructTypeAnnotationAttribute;
 import org.jetbrains.java.decompiler.struct.consts.LinkConstant;
@@ -161,9 +162,63 @@ public final class RecordHelper {
 
   private static boolean isDefaultRecordConstructor(StructClass cl, StructMethod mt, RootStatement root) {
     return getCanonicalConstructor(cl) == mt &&
+        !isExplicitCanonicalConstructor(cl, mt) &&
         root.getStats().size() == 1 &&
         root.getStats().get(0) instanceof BasicBlockStatement block &&
         block.getExprents().size() == 0;
+  }
+
+  /**
+   * Whether the record's canonical constructor was written out in the source. The two forms are
+   * not distinguishable by their code: javac expands both to the same super call, component
+   * stores and return. Their line tables are: an implicit constructor carries one entry, on the
+   * record declaration's line, shared with every generated member; an explicit one carries one
+   * entry on the next line, which is where its own declaration sat.
+   */
+  private static boolean isExplicitCanonicalConstructor(StructClass cl, StructMethod mt) {
+    if (cl.getRecordComponents() == null || mt != getCanonicalConstructor(cl)) {
+      return false;
+    }
+    // A compact constructor writes no parameter list, so javac marks its parameters mandated;
+    // its body is printed without the header and must keep the compact path.
+    StructMethodParametersAttribute parameters =
+      mt.getAttribute(StructGeneralAttribute.ATTRIBUTE_METHOD_PARAMETERS);
+    if (parameters != null) {
+      for (StructMethodParametersAttribute.Entry entry : parameters.getEntries()) {
+        if ((entry.myAccessFlags & CodeConstants.ACC_MANDATED) != 0) {
+          return false;
+        }
+      }
+    }
+    StructLineNumberTableAttribute table =
+      mt.getAttribute(StructGeneralAttribute.ATTRIBUTE_LINE_NUMBER_TABLE);
+    int[] raw = table == null ? null : table.getRawData();
+    if (raw == null || raw.length != 2) {
+      return false;
+    }
+    int generated = generatedMemberLine(cl);
+    return generated >= 0 && raw[1] == generated + 1;
+  }
+
+  /** The line of the record's generated members, which is the record declaration's own line. */
+  private static int generatedMemberLine(StructClass cl) {
+    java.util.List<StructMethod> methods = cl.getMethods();
+    for (int i = methods.size() - 1; i >= 0; i--) {
+      StructMethod method = methods.get(i);
+      // javac emits the generated members after every written method; <clinit> is not one.
+      if (CodeConstants.CLINIT_NAME.equals(method.getName())
+        || method.hasModifier(CodeConstants.ACC_SYNTHETIC)
+        || method.hasModifier(CodeConstants.ACC_BRIDGE)) {
+        continue;
+      }
+      StructLineNumberTableAttribute table =
+        method.getAttribute(StructGeneralAttribute.ATTRIBUTE_LINE_NUMBER_TABLE);
+      int line = table == null ? -1 : table.findLineNumber(0);
+      if (line >= 0) {
+        return line;
+      }
+    }
+    return -1;
   }
 
   private static StructMethod getCanonicalConstructor(StructClass cl) {
@@ -368,8 +423,11 @@ public final class RecordHelper {
     // Prune all field assignments from the canonical constructor. A parameter the class file
     // marks ACC_FINAL can only come from an explicit canonical constructor written with `final`
     // (a compact constructor's parameters are recorded as mandated instead), so its assignments
-    // stay and the explicit form is printed.
-    if (!hasFinalParameter(mw) && isCompactCanonicalConstructor(mw, cl)) {
+    // stay and the explicit form is printed. The constructor's line table tells the same story
+    // for the ordinary explicit form, whose stores must stay printed for the source to carry the
+    // declaration's line.
+    if (!isExplicitCanonicalConstructor(cl, mw.methodStruct)
+        && !hasFinalParameter(mw) && isCompactCanonicalConstructor(mw, cl)) {
       mw.getOrBuildGraph().iterateExprents(exprent -> {
         if (exprent instanceof AssignmentExprent assignmentExprent && assignmentExprent.getLeft() instanceof FieldExprent field && field.getInstance() instanceof VarExprent variable && variable.getIndex() == 0) {
           return 2;
