@@ -702,6 +702,20 @@ public class IfStatement extends Statement {
       return buf;
     }
 
+    // `if (G1) continue; …; if (H) break;` merged into `!(G1) && … && H`: the merger read each
+    // written guard as the test for reaching the next statement, so the tree's edge is the
+    // break's. Every leading operand's branch is followed by the goto its `continue;` compiled
+    // to, and the target starts a source line of its own at that jump — a `&&` chain and a
+    // conditional expression both keep the expression's line there. Print the guards back as
+    // statements; the last operand keeps the break.
+    if (ifstat == null && elsestat == null && !isLabeled() && !isPatternMatched()
+        && condition instanceof IfExprent ifHead && ifedge != null
+        && ifedge.getType() == StatEdge.TYPE_BREAK && ifedge.explicit && !ifedge.labeled
+        && !RoundTrip.isClosureHidden(ifedge)
+        && printLeadingGuards(buf, ifHead, indent)) {
+      return buf;
+    }
+
     // `if (a) { if (b) { body } }` is folded into `if (a && b) { body }`: the same instructions,
     // but javac marks a nested if statement's start and never marks the start of a boolean
     // operand that only inherits the expression's line. When the target's table has an entry at
@@ -1573,6 +1587,49 @@ public class IfStatement extends Statement {
       buf.appendLineSeparator();
       buf.appendIndent(indent).append("}").appendLineSeparator();
     }
+    return true;
+  }
+
+  /**
+   * Prints a merged `if (G1) continue; …; if (H) break;` back as the run of guards the target
+   * compiled, each `continue;` pinned to the jump its test left behind and the last test keeping
+   * the break. False, printing nothing, when no leading operand proves a written continue.
+   */
+  private boolean printLeadingGuards(TextBuffer buf, IfExprent head, int indent) {
+    List<Exprent> operands = booleanOperands(head.getCondition());
+    int leading = RoundTrip.leadingContinueGuards(operands, this);
+    if (leading <= 0) {
+      return false;
+    }
+    for (int i = 0; i < leading; i++) {
+      Exprent operand = operands.get(i);
+      Exprent test = operand instanceof FunctionExprent not
+          && not.getFuncType() == FunctionType.BOOL_NOT && not.getLstOperands().size() == 1
+        ? not.getLstOperands().get(0)
+        : RoundTrip.negateCondition(operand);
+      IfExprent guard = (IfExprent) head.copy();
+      guard.setCondition(test);
+      buf.appendIndent(indent).append(guard.toJava(indent)).append(" {").appendLineSeparator();
+      TextBuffer continueLine = new TextBuffer();
+      continueLine.appendIndent(indent + 1).append("continue;").appendLineSeparator();
+      int site = RoundTrip.guardJumpAfter(operand);
+      if (site >= 0) {
+        continueLine.addStartBytecodeMapping(site);
+      }
+      buf.append(continueLine);
+      buf.appendIndent(indent).append("}").appendLineSeparator();
+    }
+    IfExprent tail = (IfExprent) head.copy();
+    tail.setCondition(andOf(operands, leading, operands.size()));
+    buf.appendIndent(indent).append(tail.toJava(indent)).append(" {").appendLineSeparator();
+    TextBuffer breakLine = new TextBuffer();
+    breakLine.appendIndent(indent + 1).append("break;").appendLineSeparator();
+    int site = RoundTrip.continueGoto(head);
+    if (site >= 0) {
+      breakLine.addStartBytecodeMapping(site);
+    }
+    buf.append(breakLine);
+    buf.appendIndent(indent).append("}").appendLineSeparator();
     return true;
   }
 

@@ -2104,6 +2104,12 @@ public final class RoundTrip {
         || finalTarget < 0 || skipTo != finalTarget) {
       return null;
     }
+    // A conditional expression's goto sits on the expression's own line: javac writes no new
+    // table row for it. A written `if (cmp) continue;` in front of the next test leaves the
+    // jump on the continue's line, a row of its own, and the layout then belongs to two guards.
+    if (hasLineEntryAt(branchEnd)) {
+      return null;
+    }
     java.util.List<Exprent> operands = new java.util.ArrayList<>(3);
     operands.add(cmp);
     operands.add(new ConstExprent(VarType.VARTYPE_BOOLEAN, 0, null));
@@ -7859,6 +7865,65 @@ public final class RoundTrip {
     java.util.Map<Integer, int[]> sites = method == null ? null : CONTINUE_SITES.get(method);
     int[] site = sites == null ? null : sites.get(start - 3);
     return site == null ? -1 : site[0];
+  }
+
+  /**
+   * The goto a written guard's {@code continue;} compiled to behind its test, or -1: the branch
+   * ending at the test's last byte is followed by the jump, and the target starts a source line
+   * of its own at that jump. A {@code &&} chain and a conditional expression both keep the
+   * expression's line on the short-circuit jump, so only a statement of its own carries a row.
+   */
+  public static int guardJumpAfter(Exprent test) {
+    StructMethod method = currentMethod();
+    if (method == null) {
+      return -1;
+    }
+    java.util.Map<Integer, Integer> ends = INSTRUCTION_ENDS.get(method);
+    java.util.Map<Integer, int[]> sites = CONTINUE_SITES.get(method);
+    java.util.Map<Integer, Integer> guards = CONTINUE_GUARDS.get(method);
+    int[] range = byteRange(test);
+    Integer branchEnd = range == null || ends == null ? null
+      : guards != null && guards.containsKey(range[1]) ? Integer.valueOf(range[1]) : ends.get(range[1]);
+    int[] site = branchEnd == null || sites == null ? null : sites.get(branchEnd);
+    return site != null && hasLineEntryAt(site[0]) ? site[0] : -1;
+  }
+
+  /**
+   * How many leading operands of a merged condition the target compiled as written
+   * {@code if (G) continue;} statements, or -1 when the shape is not a guard run. The merger
+   * folds {@code if (G1) continue; …; if (H) break;} into {@code !(G1) && … && H}; each written
+   * guard's branch is followed by the goto its continue compiled to, that jump starts a source
+   * line of its own, and the branch lands on the next test. The last operand is the break's own
+   * test and is never counted.
+   */
+  public static int leadingContinueGuards(java.util.List<Exprent> operands, Statement around) {
+    if (!selector("continueguard") || operands == null || operands.size() < 2) {
+      return -1;
+    }
+    StructMethod method = currentMethod();
+    java.util.Map<Integer, Integer> guards = method == null ? null : CONTINUE_GUARDS.get(method);
+    java.util.Map<Integer, int[]> sites = method == null ? null : CONTINUE_SITES.get(method);
+    java.util.Map<Integer, Integer> ends = method == null ? null : INSTRUCTION_ENDS.get(method);
+    if (guards == null || sites == null || ends == null) {
+      return -1;
+    }
+    int leading = 0;
+    for (int i = 0; i + 1 < operands.size(); i++) {
+      int[] range = byteRange(operands.get(i));
+      // The operand's bits may cover its branch (the merge folds the branch into the test) or
+      // stop at the comparison; accept the branch that ends inside the bits or right past them.
+      Integer branchEnd = range == null ? null
+        : guards.containsKey(range[1]) ? Integer.valueOf(range[1]) : ends.get(range[1]);
+      Integer target = branchEnd == null ? null : guards.get(branchEnd);
+      int[] site = branchEnd == null ? null : sites.get(branchEnd);
+      int next = firstOffsetOf(operands.get(i + 1));
+      if (target == null || site == null || !hasLineEntryAt(site[0])
+          || !targetContinues(target, around) || next < 0 || next != site[1]) {
+        break;
+      }
+      leading++;
+    }
+    return leading;
   }
 
   /**
