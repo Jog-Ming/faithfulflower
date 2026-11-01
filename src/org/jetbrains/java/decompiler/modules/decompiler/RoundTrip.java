@@ -2441,7 +2441,47 @@ public final class RoundTrip {
     if (method == null || exprent == null || exprent.bytecode == null || exprent.bytecode.isEmpty()) {
       return -1;
     }
-    return lineAt(method, exprent.bytecode.nextSetBit(0));
+    int offset = exprent.bytecode.nextSetBit(0);
+    return lambdaStartMarker(offset) ? -1 : lineAt(method, offset);
+  }
+
+  /**
+   * Whether a table entry at this offset is javac's expression-lambda start marker.
+   *
+   * <p>The synthetic body method of an expression lambda records its first instruction on the
+   * line the whole lambda expression ends on -- below every line the body's own text occupies --
+   * so that entry names where the expression stops, not where the instruction's text sits. The
+   * marker is visible as a first entry whose line the entries after it run back above.
+   */
+  public static boolean lambdaStartMarker(int offset) {
+    if (!selector("lambda-end-line")) {
+      return false;
+    }
+    StructMethod method = currentMethod();
+    if (method == null || offset < 0 || !method.hasModifier(CodeConstants.ACC_SYNTHETIC)) {
+      return false;
+    }
+    StructLineNumberTableAttribute table =
+      method.getAttribute(StructGeneralAttribute.ATTRIBUTE_LINE_NUMBER_TABLE);
+    if (table == null) {
+      return false;
+    }
+    int[] raw = table.getRawData();
+    int firstPc = Integer.MAX_VALUE;
+    int firstLine = -1;
+    for (int i = 0; i + 1 < raw.length; i += 2) {
+      if (raw[i] < firstPc) {
+        firstPc = raw[i];
+        firstLine = raw[i + 1];
+      }
+    }
+    int lowestOther = Integer.MAX_VALUE;
+    for (int i = 0; i + 1 < raw.length; i += 2) {
+      if (raw[i] != firstPc && raw[i + 1] < lowestOther) {
+        lowestOther = raw[i + 1];
+      }
+    }
+    return firstPc == offset && lowestOther != Integer.MAX_VALUE && firstLine > lowestOther;
   }
 
   /**
@@ -2470,7 +2510,8 @@ public final class RoundTrip {
     if (method == null || exprent == null || exprent.bytecode == null || exprent.bytecode.isEmpty()) {
       return -1;
     }
-    return lineAt(method, exprent.bytecode.previousSetBit(Integer.MAX_VALUE));
+    int offset = exprent.bytecode.previousSetBit(Integer.MAX_VALUE);
+    return lambdaStartMarker(offset) ? -1 : lineAt(method, offset);
   }
 
   /**
