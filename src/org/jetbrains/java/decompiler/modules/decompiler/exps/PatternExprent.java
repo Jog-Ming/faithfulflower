@@ -77,7 +77,15 @@ public class PatternExprent extends Exprent implements Pattern {
     buf.appendCastTypeName(varType);
     buf.append("(");
 
-    if (arm != null && caseEntry >= 0 && RoundTrip.recordPatternStartsLater(this, caseEntry)) {
+    // An instanceof's pattern has no case entry to name the line the test is written on; the test
+    // the enclosing FunctionExprent printed before this operand handed its first instruction over,
+    // and a component the table records below it proves the source broke after the `(` exactly as
+    // a switch arm's label does.
+    int entry = caseEntry;
+    if (entry < 0 && arm == null) {
+      entry = RoundTrip.takePatternTestEntry();
+    }
+    if (entry >= 0 && RoundTrip.recordPatternStartsLater(this, entry)) {
       buf.appendLineSeparator().appendIndent(indent + 2);
     }
 

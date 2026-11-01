@@ -3966,6 +3966,38 @@ public final class RoundTrip {
     }
   }
 
+  /**
+   * The first instruction of the instanceof test whose pattern is being printed, or -1. The
+   * pattern exprent carries no offsets of its own, so the test hands its start over for the
+   * print; a nested pattern consumes nothing because the outer pattern takes it first.
+   */
+  private static final ThreadLocal<Integer> PATTERN_TEST_ENTRY = new ThreadLocal<>();
+
+  public static Integer enterPatternTest(Exprent test) {
+    Integer prior = PATTERN_TEST_ENTRY.get();
+    int first = test == null || test.bytecode == null || test.bytecode.isEmpty()
+      ? -1 : test.bytecode.nextSetBit(0);
+    if (first >= 0) {
+      PATTERN_TEST_ENTRY.set(first);
+    }
+    return prior;
+  }
+
+  public static void exitPatternTest(Integer prior) {
+    if (prior == null) {
+      PATTERN_TEST_ENTRY.remove();
+    } else {
+      PATTERN_TEST_ENTRY.set(prior);
+    }
+  }
+
+  /** Takes the entry {@link #enterPatternTest} recorded, or -1; the value is consumed once. */
+  public static int takePatternTestEntry() {
+    Integer entry = PATTERN_TEST_ENTRY.get();
+    PATTERN_TEST_ENTRY.remove();
+    return entry == null ? -1 : entry;
+  }
+
   /** Whether this call sits on the leading spine of an operand the printer placed on its own line. */
   public static boolean isLeadingOperand(Exprent exprent) {
     java.util.Set<Exprent> leading = LEADING_OPERAND.get();

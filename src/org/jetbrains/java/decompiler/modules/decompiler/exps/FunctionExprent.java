@@ -861,7 +861,14 @@ public class FunctionExprent extends Exprent {
             var.setWritingPattern();
           }
 
-          buf.append(wrapOperandString(this.lstOperands.get(2), true, indent));
+          // The pattern carries no offsets of its own; the test's own first instruction is the
+          // line the source wrote the type on, which a component decoded below it can break.
+          Integer priorEntry = RoundTrip.enterPatternTest(this);
+          try {
+            buf.append(wrapOperandString(this.lstOperands.get(2), true, indent));
+          } finally {
+            RoundTrip.exitPatternTest(priorEntry);
+          }
         } else {
           buf.append(wrapOperandString(lstOperands.get(1), true, indent));
         }
