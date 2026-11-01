@@ -552,9 +552,18 @@ public class IfStatement extends Statement {
         guard.setCondition(source);
         buf.appendIndent(indent).append(guard.toJava(indent)).append(" {").appendLineSeparator();
         buf.appendIndent(indent + 1).append("break;").appendLineSeparator();
-        buf.appendIndent(indent).append("} else {").appendLineSeparator();
-        buf.append(ExprProcessor.jmpWrapper(ifstat, indent + 1, false));
-        buf.appendIndent(indent).append("}").appendLineSeparator();
+        if (RoundTrip.armWasFlat(ifstat)) {
+          // The arm's first local closed among the enclosing block's rows, so the source declared
+          // it there: the statements were written flat after the guard, not as an else. The guard
+          // always breaks, so control reaches them exactly where the else did.
+          buf.appendIndent(indent).append("}").appendLineSeparator();
+          buf.append(ExprProcessor.jmpWrapper(ifstat, indent, false));
+        }
+        else {
+          buf.appendIndent(indent).append("} else {").appendLineSeparator();
+          buf.append(ExprProcessor.jmpWrapper(ifstat, indent + 1, false));
+          buf.appendIndent(indent).append("}").appendLineSeparator();
+        }
         RoundTrip.markBreakPrinted(this);
         return buf;
       }
@@ -655,7 +664,7 @@ public class IfStatement extends Statement {
       if (guard) {
         buf.appendIndent(indent).append("}").appendLineSeparator();
         buf.append(ExprProcessor.jmpWrapper(ifstat, indent, false));
-      } else if (appendFlatElse(buf, indent, elsestat, ifstat, false)) {
+      } else if (appendFlatElse(buf, indent, elsestat, ifstat)) {
         // The table proves the source wrote the second arm flat after the first.
       } else if (!printElseIfArm(buf, indent, ifstat, elsestat)) {
         // The arm printed first is the source's then; the jump over the other arm runs at its
@@ -793,16 +802,13 @@ public class IfStatement extends Statement {
    * proves the source wrote the arm flat: the arm's first local closes with the enclosing block,
    * and every row that opened before the arm was written after it. A real else closes its own
    * block first and writes the arm's rows ahead of every enclosing row. The then arm has to leave
-   * on its own, or the source's flat form would run into the statements after the test; a continue
-   * the arm's print folded into its edge is written here, and a plain break is left as an else
-   * because the arm's print may owe it to an enclosing switch, where a written break is illegal.
-   * False, printing nothing, when the else stays.
-   *
-   * @param printJump whether the caller has not already printed the then arm's terminal jump
+   * on its own, or the source's flat form would run into the statements after the test; the arm's
+   * own print already carried its terminal jump, so this only closes the brace. A plain break is
+   * left as an else because the arm's print may owe it to an enclosing switch, where a written
+   * break is illegal. False, printing nothing, when the else stays.
    */
-  private boolean appendFlatElse(TextBuffer buf, int indent, Statement thenArm, Statement elseArm, boolean printJump) {
+  private boolean appendFlatElse(TextBuffer buf, int indent, Statement thenArm, Statement elseArm) {
     if (!RoundTrip.selector("elseflat") || RoundTrip.isArmOpen(this)
-        || elseArm instanceof IfStatement
         || !RoundTrip.armWasFlat(elseArm)) {
       return false;
     }
@@ -814,7 +820,12 @@ public class IfStatement extends Statement {
     if (!armExits && !continues) {
       return false;
     }
-    if (continues && printJump) {
+    // The arm's print carried its terminal jump when the target laid it on the arm's edge or the
+    // caller folded it in from the arm's deleted goto; the written continue is printed here only
+    // when neither did, as the loop-latch fold leaves it to this brace.
+    boolean jumpPrinted = RoundTrip.printsTerminalJump(thenArm)
+      || RoundTrip.armContinueSite(thenArm, elseArm) >= 0;
+    if (continues && !jumpPrinted) {
       buf.appendIndent(indent + 1).append("continue;").appendLineSeparator();
     }
     buf.appendIndent(indent).append("}").appendLineSeparator();
@@ -945,7 +956,7 @@ public class IfStatement extends Statement {
         buf.append(ExprProcessor.jmpWrapper(elsestat, indent, false));
         return;
       }
-      if (appendFlatElse(buf, indent, ifstat, elsestat, true)) {
+      if (appendFlatElse(buf, indent, ifstat, elsestat)) {
         return;
       }
       // The target's table can prove the else arm closed early: a local the arm declares has a
