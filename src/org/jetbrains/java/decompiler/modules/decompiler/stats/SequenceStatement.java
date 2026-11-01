@@ -1762,7 +1762,20 @@ public class SequenceStatement extends Statement {
         buf.appendIndent(indent).append("for (").append(declaration.toJava(indent))
           .append(", ").append(initVar.getName()).append(" = ").append(init.getRight().toJava(indent))
           .append("; ").append(loop.getConditionExprent().toJava(indent))
-          .append("; ").append(loop.getIncExprent().toJava(indent)).append(") {").appendLineSeparator();
+          .append("; ");
+        // A header may carry several comma-separated updates; only the first is not the update.
+        boolean firstUpdate = true;
+        for (Exprent update : loop.getIncExprentList()) {
+          if (update == null) {
+            continue;
+          }
+          if (!firstUpdate) {
+            buf.append(", ");
+          }
+          buf.append(update.toJava(indent));
+          firstUpdate = false;
+        }
+        buf.append(") {").appendLineSeparator();
         buf.append(ExprProcessor.jmpWrapper(loop.getFirst(), indent + 1, false));
         buf.appendIndent(indent).append("}").appendLineSeparator();
         notempty = true;

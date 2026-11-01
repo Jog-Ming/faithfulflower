@@ -2488,30 +2488,54 @@ public final class RoundTrip {
       return -1;
     }
     java.util.Map<Integer, Integer> guards = CONTINUE_GUARDS.get(method);
-    if (guards == null || guards.isEmpty()) {
-      return -1;
-    }
-    BitSet range = statementOffsets(loop);
-    if (range == null) {
-      return -1;
-    }
-    int start = range.nextSetBit(0);
-    int end = range.length();
-    if (start < 0) {
-      return -1;
-    }
-    java.util.Set<Integer> targets = new java.util.HashSet<>(guards.values());
-    for (int k = 0; k < exprents.size(); k++) {
-      Exprent exprent = exprents.get(k);
-      if (exprent.bytecode == null || exprent.bytecode.isEmpty()) {
-        continue;
-      }
-      int offset = exprent.bytecode.nextSetBit(0);
-      if (offset >= start && offset < end && targets.contains(offset)) {
-        return k;
+    if (guards != null && !guards.isEmpty()) {
+      BitSet range = statementOffsets(loop);
+      if (range != null) {
+        int start = range.nextSetBit(0);
+        int end = range.length();
+        if (start >= 0) {
+          java.util.Set<Integer> targets = new java.util.HashSet<>(guards.values());
+          for (int k = 0; k < exprents.size(); k++) {
+            Exprent exprent = exprents.get(k);
+            if (exprent.bytecode == null || exprent.bytecode.isEmpty()) {
+              continue;
+            }
+            int offset = exprent.bytecode.nextSetBit(0);
+            if (offset >= start && offset < end && targets.contains(offset)) {
+              return k;
+            }
+          }
+        }
       }
     }
-    return -1;
+    // A for header's comma-separated updates are all written on the head's own line, while a body
+    // statement keeps its own. When the last exprent sits on the head's line, a preceding exprent
+    // that carries that same line is an earlier update of the same header and moves with it; the
+    // recorded continue only proves this when the loop has one, and this line is the rest.
+    if (!(loop instanceof DoStatement doStat)) {
+      return -1;
+    }
+    int headLine = sourceLineDeep(doStat.getConditionExprent());
+    int lastLine = sourceLineDeep(exprents.get(exprents.size() - 1));
+    if (headLine < 0 || lastLine != headLine) {
+      return -1;
+    }
+    int runStart = exprents.size() - 1;
+    while (runStart > 0 && isForUpdate(exprents.get(runStart - 1))
+        && sourceLineDeep(exprents.get(runStart - 1)) == headLine) {
+      runStart--;
+    }
+    return runStart < exprents.size() - 1 ? runStart : -1;
+  }
+
+  /** Whether the expression can be one element of a for header's comma-separated update. */
+  private static boolean isForUpdate(Exprent exprent) {
+    if (exprent instanceof AssignmentExprent assign && assign.getLeft() instanceof VarExprent var
+        && var.isDefinition()) {
+      return false; // a declaration cannot sit in a for update
+    }
+    return exprent instanceof AssignmentExprent || exprent instanceof FunctionExprent
+      || exprent instanceof InvocationExprent;
   }
 
   /**
