@@ -2013,6 +2013,23 @@ public class InvocationExprent extends Exprent {
     if (creationHead) {
       return -1;
     }
+    // A compound argument has no invoke of its own: its text starts at the first call the
+    // printer writes inside it. javac anchors an invocation's line at its invoke, while the
+    // operand loads before the first call only inherit the line the argument's text starts on.
+    // A call on that inherited line is text that began there; a call below it began the
+    // argument on its own line.
+    if (argument instanceof FunctionExprent compound
+      && compound.getFuncType() != FunctionExprent.FunctionType.CAST
+      && compound.getLstOperands().size() == 2) {
+      InvocationExprent firstCall = firstPrintedCall(compound);
+      if (firstCall != null) {
+        int callLine = headLine ? RoundTrip.sourceLineEnd(firstCall) : RoundTrip.sourceLine(firstCall);
+        int inherited = RoundTrip.textStartLine(argument);
+        if (callLine >= 0 && inherited >= 0) {
+          return Math.max(callLine, inherited);
+        }
+      }
+    }
     // A plain load's line is inherited from whatever expression precedes it unless the target
     // starts a line somewhere inside the argument's own text. Only text the source put on a line
     // carries such an entry; a bare load under an inherited line was written on the line above --
@@ -2022,6 +2039,34 @@ public class InvocationExprent extends Exprent {
       return -1;
     }
     return RoundTrip.sourceLine(current);
+  }
+
+  /**
+   * The first invocation the printer writes inside this expression, or null when it has none. A
+   * chain and a field access print their receiver before themselves, and a compound prints its
+   * operands left to right; constants and bare loads carry no token the table anchors, so the
+   * search passes through them to the first call after them.
+   */
+  private static InvocationExprent firstPrintedCall(Exprent exprent) {
+    if (exprent == null) {
+      return null;
+    }
+    if (exprent instanceof InvocationExprent invocation) {
+      InvocationExprent receiver = firstPrintedCall(invocation.getInstance());
+      return receiver != null ? receiver : invocation;
+    }
+    if (exprent instanceof FieldExprent field) {
+      return firstPrintedCall(field.getInstance());
+    }
+    if (exprent instanceof FunctionExprent function) {
+      for (Exprent operand : function.getLstOperands()) {
+        InvocationExprent found = firstPrintedCall(operand);
+        if (found != null) {
+          return found;
+        }
+      }
+    }
+    return null;
   }
 
   /**
