@@ -5,6 +5,7 @@ import org.jetbrains.java.decompiler.modules.decompiler.exps.Exprent;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.VarExprent;
 import org.jetbrains.java.decompiler.modules.decompiler.stats.*;
 import org.jetbrains.java.decompiler.struct.StructClass;
+import org.jetbrains.java.decompiler.struct.StructMethod;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -110,6 +111,14 @@ public class TryHelper {
 
         // Only merge try statements without catches, otherwise we might produce invalid code
         if (inner.getStats().size() == 1) {
+          // A resource header written on its own line records its synthetic close handler's store
+          // on that line. When both tries already carry resources and those lines differ, the
+          // source wrote two nested `try (...)` statements, and one merged header would leave the
+          // inner try's header line with no instruction the table records.
+          if (!stat.getResources().isEmpty()
+              && handlerHeaderStartsOtherLine(stat, (CatchStatement) inner)) {
+            return false;
+          }
           // The printed header belongs to the outer statement once the inner one is gone. A
           // statement that had no resources of its own is the shell around the nested trial, and
           // the inner close handler is the store javac attributed to the header's line; one that
@@ -150,6 +159,24 @@ public class TryHelper {
     }
 
     return false;
+  }
+
+  /**
+   * Whether the two tries' resource headers were written on different source lines. javac
+   * attributes each try-with-resources' synthetic close handler's store to the `try` line, so a
+   * merged header gives both handlers the same line while two written `try` statements give one
+   * each. An offset of either handler that the table cannot place proves nothing.
+   */
+  private static boolean handlerHeaderStartsOtherLine(CatchStatement outer, CatchStatement inner) {
+    int outerHandler = outer.getResourceHandlerOffset();
+    int innerHandler = inner.getResourceHandlerOffset();
+    StructMethod method = RoundTrip.currentMethod();
+    if (outerHandler < 0 || innerHandler < 0 || method == null) {
+      return false;
+    }
+    int outerLine = RoundTrip.lineAt(method, outerHandler);
+    int innerLine = RoundTrip.lineAt(method, innerHandler);
+    return outerLine >= 0 && innerLine >= 0 && outerLine != innerLine;
   }
 
   /**
