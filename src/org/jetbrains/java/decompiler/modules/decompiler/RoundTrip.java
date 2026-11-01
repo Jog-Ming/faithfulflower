@@ -3049,9 +3049,18 @@ public final class RoundTrip {
     if (!enabled() || after == null) {
       return false;
     }
-    int end = lastLine(before);
-    if (end < 0) {
-      end = sourceLineEnd(before);
+    // The operand's own invoke or branch instruction carries a line too, and javac merges its
+    // entry into the surrounding text when no argument recorded a different line; lastLine sees
+    // only the operand's parts and misses it, so the line at the operand's last instruction is
+    // the true end of its text.
+    int end = Math.max(lastLine(before), sourceLineEnd(before));
+    // The argument whose text is being printed starts on a line of its own; every operand inside
+    // it lies at or below that line, so a bare variable whose load only inherits an earlier entry
+    // did not end above the argument's own start. Without the floor the inherited line of a `new`
+    // or of the statement would look like a break the source wrote before the operand.
+    int argumentLine = InvocationExprent.argumentTextStartLine();
+    if (argumentLine > end) {
+      end = argumentLine;
     }
     // Only a line the operand's own text begins at proves the source broke before it: a later
     // entry inside the operand may belong to a sub-expression that starts its own line. The first
