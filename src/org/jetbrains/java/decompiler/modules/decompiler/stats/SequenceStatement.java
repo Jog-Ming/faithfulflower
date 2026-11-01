@@ -986,14 +986,24 @@ public class SequenceStatement extends Statement {
         head.setCondition(RoundTrip.negateCondition(head.getCondition()));
         buf.append(ExprProcessor.listToJava(ifStatement.varDefinitions, indent));
         buf.append(ifStatement.getFirst().toJava(indent));
-        buf.appendIndent(indent).append(head.toJava(indent)).append(" {").appendLineSeparator();
-        buf.append(ExprProcessor.jmpWrapper(
-          new SequenceStatement(stats.subList(i + 1, stats.size())), indent + 1, true));
+        Statement splitArm = new SequenceStatement(stats.subList(i + 1, stats.size()));
+        // The target's table may start a later operand of the test on a line of its own: the
+        // source wrote the run of ifs nested around the arm, and the folded return this block
+        // ends with prints inside the innermost brace.
+        List<Integer> groups = IfStatement.nestedIfGroups(head, splitArm);
+        int open = groups.isEmpty() ? 0 : IfStatement.printSplitHeaders(buf, head, groups, indent);
+        if (groups.isEmpty()) {
+          buf.appendIndent(indent).append(head.toJava(indent)).append(" {").appendLineSeparator();
+          open = 1;
+        }
+        buf.append(ExprProcessor.jmpWrapper(splitArm, indent + open, true));
         // The block's own return prints as a statement when the printer kept it.
         if (!endsWithExit(stats.subList(i + 1, stats.size()))) {
-          buf.appendIndent(indent + 1).append("return;").appendLineSeparator();
+          buf.appendIndent(indent + open).append("return;").appendLineSeparator();
         }
-        buf.appendIndent(indent).append("}").appendLineSeparator();
+        for (int level = open - 1; level >= 0; level--) {
+          buf.appendIndent(indent + level).append("}").appendLineSeparator();
+        }
         buf.append(ExprProcessor.jmpWrapper(ifStatement.getIfstat(), indent, false));
         notempty = true;
         break;
