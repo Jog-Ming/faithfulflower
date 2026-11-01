@@ -55,7 +55,7 @@ public class PatternExprent extends Exprent implements Pattern {
 
   @Override
   public TextBuffer toJava(int indent) {
-    return toJava(indent, null);
+    return toJava(indent, null, -1);
   }
 
   /**
@@ -64,9 +64,22 @@ public class PatternExprent extends Exprent implements Pattern {
    * the source left unnamed and the arm's code never reads it.
    */
   public TextBuffer toJava(int indent, Statement arm) {
+    return toJava(indent, arm, -1);
+  }
+
+  /**
+   * Prints the deconstruction of a case label. {@code caseEntry} is the switch target the label
+   * enters; when the target's table puts the component patterns on a later line than the record
+   * pattern, the source broke after the {@code (} and the components print indented below it.
+   */
+  public TextBuffer toJava(int indent, Statement arm, int caseEntry) {
     TextBuffer buf = new TextBuffer();
     buf.appendCastTypeName(varType);
     buf.append("(");
+
+    if (arm != null && caseEntry >= 0 && RoundTrip.recordPatternStartsLater(this, caseEntry)) {
+      buf.appendLineSeparator().appendIndent(indent + 2);
+    }
 
     for (int i = 0; i < exprents.size(); i++) {
       appendComponent(buf, indent, exprents.get(i), arm);

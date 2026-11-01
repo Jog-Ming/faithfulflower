@@ -128,7 +128,7 @@ public class SwitchExprent extends Exprent {
           } else if (pattern instanceof PatternExprent deconstruction) {
             // A record pattern's components take the same evidence one level down: an unbound
             // component has no table row and the arm never reads it, so it printed `_` too.
-            buf.append(deconstruction.toJava(indent, stat));
+            buf.append(deconstruction.toJava(indent, stat, this.backing.entryOffset(i)));
           } else {
             buf.append(value.getAllExprents().get(2).toJava(indent));
           }

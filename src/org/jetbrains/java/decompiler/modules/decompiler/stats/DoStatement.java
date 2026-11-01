@@ -375,15 +375,17 @@ public class DoStatement extends Statement {
    * Prints the loop's closing brace, anchoring the jump the loop's back edge compiled to when the
    * writer gave that jump an entry: the line of the closing brace of the outermost block the
    * body ends with that declares a local. The body's own brace when it declares one, otherwise
-   * the brace its print ends with. A jump the body printed, or one the writer gave no entry,
-   * owns no line here. Without the anchor the alignment cannot tell which side of a brace a
-   * blank line it adds belongs on.
+   * the brace its print ends with. A jump the body printed and mapped owns its own line; a body
+   * that prints the jump as text but leaves it unmapped — a switch arm whose break the loop's
+   * latch elided, so the break maps nothing — leaves the brace to claim it. A jump the writer
+   * gave no entry owns no line here. Without the anchor the alignment cannot tell which side of
+   * a brace a blank line it adds belongs on.
    */
   private void appendLoopClose(TextBuffer buf, int indent) {
     int back = RoundTrip.backEdgeOffset(this);
     boolean own = false;
-    if (back >= 0 && !RoundTrip.printsTerminalJump(first) && !buf.hasBytecodeMapping(back)
-        && RoundTrip.hasLineEntryAt(back)) {
+    if (back >= 0 && !buf.hasBytecodeMapping(back) && RoundTrip.hasLineEntryAt(back)
+        && (!RoundTrip.printsTerminalJump(first) || RoundTrip.selector("loopjoinline"))) {
       own = RoundTrip.armDeclaresOwnLocal(first, back);
       if (!own && buf.lastTokenChar() == '}') {
         buf.addBytecodeMappingAtLastToken(back);

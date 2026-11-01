@@ -15,6 +15,7 @@ import org.jetbrains.java.decompiler.modules.decompiler.exps.FieldExprent;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.FunctionExprent;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.IfExprent;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.InvocationExprent;
+import org.jetbrains.java.decompiler.modules.decompiler.exps.PatternExprent;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.VarExprent;
 import org.jetbrains.java.decompiler.modules.decompiler.stats.CatchAllStatement;
 import org.jetbrains.java.decompiler.modules.decompiler.stats.CatchStatement;
@@ -3261,6 +3262,40 @@ public final class RoundTrip {
     // Only an entry that starts at the body's first instruction proves the break; a line the
     // body's continuation started belongs to the text inside the arm.
     return lineStartsAt(body) && lineAt(method, body) > lineAt(method, first);
+  }
+
+  /**
+   * Whether a record pattern's component list starts on a line below its case label's.
+   *
+   * <p>javac anchors a deconstruction on two alternating groups: the accessor call that reads a
+   * component is on the record-pattern line, and the store that binds it is on the component
+   * pattern's line. When the first binding store's line lies below the entry's, the source wrote
+   * the components on their own line, so the printer breaks after the `(`. The entry is the
+   * switch's target for the arm, not the expression's own first offset: the label reuses the
+   * selector's load, which belongs to the switch's line.
+   */
+  public static boolean recordPatternStartsLater(PatternExprent pattern, int entryOffset) {
+    StructMethod method = currentMethod();
+    if (method == null || pattern == null || entryOffset < 0) {
+      return false;
+    }
+    int component = -1;
+    for (Exprent part : pattern.getExprents()) {
+      if (part.bytecode == null || part.bytecode.isEmpty()) {
+        continue;
+      }
+      int offset = part.bytecode.nextSetBit(0);
+      if (offset >= 0) {
+        component = offset;
+        break;
+      }
+    }
+    if (component < 0) {
+      return false;
+    }
+    int entryLine = lineAt(method, entryOffset);
+    int componentLine = lineAt(method, component);
+    return entryLine >= 0 && componentLine > entryLine;
   }
 
   /** The smallest instruction offset any part of the expression owns, or -1. */

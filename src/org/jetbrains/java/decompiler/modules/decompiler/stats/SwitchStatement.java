@@ -515,7 +515,7 @@ public class SwitchStatement extends Statement {
             if (j > 0) {
               buf.append(", ");
             }
-            printCaseLabelValue(buf, values.get(j), stat, indent, switch_type);
+            printCaseLabelValue(buf, values.get(j), stat, indent, switch_type, entryOffset(i));
           }
         }
         buf.append(" ->");
@@ -535,7 +535,7 @@ public class SwitchStatement extends Statement {
           if (j > 0) {
             buf.append(", ");
           }
-          printCaseLabelValue(buf, values.get(j), stat, indent, switch_type);
+          printCaseLabelValue(buf, values.get(j), stat, indent, switch_type, entryOffset(i));
         }
         buf.append(":");
         if (braced.contains(stat)) {
@@ -567,7 +567,7 @@ public class SwitchStatement extends Statement {
           buf.appendLineSeparator();
         } else {
           anyLabel = true;
-          printCaseLabel(buf, values.get(j), stat, guard, indent, switch_type);
+          printCaseLabel(buf, values.get(j), stat, guard, indent, switch_type, entryOffset(i));
           if (braced.contains(stat) && j == edges.size() - 1) {
             buf.append(" {");
           }
@@ -608,6 +608,15 @@ public class SwitchStatement extends Statement {
       }
       if (breakMapping < 0 && i + 1 < caseStatements.size()) {
         breakMapping = RoundTrip.armExitGoto(stat, caseStatements.get(i + 1));
+      }
+      // The arm's tail jump lands on the switch's join, and that join is the enclosing loop's own
+      // latch: the source's `break;` here compiles to no instruction, since the loop's back-edge
+      // goto already starts at the join. javac anchors that goto on the line of the loop's closing
+      // brace, not on the break, so the enclosing loop's print owns the anchor; claiming it here
+      // would move the break onto the brace's line.
+      if (breakMapping == switchEnd && switchEnd >= 0 && RoundTrip.selector("loopjoinline")
+          && RoundTrip.loopBackEdge(this, switchEnd)) {
+        breakMapping = -1;
       }
       boolean patternArm = values.stream().anyMatch(value -> value instanceof FunctionExprent function
         && function.getFuncType() == FunctionType.INSTANCEOF);
@@ -1277,9 +1286,9 @@ public class SwitchStatement extends Statement {
    * Prints one `case <label>` prefix, ending at the colon: the value as the source wrote it,
    * plus the guard a pattern-match switch recovered.
    */
-  private void printCaseLabel(TextBuffer buf, Exprent value, Statement stat, Exprent guard, int indent, VarType switchType) {
+  private void printCaseLabel(TextBuffer buf, Exprent value, Statement stat, Exprent guard, int indent, VarType switchType, int caseEntry) {
     buf.appendIndent(indent + 1).append("case ");
-    printCaseLabelValue(buf, value, stat, indent, switchType);
+    printCaseLabelValue(buf, value, stat, indent, switchType, caseEntry);
     if (guard != null) {
       buf.append(" when ").append(guard.toJava());
     }
@@ -1287,7 +1296,7 @@ public class SwitchStatement extends Statement {
   }
 
   /** Prints one case label's value, without the `case` keyword or the colon. */
-  private void printCaseLabelValue(TextBuffer buf, Exprent value, Statement stat, int indent, VarType switchType) {
+  private void printCaseLabelValue(TextBuffer buf, Exprent value, Statement stat, int indent, VarType switchType, int caseEntry) {
     if (value instanceof ConstExprent && !value.getExprType().equals(VarType.VARTYPE_NULL)) {
       value = value.copy();
       ((ConstExprent)value).setConstType(switchType);
@@ -1312,7 +1321,7 @@ public class SwitchStatement extends Statement {
       } else if (pattern instanceof PatternExprent deconstruction) {
         // A record pattern's components take the same evidence one level down: an unbound
         // component has no table row and the arm never reads it, so it printed `_` too.
-        buf.append(deconstruction.toJava(indent, stat));
+        buf.append(deconstruction.toJava(indent, stat, caseEntry));
       } else {
         buf.append(value.getAllExprents().get(2).toJava(indent));
       }
@@ -1438,7 +1447,7 @@ public class SwitchStatement extends Statement {
       int[] label = spilled.get(cursor++);
       Statement stat = caseStatements.get(label[0]);
       Exprent value = caseValues.get(label[0]).get(label[1]);
-      printCaseLabel(buf, value, stat, null, indent, switchType);
+      printCaseLabel(buf, value, stat, null, indent, switchType, label[2]);
       buf.appendLineSeparator();
       buf.append(breakLine(indent + 2, label[2]));
     }
@@ -1670,8 +1679,10 @@ public class SwitchStatement extends Statement {
    * The offset of the block this arm's labels enter. The switch instruction's targets name it even
    * when the arm prints no statement of its own: a dummy arm's range is empty, so its line would
    * read as the method's first one. Falls back to the statement's range when the table cannot say.
+   * A switch expression prints its arms through {@link org.jetbrains.java.decompiler.modules.decompiler.exps.SwitchExprent},
+   * which needs the same offset to place a record pattern's component list.
    */
-  private int entryOffset(int index) {
+  public int entryOffset(int index) {
     List<StatEdge> edges = index < caseEdges.size() ? caseEdges.get(index) : null;
     SwitchInstruction instruction = switchInstruction();
     int[] targets = instruction == null ? null : RoundTrip.switchTargetsAt(instruction.startOffset);
