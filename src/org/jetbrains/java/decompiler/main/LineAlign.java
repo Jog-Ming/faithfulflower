@@ -1,6 +1,7 @@
 // Copyright 2000-2020 JetBrains s.r.o. Use of this source code is governed by the Apache 2.0 license that can be found in the LICENSE file.
 package org.jetbrains.java.decompiler.main;
 
+import org.jetbrains.java.decompiler.code.CodeConstants;
 import org.jetbrains.java.decompiler.code.FullInstructionSequence;
 import org.jetbrains.java.decompiler.code.Instruction;
 import org.jetbrains.java.decompiler.main.collectors.BytecodeMappingTracer;
@@ -103,7 +104,9 @@ public final class LineAlign {
           owner = initializerTable(className, mapping.keySet());
         }
         if (owner != null && gapAlign) {
-          addMethodConstraints(owner, mapping, lines, candidates, entryLines);
+          // The lifted initializer's offsets belong to a constructor, not to a method the tracer
+          // names, so there is no code to read an opcode from; the walk keeps its old rules.
+          addMethodConstraints(owner, mapping, lines, candidates, entryLines, null, null, tracers);
           continue;
         }
         Integer target = fieldInitLine(className, mapping.keySet());
@@ -125,7 +128,9 @@ public final class LineAlign {
         continue;
       }
       if (gapAlign) {
-        addMethodConstraints(table, mapping, lines, candidates, entryLines);
+        StructClass cls = DecompilerContext.getStructContext().getClass(className);
+        StructMethod method = cls == null ? null : cls.getMethod(methodKey);
+        addMethodConstraints(table, mapping, lines, candidates, entryLines, cls, method, tracers);
         continue;
       }
       for (Map.Entry<Integer, Integer> entry : mapping.entrySet()) {
@@ -1147,7 +1152,8 @@ public final class LineAlign {
    */
   private static void addMethodConstraints(StructLineNumberTableAttribute table,
       Map<Integer, Integer> mapping, String[] lines, Map<Integer, List<int[]>> candidates,
-      Set<Integer> entryLines) {
+      Set<Integer> entryLines, StructClass cls, StructMethod method,
+      Map<Pair<String, String>, BytecodeMappingTracer> tracers) {
     int[] raw = table.getRawData();
     Set<Integer> exact = new HashSet<>();
     for (int i = 0; i + 1 < raw.length; i += 2) {
@@ -1165,6 +1171,7 @@ public final class LineAlign {
     entries.sort((a, b) -> Integer.compare(a[0], b[0]));
     int previousLine = -1;
     int highest = -1;
+    Set<Integer> exactPrinted = new HashSet<>();
     for (int[] entry : entries) {
       // A switch's dispatch record carries no line of its own: the table places the comparison on
       // the switch's line while the printer writes it beside the label it matches, so the label's
@@ -1173,16 +1180,172 @@ public final class LineAlign {
       boolean label = text.startsWith("case ") || text.startsWith("default");
       boolean boundary = entry[1] < previousLine || entry[3] == 0 && entry[2] == highest && label;
       if (boundary && entry[2] >= highest && entry[2] <= highest + 1) {
+        if (invocationKeepsItsLine(cls, method, tracers, lines, exactPrinted, entry, previousLine,
+            highest)) {
+          // The text on this record's own line opens the call, and the line it moved back from
+          // carries the rest of the argument list; folding it there would lose the call's line.
+          previousLine = entry[1];
+          highest = Math.max(highest, entry[2]);
+          entryLines.add(entry[1]);
+          candidate(candidates, entry[1], entry[2] - entry[1], entry[3], entry[0]);
+          if (entry[3] != 0) {
+            exactPrinted.add(entry[1]);
+          }
+          continue;
+        }
         highest = entry[2];
         entryLines.add(previousLine);
         candidate(candidates, previousLine, entry[2] - previousLine, entry[3], entry[0]);
+        if (entry[3] != 0) {
+          exactPrinted.add(previousLine);
+        }
         continue;
       }
       previousLine = entry[1];
       highest = Math.max(highest, entry[2]);
       entryLines.add(entry[1]);
       candidate(candidates, entry[1], entry[2] - entry[1], entry[3], entry[0]);
+      if (entry[3] != 0) {
+        exactPrinted.add(entry[1]);
+      }
     }
+  }
+
+  /**
+   * Whether an invocation printed on an earlier line than the entry before it must stay there.
+   *
+   * <p>The printer writes a chained call before its arguments: the receiver and the first
+   * arguments end the chain's line, while the rest of the argument list -- a block lambda's body
+   * and its closing brace among them -- is printed on the lines below. The body is compiled into
+   * a method of its own, and javac places its terminal return on the closing brace's line, so the
+   * continuation is a source line in its own right that must not be folded into the call's.
+   * When the invocation's own table line is the next source line after the chain, it anchors its
+   * own printed line, and the lambda's return anchors the continuation; the call keeps its line.
+   *
+   * <p>Only facts read from the class file or the printed text qualify: the instruction is an
+   * invocation; the printed line opens a chained call; the line the record moved back from
+   * carries only arguments and a closing paren; no entry of this method's own is printed there;
+   * and a block lambda of this method closes on that line, at a source line after the call's.
+   */
+  private static boolean invocationKeepsItsLine(StructClass cls, StructMethod method,
+      Map<Pair<String, String>, BytecodeMappingTracer> tracers, String[] lines,
+      Set<Integer> exactPrinted, int[] entry, int previousLine, int highest) {
+    if (cls == null || method == null || entry[3] == 0 || entry[1] >= previousLine) {
+      return false;
+    }
+    if (entry[2] <= highest || entry[2] > highest + 1) {
+      return false;
+    }
+    Instruction instruction = instructionAt(method, cls, entry[0]);
+    if (instruction == null || !isInvoke(instruction.opcode)) {
+      return false;
+    }
+    if (!opensCall(printedText(lines, entry[1])) || !carriesArgumentsOnly(printedText(lines, previousLine))) {
+      return false;
+    }
+    if (exactPrinted.contains(previousLine)) {
+      return false;
+    }
+    return closesLambda(cls, tracers, method.getName(), previousLine, entry[2]);
+  }
+
+  private static String printedText(String[] lines, int line) {
+    return line >= 1 && line <= lines.length ? lines[line - 1].trim() : "";
+  }
+
+  private static boolean isInvoke(int opcode) {
+    return opcode == CodeConstants.opc_invokevirtual || opcode == CodeConstants.opc_invokespecial
+      || opcode == CodeConstants.opc_invokestatic || opcode == CodeConstants.opc_invokeinterface
+      || opcode == CodeConstants.opc_invokedynamic;
+  }
+
+  /** A printed line that opens a chained call, such as {@code .thenAcceptAsync(value -> ...}. */
+  private static boolean opensCall(String text) {
+    if (text.isEmpty() || text.charAt(0) != '.') {
+      return false;
+    }
+    int i = 1;
+    while (i < text.length() && Character.isJavaIdentifierPart(text.charAt(i))) {
+      i++;
+    }
+    return i > 1 && i < text.length() && text.charAt(i) == '(';
+  }
+
+  /** A printed line that carries only an invocation's remaining arguments and closing paren. */
+  private static boolean carriesArgumentsOnly(String text) {
+    if (text.isEmpty() || text.charAt(0) != '}' || text.charAt(text.length() - 1) != ')') {
+      return false;
+    }
+    return text.indexOf(';') < 0 && text.indexOf('{') < 0;
+  }
+
+  /**
+   * Whether a block lambda of this method closes on the printed line the invocation moved back
+   * from, at a source line the table places after the invocation's own.
+   *
+   * <p>javac puts the lambda's terminal return on the line of its closing brace, and the printer
+   * prints that return on the brace line too. When the return carries a line entry of its own --
+   * the entry the table ends with, and the instruction an ordinary {@code return} -- that line is
+   * the continuation's target, and the continuation needs no folding to stay on it.
+   */
+  private static boolean closesLambda(StructClass cls,
+      Map<Pair<String, String>, BytecodeMappingTracer> tracers, String owner, int line,
+      int callTarget) {
+    String prefix = "lambda$" + owner + "$";
+    for (Map.Entry<Pair<String, String>, BytecodeMappingTracer> entry : tracers.entrySet()) {
+      if (!cls.qualifiedName.equals(entry.getKey().a) || !entry.getKey().b.startsWith(prefix)) {
+        continue;
+      }
+      StructMethod method = cls.getMethod(entry.getKey().b);
+      StructLineNumberTableAttribute table = method == null ? null
+        : method.getAttribute(StructGeneralAttribute.ATTRIBUTE_LINE_NUMBER_TABLE);
+      if (table == null) {
+        continue;
+      }
+      int[] raw = table.getRawData();
+      if (raw.length < 2) {
+        continue;
+      }
+      int offset = raw[raw.length - 2];
+      Instruction instruction = instructionAt(method, cls, offset);
+      if (instruction == null || instruction.opcode != CodeConstants.opc_return) {
+        continue;
+      }
+      Integer printed = entry.getValue().getMapping().get(offset);
+      if (printed == null || printed + 1 != line) {
+        continue;
+      }
+      if (table.findLineNumber(offset) > callTarget) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** The instruction whose bytes cover {@code offset} in {@code method}, or null. */
+  private static Instruction instructionAt(StructMethod method, StructClass cls, int offset) {
+    if (method == null || cls == null) {
+      return null;
+    }
+    FullInstructionSequence code = method.getInstructionSequence();
+    if (code == null) {
+      try {
+        method.expandData(cls);
+      }
+      catch (Exception e) {
+        return null;
+      }
+      code = method.getInstructionSequence();
+    }
+    if (code == null) {
+      return null;
+    }
+    for (Instruction instruction : code) {
+      if (offset >= instruction.startOffset && offset < instruction.startOffset + instruction.length) {
+        return instruction;
+      }
+    }
+    return null;
   }
 
   private static void candidate(Map<Integer, List<int[]>> candidates, int line, int shift, int exact,
