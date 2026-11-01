@@ -452,7 +452,7 @@ public class SwitchStatement extends Statement {
     // switch, so every arm converts or none does; a braced rule's jump carries the closing
     // brace's line instead, and the brace is printed onto that line.
     boolean arrowSwitch = RoundTrip.selector("switcharrow") && !yields && !orderUnknown
-      && !isPhantom() && caseGuards.stream().noneMatch(Objects::nonNull)
+      && !isPhantom() && (caseGuards.stream().noneMatch(Objects::nonNull) || isPattern())
       && defaultBreakJump < 0 && defaultBody.isEmpty() && joinArm == null && updateArm == null
       && caseJoinArm == null && spilled.isEmpty();
     if (System.getenv("NEUROFLOWER_SWITCH_DEBUG") != null) {
@@ -504,11 +504,25 @@ public class SwitchStatement extends Statement {
         boolean falls = defaultEdge != null && defaultEdge.getDestination() != arm
           && RoundTrip.blockEnd(arm) >= 0 && RoundTrip.blockEnd(arm) == defaultTargetOffset()
           && defaultTargetOffset() != switchEnd;
-        if (falls || (i < joinedReturns.length && joinedReturns[i] != null)
-            || (empty && !(defaults && armEdges.size() == 1))) {
+        boolean joinedArm = i < joinedReturns.length && joinedReturns[i] != null;
+        if (falls || (empty && !(defaults && armEdges.size() == 1))) {
           arrowSwitch = false;
-          arrowRefuse("arm " + i + " falls=" + falls + " joined=" + (i < joinedReturns.length && joinedReturns[i] != null) + " empty=" + empty + " defaults=" + defaults);
+          arrowRefuse("arm " + i + " falls=" + falls + " joined=" + joinedArm + " empty=" + empty + " defaults=" + defaults);
           break;
+        }
+        // A shared join return was glued onto this arm: the arm's rule ends at the switch's join
+        // and the return stands after it. The arrow form carries that end as the rule's implicit
+        // break, whose goto has no statement line; a braced rule's goto carries the closing
+        // brace's line instead, and a written `break;` always gives its jump a line.
+        if (joinedArm) {
+          int endJump = ruleEndJump(i, switchEnd);
+          boolean bracedArm = braced.contains(arm);
+          if (endJump < 0 || (bracedArm ? !RoundTrip.lineStartsAt(endJump)
+              : RoundTrip.hasLineEntryAt(endJump))) {
+            arrowSwitch = false;
+            arrowRefuse("joined arm " + i + " no implicit break jump=" + endJump + " braced=" + bracedArm);
+            break;
+          }
         }
         if (!empty && defaults) {
           // The default label cannot be written together with case labels in the arrow form, and
@@ -524,6 +538,13 @@ public class SwitchStatement extends Statement {
           }
         }
         if (empty) {
+          continue;
+        }
+        if (joinedArm) {
+          // The joined return is the rule's end, not a statement of its body: what prints is the
+          // arm's other expressions, and the return follows the switch. Its own implicit break
+          // was the proof above, so the colon form's brace and expression checks do not apply.
+          witness = true;
           continue;
         }
         if (braced.contains(arm)) {
@@ -616,9 +637,16 @@ public class SwitchStatement extends Statement {
           && function.getFuncType() == FunctionType.INSTANCEOF);
 
       boolean anyLabel = false;
-      boolean emptyArrowArm = arrowSwitch && RoundTrip.firstOffset(stat) < 0;
+      // An arm whose whole body is the shared join return is empty on the page: the return is
+      // the switch's join and prints after it, so the rule carries an empty block.
+      boolean joinedOnlyArm = arrowSwitch && i < joinedReturns.length && joinedReturns[i] != null
+        && stat.getExprents() != null && stat.getExprents().size() == 1
+        && stat.getExprents().get(0) == joinedReturns[i]
+        && stat.getStats().isEmpty() && stat.getVarDefinitions().isEmpty();
+      boolean emptyArrowArm = arrowSwitch && (RoundTrip.firstOffset(stat) < 0 || joinedOnlyArm);
       boolean arrowDefaultBlock = arrowSwitch && !emptyArrowArm && !braced.contains(stat)
         && arrowDefaultBlocks.contains(stat);
+      boolean inlineDefaultRule = false;
       if (arrowSwitch) {
         anyLabel = true;
         boolean defaultLabel = edges.size() == 1 && edges.get(0) == defaultEdge;
@@ -634,12 +662,20 @@ public class SwitchStatement extends Statement {
             printCaseLabelValue(buf, values.get(j), stat, indent, switch_type, entryOffset(i));
           }
         }
+        if (guard != null) {
+          buf.append(" when ").append(guard.toJava());
+        }
         buf.append(" ->");
         boolean emptyArrowBlock = false;
         if (emptyArrowArm) {
           // An empty rule's implicit break is a jump the table records; when it starts a line of
           // its own the source closed a block there, and the brace takes the jump's row.
           int emptyJump = armBreakJump(stat, edges, switchEnd);
+          if (emptyJump < 0 && joinedOnlyArm) {
+            // The arm's body is the shared join return, so its own implicit break is the goto the
+            // rule's code ends with; that jump is the only instruction the rule's line records.
+            emptyJump = ruleEndJump(i, switchEnd);
+          }
           if (emptyJump < 0 && edges.stream().anyMatch(edge -> edge == defaultEdge)) {
             // The empty default's implicit break is the jump the table's default target names;
             // that jump can be its own landing when a later jump carries the flow on.
@@ -657,11 +693,21 @@ public class SwitchStatement extends Statement {
             buf.append(close).appendLineSeparator();
           } else {
             buf.append(" {}");
+            if (emptyJump >= 0 && joinedOnlyArm) {
+              // The rule's line is the one the table gives the implicit break, so the alignment
+              // can place the label where the source stood.
+              buf.addBytecodeMapping(emptyJump);
+            }
           }
         } else if (braced.contains(stat) || arrowBlocks.contains(stat) || arrowDefaultBlock) {
           buf.append(" {");
         }
-        if (!emptyArrowBlock) {
+        // A default rule prints no instruction of its own: the default target is the rule's body,
+        // and the table can only name the body's line. A one-expression rule therefore writes the
+        // keyword on the body's line, the one source line the class file records.
+        inlineDefaultRule = defaultLabel && !emptyArrowArm && !braced.contains(stat)
+          && !arrowBlocks.contains(stat) && !arrowDefaultBlock;
+        if (!emptyArrowBlock && !inlineDefaultRule) {
           buf.appendLineSeparator();
         }
         if (emptyArrowArm) {
@@ -901,7 +947,26 @@ public class SwitchStatement extends Statement {
         }
         armBuf.append(" }").appendLineSeparator();
       }
-      buf.append(armBuf);
+      if (inlineDefaultRule && armBuf.length() > 0) {
+        // The body follows the keyword on the same line: drop the indent the rule body was
+        // printed with and its final line break, then write it right after `default ->`.
+        String separator = DecompilerContext.getNewLineSeparator();
+        String text = armBuf.convertToStringAndAllowDataDiscard();
+        int lead = 0;
+        while (lead < text.length() && text.charAt(lead) == ' ') {
+          lead++;
+        }
+        if (lead > 0) {
+          armBuf.setStart(lead);
+        }
+        if (armBuf.length() >= separator.length()
+            && armBuf.convertToStringAndAllowDataDiscard().endsWith(separator)) {
+          armBuf.setLength(armBuf.length() - separator.length());
+        }
+        buf.append(' ').append(armBuf).appendLineSeparator();
+      } else {
+        buf.append(armBuf);
+      }
       if (arrowSwitch) {
         // The arrow arm's implicit break prints no `break;`. A braced arm's jump carries the
         // closing brace's line, so the brace is pinned there for the alignment.
@@ -1158,6 +1223,37 @@ public class SwitchStatement extends Statement {
     }
     Exprent only = stat.getExprents().get(0);
     return !(only instanceof ExitExprent exit) || exit.getExitType() == ExitExprent.Type.THROW;
+  }
+
+  /**
+   * The forward goto that ends this arm's rule at the switch's join, or -1. The arm's code is the
+   * region from its table entry — or its first instruction when that sits earlier — up to the
+   * next arm's entry, so a later arm's goto is never taken for this one's.
+   */
+  private int ruleEndJump(int index, int join) {
+    Statement stat = caseStatements.get(index);
+    if (stat == null || join < 0) {
+      return -1;
+    }
+    int first = RoundTrip.firstOffset(stat);
+    int from = entryOffset(index);
+    if (first >= 0 && (from < 0 || first < from)) {
+      from = first;
+    }
+    if (from < 0) {
+      return -1;
+    }
+    int regionEnd = join;
+    for (int j = 0; j < caseStatements.size(); j++) {
+      if (j == index) {
+        continue;
+      }
+      int at = entryOffset(j);
+      if (at > from && at < regionEnd) {
+        regionEnd = at;
+      }
+    }
+    return RoundTrip.jumpOffsetTo(from, regionEnd, join);
   }
 
   /**
@@ -1429,8 +1525,10 @@ public class SwitchStatement extends Statement {
     // An arm is the join itself when another arm's tail jump lands on its first instruction: that
     // block is the code after the switch, and its own instructions must not raise the bar the
     // join has to clear.
+    Exprent[] joinedReturns = joinedFinalReturns();
     int limit = -1;
-    for (Statement arm : caseStatements) {
+    for (int index = 0; index < caseStatements.size(); index++) {
+      Statement arm = caseStatements.get(index);
       int first = RoundTrip.firstOffset(arm);
       boolean isJoinBlock = false;
       if (first >= 0 && RoundTrip.selector("switchcasejoin")) {
@@ -1442,7 +1540,18 @@ public class SwitchStatement extends Statement {
         }
       }
       if (!isJoinBlock) {
-        limit = Math.max(limit, RoundTrip.blockEnd(arm));
+        int end = RoundTrip.blockEnd(arm);
+        // The method's final return was glued onto this arm: every rule's implicit break lands on
+        // that return, so the return is the join, not part of the arm's own code. Counting it in
+        // the limit would push the join below the bar its landing has to clear.
+        if (index < joinedReturns.length && joinedReturns[index] != null
+            && joinedReturns[index].bytecode != null) {
+          int ret = joinedReturns[index].bytecode.nextSetBit(0);
+          if (ret >= 0 && (end < 0 || ret < end)) {
+            end = ret;
+          }
+        }
+        limit = Math.max(limit, end);
       }
     }
     int join = -1;
