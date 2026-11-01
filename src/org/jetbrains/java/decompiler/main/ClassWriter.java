@@ -1232,12 +1232,27 @@ public class ClassWriter implements StatementWriter {
       }
       // The target's NestMembers lists the nested types in reverse declaration order; a member
       // class without a line table of its own (an annotation type, say) cannot be placed by its
-      // first line and needs this rank to keep the original's declaration order.
+      // first line and needs this rank to keep the original's declaration order. Only a nest's
+      // host carries the attribute: a nested class that declares members of its own reads the
+      // host's list, which names every member of the nest, its own included.
       Map<String, Integer> nestRank = new java.util.HashMap<>();
       StructNestMembersAttribute nestMembers =
         cl.getAttribute(StructGeneralAttribute.ATTRIBUTE_NEST_MEMBERS);
+      ConstantPool nestPool = cl.getPool();
+      if (nestMembers == null) {
+        StructNestHostAttribute nestHost =
+          cl.getAttribute(StructGeneralAttribute.ATTRIBUTE_NEST_HOST);
+        if (nestHost != null) {
+          StructClass host = DecompilerContext.getStructContext().getClass(nestHost.getHostClass(cl.getPool()));
+          if (host != null) {
+            // The attribute's indices belong to the host's pool, not this class's.
+            nestMembers = host.getAttribute(StructGeneralAttribute.ATTRIBUTE_NEST_MEMBERS);
+            nestPool = host.getPool();
+          }
+        }
+      }
       if (nestMembers != null) {
-        java.util.List<String> names = nestMembers.getClasses(cl.getPool());
+        java.util.List<String> names = nestMembers.getClasses(nestPool);
         for (int i = 0; i < names.size(); i++) {
           nestRank.put(names.get(i), names.size() - 1 - i);
         }
