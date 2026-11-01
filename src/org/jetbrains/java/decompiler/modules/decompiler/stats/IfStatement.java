@@ -700,15 +700,19 @@ public class IfStatement extends Statement {
 
     // The same fold with the arm reduced to the loop's jump: `if (a) { if (b) continue; }` keeps
     // no statement for the arm, so the merged condition's head is all the tree has. The innermost
-    // brace prints the continue, pinned to the jump the target records after the last test.
+    // brace prints the continue, pinned to the jump the target records after the last test. A
+    // break guard leaves the loop or switch instead: its edge is a written break, and the recorded
+    // site is the goto past the loop, which the innermost brace prints as `break;`.
     if (ifstat == null && elsestat == null && !isLabeled() && ifedge != null
-        && condition instanceof IfExprent ifHead
-        && (ifedge.getType() == StatEdge.TYPE_CONTINUE
-            || ifedge.getType() == StatEdge.TYPE_BREAK
-               && RoundTrip.printContinueGuardAtHead(ifHead, this))
-        && RoundTrip.continueGoto(ifHead) >= 0
-        && printSplitIf(buf, ifHead, null, null, indent, false)) {
-      return buf;
+        && condition instanceof IfExprent ifHead) {
+      boolean continues = ifedge.getType() == StatEdge.TYPE_CONTINUE
+        || ifedge.getType() == StatEdge.TYPE_BREAK && RoundTrip.printContinueGuardAtHead(ifHead, this);
+      boolean writtenBreak = !continues && ifedge.getType() == StatEdge.TYPE_BREAK
+        && ifedge.explicit && !ifedge.labeled && !RoundTrip.isClosureHidden(ifedge);
+      if ((continues || writtenBreak) && RoundTrip.continueGoto(ifHead) >= 0
+          && printSplitIf(buf, ifHead, null, null, indent, false, writtenBreak ? "break;" : null)) {
+        return buf;
+      }
     }
 
     buf.appendIndent(indent);
@@ -1303,12 +1307,22 @@ public class IfStatement extends Statement {
    */
   static boolean printSplitIf(TextBuffer buf, IfExprent head, Statement arm, Statement elseArm,
                               int indent, boolean elseSemicolon) {
+    return printSplitIf(buf, head, arm, elseArm, indent, elseSemicolon, null);
+  }
+
+  /**
+   * As above, with the innermost arm reduced to a written jump: {@code jump} is the keyword and
+   * semicolon the source printed where the tree kept only the edge (a break leaving the loop),
+   * or null to print the continue the condition's own last branch falls into.
+   */
+  static boolean printSplitIf(TextBuffer buf, IfExprent head, Statement arm, Statement elseArm,
+                              int indent, boolean elseSemicolon, String jump) {
     List<Integer> groups = nestedIfGroups(head, arm);
     if (groups.isEmpty() || (arm == null && elseArm != null)
         || (elseArm != null && (!endsWithExit(arm) || RoundTrip.declaresLocalAtOwnLevel(elseArm)))) {
       return false;
     }
-    if (printNestedIfs(buf, head, arm, groups, indent, elseArm == null)) {
+    if (printNestedIfs(buf, head, arm, groups, indent, elseArm == null, jump, -1)) {
       buf.appendIndent(indent).append("}").appendLineSeparator();
     }
     if (elseArm != null) {
