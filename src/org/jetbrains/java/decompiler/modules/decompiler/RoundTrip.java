@@ -11767,6 +11767,32 @@ public final class RoundTrip {
     return jumpTargetAt(sunk) >= 0 ? sunk : -1;
   }
 
+  /**
+   * The goto a written {@code break;} at the end of this switch arm compiles to, or -1. The
+   * arm's last statement can be a loop whose own back edge starts at the arm's end; that goto
+   * lands on the loop's head and the break's goto on the switch's join follows it, so the walk
+   * skips unconditional jumps until one lands on the join. A conditional branch or a statement
+   * that runs into the next block starts no goto and ends the walk.
+   */
+  public static int armBreakGoto(Statement statement, int switchEnd) {
+    if (statement == null || switchEnd < 0) {
+      return -1;
+    }
+    StructMethod method = currentMethod();
+    int at = lastInstructionEnd(statement);
+    for (int guard = 0; at >= 0 && at < switchEnd && guard < 16; guard++) {
+      int target = jumpTargetAt(at);
+      if (target < 0) {
+        return -1;
+      }
+      if (target == switchEnd) {
+        return at;
+      }
+      at = instructionEnd(method, at);
+    }
+    return -1;
+  }
+
   /** The target of the goto that starts where this statement's last instruction ends, or -1. */
   public static int tailJumpTarget(Statement statement) {
     return jumpTargetAt(tailJumpOffset(statement));

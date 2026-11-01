@@ -601,8 +601,12 @@ public class SwitchStatement extends Statement {
       // keep its line apart from the next arm's. The tree may not carry it: an empty arm has no
       // instruction to read its offset from, and a non-block arm was never harvested. The table's
       // target for the label is the jump the source wrote, and the jump that closes the arm ends
-      // exactly where the next arm's code begins.
+      // exactly where the next arm's code begins. A loop the arm ends with leaves its own latch
+      // at the arm's end; the break's goto is the next jump, so the walk skips latches.
       int breakMapping = breakJump;
+      if (breakMapping < 0) {
+        breakMapping = RoundTrip.armBreakGoto(stat, switchEnd);
+      }
       if (breakMapping < 0) {
         breakMapping = RoundTrip.tailJumpOffset(stat);
       }
