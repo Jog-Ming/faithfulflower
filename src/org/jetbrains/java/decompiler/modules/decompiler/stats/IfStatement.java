@@ -520,7 +520,12 @@ public class IfStatement extends Statement {
         }
         buf.append(continueLine);
         buf.appendIndent(indent).append("}").appendLineSeparator();
-        boolean braces = RoundTrip.closesAtOwnEnd(ifstat);
+        // A block around the rest of the arm needs the row-order proof, not just a local that
+        // ends with it: a local whose last use is the arm's last instruction ends there whether
+        // or not the source braced it, and the row order alone says which scope was nested. A
+        // real block's rows are written ahead of every enclosing row that closes with the arm.
+        boolean braces = RoundTrip.selector("bareblock")
+            && RoundTrip.runWasBraced(ifstat, RoundTrip.lastEnd(ifstat));
         if (braces) {
           buf.appendIndent(indent).append("{").appendLineSeparator();
         }

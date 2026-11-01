@@ -10970,11 +10970,15 @@ public final class RoundTrip {
     int flat = 0;
     int nested = 0;
     for (LocalVariable other : rows) {
-      if (other.getOrder() < 0 || other.getStart() >= start
-          || excluded != null && excluded.matches(other)) {
+      if (other.getOrder() < 0 || other.getStart() >= start) {
         continue;
       }
-      if (other.getEnd() == end && other.getOrder() < row.getOrder()) {
+      // An implicit variable — a case's pattern binding, a loop's own variable — closes with the
+      // construct around the run. It cannot prove a flat run by closing where the run does, but a
+      // row written after the run's own proves the run's scope closed first, and that is exactly
+      // the evidence a brace leaves behind.
+      boolean implicit = excluded != null && excluded.matches(other);
+      if (!implicit && other.getEnd() == end && other.getOrder() < row.getOrder()) {
         flat++;
       }
       // Only rows that close with the block's own enclosing scope count: a row ending far past
