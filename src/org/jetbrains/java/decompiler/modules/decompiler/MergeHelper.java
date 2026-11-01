@@ -766,7 +766,14 @@ public class MergeHelper {
             continue;
           }
           if (!isVarUsedBefore(var, stat)) {
-            return;
+            // Both header witnesses hold: the target's table scopes the init to the loop and
+            // puts the update's first instruction on the condition's line, so the source wrote
+            // one for header. The update's reads are then the header's operands -- a parameter
+            // or an outer local whose value exists before the loop even when the loop's own
+            // predecessors never load it, which is what the scan above would require.
+            if (!(headerScopedInit && updateHeader)) {
+              return;
+            }
           }
         }
       }
