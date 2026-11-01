@@ -765,6 +765,37 @@ public class TextBuffer {
     }
   }
 
+  /**
+   * The text position this buffer's own print gave a bytecode offset, or -1. A keyed position is
+   * ignored: it was recorded by an enclosing buffer, not by the text this buffer holds.
+   */
+  public int ownBytecodeMappingPosition(int bytecodeOffset) {
+    Integer position = myBytecodeOffsetMapping.get(
+      new BytecodeMappingKey(bytecodeOffset, null, null));
+    return position == null ? -1 : position;
+  }
+
+  /**
+   * Whether the printed line the position sits on holds a {@code return} statement. Such a
+   * statement stands on the source line javac records for its instruction; moving the anchor to
+   * a brace would shift it. The position may sit before the keyword (an exprent maps its text
+   * start) or after it, so the whole line is read.
+   */
+  public boolean lineHoldsReturnAt(int position) {
+    int at = Math.min(position, myStringBuilder.length());
+    int start = at;
+    while (start > 0 && myStringBuilder.charAt(start - 1) != '\n'
+        && myStringBuilder.charAt(start - 1) != '\r') {
+      start--;
+    }
+    int end = at;
+    while (end < myStringBuilder.length() && myStringBuilder.charAt(end) != '\n'
+        && myStringBuilder.charAt(end) != '\r') {
+      end++;
+    }
+    return myStringBuilder.substring(start, end).contains("return");
+  }
+
   /** The last character printed that is not whitespace, or ' ' when the buffer is blank. */
   public char lastTokenChar() {
     for (int i = myStringBuilder.length() - 1; i >= 0; i--) {

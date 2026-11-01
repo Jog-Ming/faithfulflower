@@ -4557,13 +4557,33 @@ public class ClassWriter implements StatementWriter {
    * returns the fold removed elsewhere, whose lines are not the brace's; mapping them here would
    * make the aligner pay the gap between them by joining the brace onto the statement above. Only
    * the method's last instruction can be the return the brace replaces.
+   *
+   * <p>The dummy exit need not carry that return: a jump the body prints, such as a catch's
+   * {@code break} leaving the loop the return follows, can own the exit offset instead and leave
+   * the set empty, while an earlier print has already mapped the return on the statement's line.
+   * The method's own last instruction is still the void return the brace stands for, and mapping
+   * it at the buffer's end overrides that position.
    */
   private static void mapFinalReturn(TextBuffer code, RootStatement root) {
     java.util.BitSet exits = root.getDummyExit() == null ? null : root.getDummyExit().bytecode;
-    if (exits == null || exits.isEmpty()) {
-      return;
+    int last;
+    if (exits != null && !exits.isEmpty()) {
+      last = exits.length() - 1;
     }
-    int last = exits.length() - 1;
+    else {
+      last = RoundTrip.lastInstructionOffset();
+      if (last < 0 || !RoundTrip.isVoidReturn(last)) {
+        return;
+      }
+      // A body that prints this return as a statement owns its line: the statement's own
+      // mapping is the source line javac records, and moving the anchor to the brace would lift
+      // it by one. Only a position inherited from another statement (the catch's `break` that
+      // reaches the return) may be replaced.
+      int printed = code.ownBytecodeMappingPosition(last);
+      if (printed >= 0 && code.lineHoldsReturnAt(printed)) {
+        return;
+      }
+    }
     if (!RoundTrip.isLastInstruction(last)) {
       return;
     }
