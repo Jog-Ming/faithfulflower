@@ -387,9 +387,25 @@ public class CatchStatement extends Statement {
         // the table records instead of leaving the brace on its unaligned line.
         if (i == stats.size() - 1 && handlerOffset != null) {
           int exitOffset = RoundTrip.handlerExitOffset(handlerOffset);
-          if (exitOffset >= 0 && RoundTrip.lineAtOffset(exitOffset) > 0
-              && RoundTrip.lineAtOffset(exitOffset) != RoundTrip.lineAtOffset(exitOffset - 1)) {
-            buf.addBytecodeMapping(exitOffset);
+          int site = -1;
+          if (exitOffset >= 0) {
+            if (RoundTrip.lineAtOffset(exitOffset) > 0
+                && RoundTrip.lineAtOffset(exitOffset) != RoundTrip.lineAtOffset(exitOffset - 1)) {
+              site = exitOffset;
+            } else {
+              site = RoundTrip.rangeEndLineSite(exitOffset, handlerOffset);
+            }
+          } else {
+            // The range did not end in a skip-goto: a body that left by returning ends it on its
+            // own last instruction. Only the jump past the handler in the gap to the handler
+            // carries the closing brace's line.
+            int rangeEnd = RoundTrip.handlerRangeEnd(handlerOffset);
+            if (rangeEnd >= 0) {
+              site = RoundTrip.rangeEndLineSite(rangeEnd, handlerOffset);
+            }
+          }
+          if (site >= 0) {
+            buf.addBytecodeMapping(site);
           }
         }
       }

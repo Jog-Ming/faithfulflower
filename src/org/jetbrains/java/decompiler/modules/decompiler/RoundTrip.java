@@ -2877,6 +2877,55 @@ public final class RoundTrip {
   }
 
   /**
+   * The instruction offset this handler's protected range ends at, from the exception table, or
+   * -1. {@link #handlerExitOffset} records a range only when it ends in a skip-goto; a body that
+   * left by returning ends the range on its own last instruction instead.
+   */
+  public static int handlerRangeEnd(int handlerOffset) {
+    StructMethod method = currentMethod();
+    java.util.List<int[]> ranges = method == null ? null : EXCEPTION_RANGES.get(method);
+    if (ranges == null) {
+      return -1;
+    }
+    int end = -1;
+    for (int[] range : ranges) {
+      int to = range[1];
+      // A range that ends where the handler starts has no code between them; its end is the
+      // handler's own store, which carries the catch clause's line, not the brace's.
+      if (range[2] == handlerOffset && to >= 0 && to < handlerOffset && to > end) {
+        end = to;
+      }
+    }
+    return end;
+  }
+
+  /**
+   * The skip-goto the last catch's closing brace carries the line of, or -1. javac ends a try
+   * body that left by returning with a jump past the handler directly after the return, and gives
+   * that jump the brace's line; the range-end instruction itself sits on the body's last line.
+   * Only that immediate jump qualifies: the rest of the gap to the handler can hold the code
+   * written after the try, whose jumps belong to other statements.
+   */
+  public static int rangeEndLineSite(int rangeEnd, int handler) {
+    StructMethod method = currentMethod();
+    java.util.Map<Integer, Integer> ends = method == null ? null : INSTRUCTION_ENDS.get(method);
+    java.util.Map<Integer, Integer> gotos = method == null ? null : GOTO_TARGETS.get(method);
+    if (method == null || ends == null || gotos == null || rangeEnd < 0) {
+      return -1;
+    }
+    Integer at = ends.get(rangeEnd);
+    if (at == null) {
+      return -1;
+    }
+    Integer target = gotos.get(at);
+    if (target == null || target <= handler || !hasLineEntryAt(at) || !lineStartsAt(at)
+        || lineAt(method, at) <= 0 || lineAt(method, at) == lineAt(method, at - 1)) {
+      return -1;
+    }
+    return at;
+  }
+
+  /**
    * True when the target proves this store was written inside a catch body: it lies in the
    * handler's code, past the handler's first instruction and before the enclosing protected
    * range's next boundary, and only the handler's path reaches it — the try's own normal exit
