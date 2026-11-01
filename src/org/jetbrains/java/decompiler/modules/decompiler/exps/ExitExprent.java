@@ -160,13 +160,17 @@ public class ExitExprent extends Exprent {
         }
 
         if (value instanceof SwitchExprent switchValue && RoundTrip.selector("switchpoly")
-            && !RoundTrip.isTypeVariableTarget(ret)) {
+            && (!RoundTrip.isTypeVariableTarget(ret) || lambdaReturn != null)) {
           // A switch expression in a return is target-typed: javac checks every yield against
           // the return type and emits no cast after the merge. The switch's own type is the
           // common supertype of the yields, which the printer would turn into a cast (and,
           // inside the arms, casts the target does not carry); print it against the return.
-          // A type-variable target is left alone: there javac infers the switch from the
-          // variable's upper bound, and an arm may need the spelled-out cast to conform.
+          // A type-variable target is left alone outside a lambda body: there javac infers the
+          // switch from the variable's upper bound, and an arm may need the spelled-out cast to
+          // conform. In a lambda body the functional return is the target the source's switch
+          // was inferred against, and the class file puts the implicit return of a bare switch
+          // on the last arm's line rather than on the body's first; print the body bare and let
+          // the arms keep whatever casts the target forces.
           switchValue.setPrintTarget(ret);
           buf.append(switchValue.toJava(indent));
         } else {
