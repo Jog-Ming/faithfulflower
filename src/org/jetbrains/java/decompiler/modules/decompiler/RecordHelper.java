@@ -318,8 +318,13 @@ public final class RecordHelper {
         // its annotation.
         memberName = DecompilerContext.getImportCollector().getNestedImportName(fieldType.value);
       }
+      // The member-name form must keep the signature's type arguments: replacing the whole type
+      // with a plain name would print the erased type the signature exists to name.
       VarType annotatedType = memberName == null ? fieldType
-        : new VarType(fieldType.type, fieldType.arrayDim, memberName);
+        : fieldType instanceof GenericType generic
+          ? new GenericType(generic.type, generic.arrayDim, memberName, generic.getParent(),
+              generic.getArguments(), generic.getWildcard())
+          : new VarType(fieldType.type, fieldType.arrayDim, memberName);
       buffer.appendCastTypeName(varArgComponent ? annotatedType.decreaseArrayDim() : annotatedType, annos, writtenAnnotations);
     } else {
       buffer.appendCastTypeName(varArgComponent ? fieldType.decreaseArrayDim() : fieldType);

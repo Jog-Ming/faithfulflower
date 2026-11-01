@@ -23,9 +23,27 @@ public class GenericFieldDescriptor {
     GenericsChecker checker = containingClassGenerics.getChecker();
 
     if (!checker.isProperlyBounded(type, realType)) {
+      // A class file's descriptor is the erasure of its signature by construction. When the
+      // signature names the very class the descriptor does, the lattice check compared a
+      // parameterized type with its raw form and rejected it (a nested generic type's own type
+      // parameter is the usual case), but the erasure equality proves the signature describes
+      // this field. Falling back to the descriptor would print an erased type, which never
+      // reproduces the original.
+      if (type.type == CodeType.OBJECT && realType.type == CodeType.OBJECT
+          && type.arrayDim == realType.arrayDim && type.value != null
+          && type.value.equals(realType.value)) {
+        return;
+      }
       DecompilerContext.getLogger().writeMessage("Mismatched field signature, expected: " + realType.value + ", actual: " + type.value, IFernflowerLogger.Severity.WARN);
       type = realType;
     }
+  }
+
+  /** Whether {@code descriptor} is the erasure of {@code signature} (JVM-mandated for a field). */
+  private static boolean sameErasure(VarType signature, VarType descriptor) {
+    return signature.type == CodeType.OBJECT && descriptor.type == CodeType.OBJECT
+      && signature.arrayDim == descriptor.arrayDim && signature.value != null
+      && signature.value.equals(descriptor.value);
   }
 
   //FIXME this is necessary because some places don't have other signature information,
@@ -37,6 +55,12 @@ public class GenericFieldDescriptor {
 
     if (type.type == CodeType.GENVAR) {
       return; // Impossible to verify
+    }
+
+    // The untyped check cannot judge a parameterization against its own raw erasure either; the
+    // descriptor equals that erasure for every valid class file, so the signature stays.
+    if (sameErasure(type, actualType)) {
+      return;
     }
 
     DecompilerContext.getLogger().writeMessage("Mismatched field signature, expected: " + type.value + ", actual: " + actualType.value, IFernflowerLogger.Severity.WARN);
