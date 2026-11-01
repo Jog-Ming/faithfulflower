@@ -1417,23 +1417,72 @@ public final class LineAlign {
         // lambda's implicit return on the line the expression ends on. That entry belongs to the
         // smallest offset alone; when the remaining entries split across lines the text really
         // did span them, and one merged line cannot hold it.
-        if (exact.size() > 1) {
-          int[] firstExact = null;
+        //
+        // The first instruction on the printed line normally carries the line the statement
+        // starts on, and the rest of the line follows it. javac may instead anchor that first
+        // instruction on the line the *previous* text ended on -- the load a call prints before
+        // its own text inherits the enclosing statement's line -- while a later instruction on
+        // the same printed line (the call's own invoke) names the next source line. The printed
+        // line then begins the later line, and the blank line between the two statements is paid
+        // only when the line anchors there. When the first instruction names the line above and
+        // entries after it agree on a later one, the earliest such later entry is the anchor;
+        // when those entries split across lines, one merged line cannot hold them. Any other
+        // shape keeps the earliest entry, which is where the text was written to start.
+        int[] firstExact = null;
+        for (int[] candidate : line.getValue()) {
+          if (candidate[1] != 0 && (firstExact == null || candidate[2] < firstExact[2])) {
+            firstExact = candidate;
+          }
+        }
+        int floor = previousExactTarget == null ? Integer.MIN_VALUE : previousExactTarget;
+        boolean splitByFirst = firstExact != null && previousExactTarget != null
+          && line.getKey() + firstExact[0] == floor;
+        boolean anchored = false;
+        int chosenTarget = 0;
+        int chosenShift = 0;
+        if (splitByFirst) {
           for (int[] candidate : line.getValue()) {
-            if (candidate[1] != 0 && (firstExact == null || candidate[2] < firstExact[2])) {
-              firstExact = candidate;
+            if (candidate[1] == 0) {
+              continue;
+            }
+            int target = line.getKey() + candidate[0];
+            if (target <= floor) {
+              continue;
+            }
+            if (!anchored || target < chosenTarget) {
+              anchored = true;
+              chosenTarget = target;
+              chosenShift = candidate[0];
             }
           }
-          int earliest = exact.iterator().next();
+        }
+        if (anchored) {
           for (int[] candidate : line.getValue()) {
-            if (candidate[1] != 0 && candidate != firstExact && candidate[0] != earliest) {
+            if (candidate[1] != 0 && candidate != firstExact && line.getKey() + candidate[0] > floor
+                && line.getKey() + candidate[0] != chosenTarget) {
               unmergeable.add(line.getKey());
               break;
             }
           }
         }
-        previousExactTarget = line.getKey() + exact.iterator().next();
-        add(shifts, conflicted, line.getKey(), exact.iterator().next());
+        else {
+          // The line starts where its first entry says. A differing entry belongs to the smallest
+          // offset alone -- a lambda's start marker or a call's own line -- and is tolerated; when
+          // the remaining entries split across lines the text really did span them.
+          if (exact.size() > 1) {
+            int earliest = exact.iterator().next();
+            for (int[] candidate : line.getValue()) {
+              if (candidate[1] != 0 && candidate != firstExact && candidate[0] != earliest) {
+                unmergeable.add(line.getKey());
+                break;
+              }
+            }
+          }
+          chosenShift = exact.iterator().next();
+          chosenTarget = line.getKey() + chosenShift;
+        }
+        previousExactTarget = chosenTarget;
+        add(shifts, conflicted, line.getKey(), chosenShift);
       }
       else {
         shifts.remove(line.getKey());
