@@ -478,6 +478,22 @@ public class NewExprent extends Exprent {
   }
 
   /**
+   * The line an array element starts on. An anonymous creation's allocation only inherits the
+   * enclosing initializer's line, while the class's own constructor is recorded where the source
+   * closed the creation's argument list — the element's line when its head was written on one
+   * line. A variable or constant carries no entry and keeps returning -1 through the table.
+   */
+  private static int elementLine(Exprent element) {
+    if (element instanceof NewExprent creation && creation.isAnonymous() && !creation.isLambda()) {
+      int line = creation.anonymousConstructorLine();
+      if (line >= 0) {
+        return line;
+      }
+    }
+    return RoundTrip.sourceLine(element);
+  }
+
+  /**
    * A type annotation recorded on this array-creation expression ({@code target_type 0x44}) whose
    * path descends one array level names the element type: the source wrote it between
    * {@code new} and the element type, as in {@code new @Nullable String[128]}.
@@ -911,7 +927,7 @@ public class NewExprent extends Exprent {
         // across lines; an equal or absent line is no evidence of a break.
         int arrayLine = RoundTrip.sourceLine(this);
         Exprent firstElement = lstArrayElements.get(0);
-        int firstLine = RoundTrip.sourceLine(firstElement);
+        int firstLine = elementLine(firstElement);
         // A variable or constant carries no line entry: its line is inherited from the statement,
         // so a gap from it to a later element proves nothing. Only an expression with its own
         // entry can anchor a break, on either side.
@@ -927,8 +943,8 @@ public class NewExprent extends Exprent {
           if (i > 0) {
             Exprent element = lstArrayElements.get(i);
             buf.append(",");
-            int previousLine = RoundTrip.sourceLine(lstArrayElements.get(i - 1));
-            int line = RoundTrip.sourceLine(element);
+            int previousLine = elementLine(lstArrayElements.get(i - 1));
+            int line = elementLine(element);
             if (previousOwnLine && hasOwnLine(element) && startsOnItsLine(element)
               && previousLine >= 0 && line > previousLine) {
               buf.appendLineSeparator().appendIndent(indent + 1);
