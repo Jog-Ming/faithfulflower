@@ -149,6 +149,13 @@ loop; score the whole goal set only after a batch of large gains.
 **Changing this interface means changing this block.** Any new, removed or renamed command, flag or
 default must be reflected here in the same change; an out-of-date usage block is a broken interface.
 
+The launcher rebuilds `devtools/build/libs/devtools-all.jar` only when a devtools source is newer
+than the jar, and it touches the jar after a *skipped* build to repair mtime-only changes. A jar
+built from an older tree can therefore look fresh forever: measurements then quietly run the old
+pipeline, and a verifier change appears to have vanished. If a pipeline change does not show up in
+the numbers, delete that jar (it is a build artifact) so the next call rebuilds it, and check the
+new jar's class for the expected code before trusting the run.
+
 `DEVTOOLS_NO_BUILD=1` skips the decompiler-jar freshness check, which every command otherwise runs.
 A read-only caller — a research agent compiling one class with the verifier's javac — sets it so a
 compile never rebuilds the jar a measuring agent is using: `DEVTOOLS_NO_BUILD=1 devtools/cli compile
