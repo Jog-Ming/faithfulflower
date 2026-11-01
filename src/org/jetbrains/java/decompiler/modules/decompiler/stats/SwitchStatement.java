@@ -698,7 +698,8 @@ public class SwitchStatement extends Statement {
             // every unmatched value there and the jump continues to the join — and the writer
             // records that jump on the label's line. Nothing else prints it.
             int target = defaultTargetOffset();
-            if (target >= 0 && RoundTrip.jumpTargetAt(target) >= 0 && !buf.hasBytecodeMapping(target)) {
+            if (target >= 0 && RoundTrip.jumpTargetAt(target) >= 0 && !buf.hasBytecodeMapping(target)
+                && !RoundTrip.loopBackEdge(this, target)) {
               buf.addBytecodeMapping(target);
             }
           }
