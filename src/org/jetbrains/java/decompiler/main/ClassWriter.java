@@ -2206,7 +2206,7 @@ public class ClassWriter implements StatementWriter {
             // declaration order the same way, and the context is the lambda's own method here.
             LocalDeclarationOrder.reorder(root);
             TextBuffer childBuf = root.toJava(indent);
-            childBuf.addBytecodeMapping(root.getDummyExit().bytecode);
+            mapFinalReturn(childBuf, root);
             buffer.append(childBuf, classWrapper.getClassStruct().qualifiedName, InterpreterUtil.makeUniqueKey(mt.getName(), mt.getDescriptor()));
           }
           catch (CancelationManager.CanceledException e) {
@@ -2561,7 +2561,7 @@ public class ClassWriter implements StatementWriter {
                 writeOrphanLambda(wrapper, methodWrapper, orphan, buffer, indent + 1);
               }
               if (!clInit || !endsWithLiftedInitializer(methodWrapper, wrapper)) {
-                code.addBytecodeMapping(root.getDummyExit().bytecode);
+                mapFinalReturn(code, root);
               }
               hideMethod = code.length() == 0 && (clInit || dInit || hideConstructor(node, init, throwsExceptions, paramCount, flags, mt));
               // javac puts a constructor's pc0 on its declaration line unless the body opens with
@@ -4473,6 +4473,30 @@ public class ClassWriter implements StatementWriter {
     }
 
     buffer.append('>');
+  }
+
+  /**
+   * Anchors the method's closing brace on the one instruction it stands for. javac places a void
+   * method's implicit return on the closing brace's own line, and the fold that removes the return
+   * from the body records its offset on the exit statement. That set also collects the early
+   * returns the fold removed elsewhere, whose lines are not the brace's; mapping them here would
+   * make the aligner pay the gap between them by joining the brace onto the statement above. Only
+   * the method's last instruction can be the return the brace replaces.
+   */
+  private static void mapFinalReturn(TextBuffer code, RootStatement root) {
+    java.util.BitSet exits = root.getDummyExit() == null ? null : root.getDummyExit().bytecode;
+    if (exits == null || exits.isEmpty()) {
+      return;
+    }
+    int last = exits.length() - 1;
+    if (!RoundTrip.isLastInstruction(last)) {
+      return;
+    }
+    // The mapping lands at the buffer's end, which is the closing brace's line. That overwrites
+    // a position an early print may have recorded for the same instruction, deliberately: when
+    // the body prints the exit as a `break` its text stands on the arm's line, and the return
+    // the instruction really is belongs to the brace.
+    code.addBytecodeMapping(last);
   }
 
   private static void appendFQClassNames(TextBuffer buffer, List<String> names) {

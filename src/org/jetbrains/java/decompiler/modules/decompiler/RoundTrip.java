@@ -1346,6 +1346,13 @@ public final class RoundTrip {
     return tailReturnCopyOffset(stat) >= 0;
   }
 
+  /** True when this instruction start is the last instruction of the method being written. */
+  public static boolean isLastInstruction(int offset) {
+    StructMethod method = currentMethod();
+    Integer last = method == null ? null : LAST_INSTRUCTION.get(method);
+    return last != null && last == offset;
+  }
+
   /** True when this exprent is a return at the method's last instruction. */
   public static boolean isMethodFinalReturn(Exprent exprent) {
     StructMethod method = currentMethod();
