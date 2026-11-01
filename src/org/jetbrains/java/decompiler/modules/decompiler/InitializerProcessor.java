@@ -681,7 +681,12 @@ public final class InitializerProcessor {
             return false;
           }
 
-          if (cl.hasField(fexpr.getName(), fexpr.getDescriptor().descriptorString)) {
+          // A reference read through another class's owner is not this class's field, even when
+          // the name and descriptor match one of its own: DEFAULT.spawnOverrides inside the
+          // builder's spawnOverrides initializer names the record's field, and treating it as the
+          // builder's made the initializer depend on a field it never reads.
+          if (fexpr.getClassname().equals(cl.qualifiedName)
+            && cl.hasField(fexpr.getName(), fexpr.getDescriptor().descriptorString)) {
             String key = InterpreterUtil.makeUniqueKey(fexpr.getName(), fexpr.getDescriptor().descriptorString);
             if (isStatic) {
               // If this field has been assigned to more than once, we can't assume it's safe to inline
