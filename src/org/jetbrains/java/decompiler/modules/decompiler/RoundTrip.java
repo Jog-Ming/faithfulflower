@@ -3289,7 +3289,52 @@ public final class RoundTrip {
     if (end < 0) {
       end = sourceLineEnd(before);
     }
-    return end >= 0 && start > end;
+    return (end >= 0 && start > end) || startsAfterPatternTest(before, after, start);
+  }
+
+  /**
+   * Whether a compound boolean operand begins the line after an instanceof pattern's test. A
+   * right-associative chain's right operand is a compound, and the entry at the chain's first
+   * instruction can name the statement's last line, hiding the break the source wrote before the
+   * operand. The pattern binding's own line is the line the test was written on, and the
+   * operand's leftmost call starting a line of its own on a later line proves the operand began
+   * there.
+   */
+  private static boolean startsAfterPatternTest(Exprent before, Exprent after, int start) {
+    if (!(after instanceof FunctionExprent compound)
+        || compound.getFuncType() != FunctionExprent.FunctionType.BOOLEAN_AND
+          && compound.getFuncType() != FunctionExprent.FunctionType.BOOLEAN_OR) {
+      return false;
+    }
+    int first = operandOwnOffset(after);
+    if (first < 0 || !lineStartsAt(first)) {
+      return false;
+    }
+    for (Exprent part : before.getAllExprents(true, true)) {
+      if (part instanceof FunctionExprent function
+          && function.getFuncType() == FunctionExprent.FunctionType.INSTANCEOF
+          && function.getLstOperands().size() >= 3
+          && function.getLstOperands().get(2) instanceof VarExprent var
+          && var.getLVT() != null) {
+        int test = lineAtOffset(var.getLVT().getStart());
+        if (test >= 0 && start > test) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /** The first instruction of the call that starts the operand's text, or -1. */
+  private static int operandOwnOffset(Exprent exprent) {
+    if (exprent instanceof InvocationExprent) {
+      return exprent.bytecode == null || exprent.bytecode.isEmpty()
+        ? -1 : exprent.bytecode.nextSetBit(0);
+    }
+    if (exprent instanceof FunctionExprent function && !function.getLstOperands().isEmpty()) {
+      return operandOwnOffset(function.getLstOperands().get(0));
+    }
+    return -1;
   }
 
   /**
