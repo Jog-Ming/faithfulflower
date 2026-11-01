@@ -40,6 +40,7 @@ public class TypeAnnotation {
   public static final int TYPE_ARG_METHOD_REF = 0x4B;
 
   private final int target;
+  private final int typeArgumentIndex;
   public final PathValue[] path;
   private final AnnotationExprent annotation;
 
@@ -61,9 +62,15 @@ public class TypeAnnotation {
   }
 
   public TypeAnnotation(int target, PathValue[] path, AnnotationExprent annotation) {
+    this(target, path, annotation, 0);
+  }
+
+  public TypeAnnotation(int target, PathValue[] path, AnnotationExprent annotation,
+                        int typeArgumentIndex) {
     this.target = target;
     this.path = path;
     this.annotation = annotation;
+    this.typeArgumentIndex = typeArgumentIndex;
   }
 
   public int getTargetType() {
@@ -72,6 +79,11 @@ public class TypeAnnotation {
 
   public int getIndex() {
     return target & 0xFFFF;
+  }
+
+  /** The type argument a cast-like target's annotation was written on. */
+  public int getTypeArgumentIndex() {
+    return typeArgumentIndex;
   }
 
   public boolean isTopLevel() {
@@ -210,6 +222,13 @@ public class TypeAnnotation {
         String name;
         if (node != null) {
           name = node.simpleName;
+        } else if (outermostNode == null) {
+          // The class is not part of this run's tree, so the dotted string carries no nesting
+          // information and its last segment alone can collide with a simple name the file
+          // already imports (fastutil's `Int2ObjectMap.Entry` beside `java.util.Map.Entry`).
+          // The import collector's answer is qualified exactly where the unannotated printer's
+          // name would be.
+          name = DecompilerContext.getImportCollector().getShortName(string);
         } else {
           int $ = clazz.indexOf("$");
           name = clazz.substring(clazz.lastIndexOf(".") + 1, $ > 0 ? $ : clazz.length());
@@ -229,7 +248,7 @@ public class TypeAnnotation {
             RoundTrip.selector("typeuse") && i == fullClasses.size() - 1);
         }
 
-        buffer.appendClass(name, false, clazz.replace(".", "/"));
+        buffer.appendClass(name, false, node == null ? type.value : clazz.replace(".", "/"));
       }
 
       // Write generic parameters if the type is generic. Go through the arguments and recurse on the types there.

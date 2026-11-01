@@ -47,6 +47,7 @@ public class StructTypeAnnotationAttribute extends StructGeneralAttribute {
     int targetType = data.readUnsignedByte();
     int target = targetType << 24;
     int[] localRows = null;
+    int typeArgument = 0;
 
     switch (targetType) {
       case TypeAnnotation.CLASS_TYPE_PARAMETER:
@@ -72,7 +73,10 @@ public class StructTypeAnnotationAttribute extends StructGeneralAttribute {
       case TypeAnnotation.TYPE_ARG_METHOD_CALL:
       case TypeAnnotation.TYPE_ARG_CONSTRUCTOR_REF:
       case TypeAnnotation.TYPE_ARG_METHOD_REF:
-        data.skipBytes(3);
+        // The target is an instruction offset and the index of the type argument the annotation
+        // was written on; the printer needs both to place it in the cast's own type.
+        target |= data.readUnsignedShort();
+        typeArgument = data.readUnsignedByte();
         break;
 
       case TypeAnnotation.LOCAL_VARIABLE:
@@ -103,7 +107,7 @@ public class StructTypeAnnotationAttribute extends StructGeneralAttribute {
 
     AnnotationExprent annotation = StructAnnotationAttribute.parseAnnotation(data, pool);
 
-    annotations.add(new TypeAnnotation(target, path, annotation));
+    annotations.add(new TypeAnnotation(target, path, annotation, typeArgument));
 
     if (localRows != null) {
       for (int i = 0; i < localRows.length; i += 3) {

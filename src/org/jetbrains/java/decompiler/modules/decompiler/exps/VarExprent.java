@@ -134,10 +134,10 @@ public class VarExprent extends Exprent implements Pattern {
    */
   private List<Pair<java.util.Queue<TypeAnnotation.PathValue>, AnnotationExprent>> localTypeAnnotations() {
     MethodWrapper method = (MethodWrapper) DecompilerContext.getContextProperty(DecompilerContext.CURRENT_METHOD_WRAPPER);
-    if (method == null || method.methodStruct == null || bytecode == null || bytecode.isEmpty()) {
+    if (method == null || method.methodStruct == null) {
       return java.util.Collections.emptyList();
     }
-    int offset = bytecode.nextSetBit(0);
+    int offset = bytecode == null || bytecode.isEmpty() ? -1 : bytecode.nextSetBit(0);
     int slot = index;
     if (processor != null) {
       Integer original = processor.getVarOriginalIndex(index);
@@ -159,14 +159,24 @@ public class VarExprent extends Exprent implements Pattern {
         // javac opens the annotated scope at the instruction after the initializing store: the
         // range start minus the store's own length is that store's offset. The store is not
         // always the one-byte local form (astore_2); an index above three makes it two bytes,
-        // and a wide one four.
+        // and a wide one four. The declaration's own table row starts where the annotated scope
+        // does when no store anchors it -- a declaration without an initializer has no
+        // instruction of its own, and a for-each variable's recorded offset is the iterator
+        // load, not its store.
         boolean matches;
-        if (RoundTrip.selector("typeuse")) {
-          matches = local.index() == slot && local.startPc() == offset + storeLength(method, offset);
+        if (RoundTrip.selector("typeuse") && offset >= 0
+            && local.index() == slot && local.startPc() == offset + storeLength(method, offset)) {
+          matches = true;
+        }
+        else if (local.index() == slot && lvt != null && local.startPc() == lvt.getStart()) {
+          matches = true;
+        }
+        else if (!RoundTrip.selector("typeuse")) {
+          matches = offset >= 0 && local.index() == slot && offset >= local.startPc() - 1
+            && offset < local.startPc() + local.length();
         }
         else {
-          matches = local.index() == slot && offset >= local.startPc() - 1
-            && offset < local.startPc() + local.length();
+          matches = false;
         }
         if (!matches) {
           continue;

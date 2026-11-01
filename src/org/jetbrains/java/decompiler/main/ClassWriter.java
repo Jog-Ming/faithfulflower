@@ -1915,7 +1915,8 @@ public class ClassWriter implements StatementWriter {
       if (!VarType.VARTYPE_OBJECT.equals(supertype)) {
         buffer.appendPossibleNewline(" ");
         buffer.append("extends ");
-        buffer.appendCastTypeName(descriptor == null ? supertype : descriptor.superclass);
+        VarType written = descriptor == null ? supertype : descriptor.superclass;
+        appendSupertypeName(buffer, cl, written, TypeAnnotation.SUPER_TYPE_REFERENCE, 0xFFFF);
       }
     }
 
@@ -1931,7 +1932,9 @@ public class ClassWriter implements StatementWriter {
           }
 
           if (descriptor == null || descriptor.superinterfaces.size() > i) {
-            buffer.appendCastTypeName(descriptor == null ? new VarType(cl.getInterface(i), true) : descriptor.superinterfaces.get(i));
+            VarType written = descriptor == null ? new VarType(cl.getInterface(i), true)
+              : descriptor.superinterfaces.get(i);
+            appendSupertypeName(buffer, cl, written, TypeAnnotation.SUPER_TYPE_REFERENCE, i);
           }
         }
       }
@@ -4515,6 +4518,26 @@ public class ClassWriter implements StatementWriter {
       }
     }
     return result;
+  }
+
+  /**
+   * Writes one written supertype with the type-use annotations its target carries.
+   *
+   * <p>A {@code SUPER_TYPE_REFERENCE} target numbers the written supertypes as the class file
+   * does: 65535 is the superclass and 0..n-1 are the interfaces in declaration order. The
+   * annotations live in the same attribute as a member's, so the class's own attribute is the
+   * source.
+   */
+  private static void appendSupertypeName(TextBuffer buffer, StructClass owner, VarType type,
+                                          int targetType, int index) {
+    List<Pair<Queue<TypeAnnotation.PathValue>, AnnotationExprent>> annotations =
+      getTypeAnnotations(owner, targetType, index);
+    if (annotations.isEmpty()) {
+      buffer.appendCastTypeName(type);
+    }
+    else {
+      buffer.appendCastTypeName(type, annotations, Collections.emptySet());
+    }
   }
 
   public static List<Pair<Queue<TypeAnnotation.PathValue>, AnnotationExprent>> getTypeAnnotations(StructMember mb, int targetType, int index) {
