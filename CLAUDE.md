@@ -64,6 +64,10 @@ allowed to change as the work does.
   compile caches from scratch and its numbers are not comparable with the ones in the reports. To
   read an earlier revision of a file, use `git show <rev>:<path>`; to measure a variant, edit the
   main working tree, measure, and revert with `git checkout -- <path>`.
+- **`.dev` is disposable.** It is not tracked by git, so nothing under it may be the only copy of a
+  fact: scratch trees, briefs, reports and dumps there are working state and may be deleted at any
+  time. Durable notes — mechanisms, numbers, blocked token pairs — belong in this file or in memory,
+  never only in a file under `.dev`.
 - **A subagent's tool calls never prompt the user for approval.** A wave of agents that each stop on a
   permission dialog buries the user. The brief must name only paths and commands the agent can run
   without a prompt — reading, grepping, the project's own scripts under `.dev/tmp` — and must state
