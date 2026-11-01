@@ -417,6 +417,36 @@ public class NewExprent extends Exprent {
   }
 
   /**
+   * Whether the creation prints its head as one token run ending in an empty argument list:
+   * {@code new T()} whose recorded constructor parameters are all synthetic captures the printer
+   * masks. Only then does the line javac records for the anonymous class's implicit constructor —
+   * where the source closed that empty list — also name the line the {@code new} token sits on.
+   */
+  public boolean printsHeadWithoutArguments() {
+    if (constructor == null || isEnumConst()) {
+      return false;
+    }
+    List<Exprent> parameters = constructor.getLstParameters();
+    if (parameters.isEmpty()) {
+      return true;
+    }
+    if (!anonymous || lambda) {
+      return false;
+    }
+    List<VarVersionPair> mask = ExprUtil.getSyntheticParametersMask(newType.value,
+      constructor.getStringDescriptor(), parameters.size());
+    if (mask == null) {
+      return false;
+    }
+    for (int i = 0; i < parameters.size(); i++) {
+      if (i >= mask.size() || mask.get(i) == null) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
    * The implicit constructor of the anonymous class this creation allocates, or null. A lambda is
    * an anonymous class too, but its code lives in the enclosing class file, and that file's
    * constructors say nothing about the lambda's line.

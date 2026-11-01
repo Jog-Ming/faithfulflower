@@ -1998,6 +1998,13 @@ public class InvocationExprent extends Exprent {
         // entry of its own; without one the line stays unknown.
         if (created.isMethodReference()) {
           line = RoundTrip.sourceLineEnd(created);
+        } else if (created.isAnonymous() && !created.isLambda()) {
+          // An anonymous class's head is the `new` and its masked captures. Its implicit
+          // constructor is recorded on the line the source closed the argument list on, which is
+          // the head's line when that list printed empty; with argument text of its own the
+          // start is unknown, and the chain's later invokes say where the text ended, not began.
+          line = created.printsHeadWithoutArguments() ? created.anonymousConstructorLine() : -1;
+          creationHead = true;
         } else if (creationTextProved(created)) {
           line = creationCallLine(created);
           creationHead = true;
