@@ -635,12 +635,35 @@ public class SwitchStatement extends Statement {
           }
         }
         buf.append(" ->");
+        boolean emptyArrowBlock = false;
         if (emptyArrowArm) {
-          buf.append(" {}");
+          // An empty rule's implicit break is a jump the table records; when it starts a line of
+          // its own the source closed a block there, and the brace takes the jump's row.
+          int emptyJump = armBreakJump(stat, edges, switchEnd);
+          if (emptyJump < 0 && edges.stream().anyMatch(edge -> edge == defaultEdge)) {
+            // The empty default's implicit break is the jump the table's default target names;
+            // that jump can be its own landing when a later jump carries the flow on.
+            int target = defaultTargetOffset();
+            if (target >= 0 && RoundTrip.jumpTargetAt(target) >= 0) {
+              emptyJump = target;
+            }
+          }
+          emptyArrowBlock = emptyJump >= 0 && RoundTrip.lineStartsAt(emptyJump);
+          if (emptyArrowBlock) {
+            buf.append(" {").appendLineSeparator();
+            TextBuffer close = new TextBuffer();
+            close.appendIndent(indent + 1).append("}");
+            close.addBytecodeMappingAt(close.length(), emptyJump, null, null);
+            buf.append(close).appendLineSeparator();
+          } else {
+            buf.append(" {}");
+          }
         } else if (braced.contains(stat) || arrowBlocks.contains(stat) || arrowDefaultBlock) {
           buf.append(" {");
         }
-        buf.appendLineSeparator();
+        if (!emptyArrowBlock) {
+          buf.appendLineSeparator();
+        }
         if (emptyArrowArm) {
           continue;
         }
