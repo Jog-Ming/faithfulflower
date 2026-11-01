@@ -10,6 +10,7 @@ import org.jetbrains.java.decompiler.modules.decompiler.exps.ExitExprent;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.Exprent;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.FieldExprent;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.FunctionExprent;
+import org.jetbrains.java.decompiler.modules.decompiler.exps.IfExprent;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.InvocationExprent;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.NewExprent;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.VarExprent;
@@ -95,6 +96,7 @@ public final class LocalDeclarationOrder {
     } else if (stat instanceof IfStatement ifStatement) {
       if (!mergeChainDeclarations(ifStatement, names, method)) {
         mergeArmDeclarations(ifStatement, names, method);
+        hoistArmDeclarations(ifStatement, method);
       }
     } else if (stat instanceof CatchAllStatement tryStatement) {
       placeInsideFinally(tryStatement, names, method);
@@ -242,6 +244,152 @@ public final class LocalDeclarationOrder {
     elseVar.setDefinition(false);
     insertByTargetSlot(ifStatement.getVarDefinitions(), declaration);
     debug(method, thenVar, "merged the arm declarations above the if: a row ends past it");
+  }
+
+  /**
+   * Hoists a declaration printed inside an if arm into the enclosing block when the target's
+   * table proves the source wrote it there. javac ends a nested block's slots before the
+   * enclosing block's and closes one scope's slots in a rising-slot pass, so a local declared in
+   * the arm closes its row ahead of every enclosing row; one whose row closes with the enclosing
+   * block's rows and follows them shares their scope. The source declared the local bare before
+   * the test and only assigned it inside the arm.
+   */
+  private static void hoistArmDeclarations(IfStatement ifStatement, String method) {
+    Statement body = ifStatement.getIfstat();
+    Statement parent = ifStatement.getParent();
+    int testStart = RoundTrip.firstOffset(ifStatement);
+    if (body == null || parent == null || testStart < 0
+        || !parent.getStats().contains(ifStatement)) {
+      return;
+    }
+    // The test's last branch lands at or before the arm when the source wrote a guard and the arm
+    // stands after it (`if (!C) { return; } rest`); the printer then hoists the arm out of the
+    // braces itself, and a declaration in it already prints in the enclosing block after the
+    // guard. A normal test branches past the arm, so only the guard shape is refused here.
+    IfExprent head = ifStatement.getHeadexprent();
+    int armStart = RoundTrip.firstOffset(body);
+    int branch = head == null ? -1 : RoundTrip.lastBranchTarget(head);
+    if (branch >= 0 && branch <= armStart) {
+      return;
+    }
+    while (true) {
+      List<LocatedDef> definitions = new ArrayList<>();
+      collectDefinitions(body, definitions);
+      LocatedDef candidate = null;
+      VarExprent var = null;
+      for (LocatedDef definition : definitions) {
+        VarExprent defined = definedVar(definition.exprent());
+        if (defined != null && isRealDefinition(defined) && defined.getLVT() != null) {
+          candidate = definition;
+          var = defined;
+          break;
+        }
+      }
+      if (var == null || RoundTrip.firstDefinedLvt(body) != var.getLVT()
+          || !RoundTrip.sharesEnclosingScope(body, testStart)) {
+        return;
+      }
+      // The declaration widens into the test's own head, so a field or another local the block
+      // names must not share the name it would capture.
+      if (mentionsField(parent, var.getName()) || mentionsOtherName(parent, var)) {
+        debug(method, var, "rejected: hoisted arm declaration would capture a name");
+        return;
+      }
+      Exprent declaration;
+      if (candidate.exprent() == var) {
+        removeIdentity(candidate.list(), var);
+        var.bytecode = null;
+        declaration = var;
+      } else {
+        declaration = var.copy();
+        declaration.bytecode = null;
+        var.setDefinition(false);
+      }
+      insertByTargetSlot(armInsertionList(parent, ifStatement), declaration);
+      debug(method, var, "hoisted an arm declaration: its row closes with the enclosing block");
+    }
+  }
+
+  /**
+   * The list a declaration hoisted out of an arm prints from: the last declaration site before
+   * the test that prints at the enclosing block's level. The child's own head prints just before
+   * its test, after every preceding sibling, so it is the last candidate. A sibling's nested body
+   * prints inside its own construct, where the hoisted local would leave the enclosing scope, so
+   * only the sibling's own definitions, its exprents, and an if's head are taken.
+   */
+  private static List<Exprent> armInsertionList(Statement seq, Statement child) {
+    List<List<Exprent>> candidates = new ArrayList<>();
+    candidates.add(seq.getVarDefinitions());
+    for (Statement sibling : siblingsBefore(seq.getStats(), child)) {
+      candidates.add(sibling.getVarDefinitions());
+      if (sibling instanceof IfStatement siblingIf && siblingIf.getFirst() != null) {
+        candidates.add(siblingIf.getFirst().getVarDefinitions());
+        candidates.add(siblingIf.getFirst().getExprents());
+      }
+      candidates.add(sibling.getExprents());
+    }
+    if (child instanceof IfStatement childIf && childIf.getFirst() != null) {
+      candidates.add(childIf.getFirst().getVarDefinitions());
+      candidates.add(childIf.getFirst().getExprents());
+    }
+    List<Exprent> best = seq.getVarDefinitions();
+    int bestSlot = -1;
+    for (List<Exprent> candidate : candidates) {
+      if (candidate == null) {
+        continue;
+      }
+      int slot = -1;
+      for (Exprent definition : candidate) {
+        slot = Math.max(slot, targetSlot(definition));
+      }
+      if (slot >= bestSlot && slot >= 0) {
+        bestSlot = slot;
+        best = candidate;
+      }
+    }
+    return best;
+  }
+
+  /** True when another variable printed in this scope carries the same name. */
+  private static boolean mentionsOtherName(Statement scope, VarExprent target) {
+    for (Exprent exprent : scope.getVarDefinitions()) {
+      if (mentionsOtherName(exprent, target)) {
+        return true;
+      }
+    }
+    List<Exprent> exprents = scope.getExprents();
+    if (exprents != null) {
+      for (Exprent exprent : exprents) {
+        if (mentionsOtherName(exprent, target)) {
+          return true;
+        }
+      }
+    }
+    for (Exprent exprent : scope.getStatExprents()) {
+      if (exprent != null && mentionsOtherName(exprent, target)) {
+        return true;
+      }
+    }
+    for (Statement child : scope.getStats()) {
+      if (mentionsOtherName(child, target)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private static boolean mentionsOtherName(Exprent exprent, VarExprent target) {
+    if (exprent == null) {
+      return false;
+    }
+    for (Exprent inner : exprent.getAllExprents(true, true)) {
+      if (inner instanceof VarExprent var && !var.isStack()
+          && var.getName().equals(target.getName())
+          && !var.getVarVersionPair().equals(target.getVarVersionPair())) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**
