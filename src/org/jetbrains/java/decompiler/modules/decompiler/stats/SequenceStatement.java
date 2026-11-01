@@ -1891,17 +1891,53 @@ public class SequenceStatement extends Statement {
         }
       }
 
+      // The same brace can start inside the current statement: its middle declares the first
+      // local of a run that closes where the sequence ends, so the block wraps the rest of the
+      // statement and every statement after it.
+      int exprentFrom = RoundTrip.trailingBlockFromExprents(stats, i, this);
+      if (exprentFrom >= 0) {
+        java.util.List<Exprent> runExprents = st.getExprents();
+        buf.append(ExprProcessor.listToJava(st.getVarDefinitions(), indent));
+        buf.append(ExprProcessor.listToJava(runExprents.subList(0, exprentFrom), indent));
+        buf.appendIndent(indent).append("{").appendLineSeparator();
+        buf.append(ExprProcessor.listToJava(runExprents.subList(exprentFrom, runExprents.size()), indent + 1));
+        for (int k = i + 1; k < stats.size(); k++) {
+          buf.append(ExprProcessor.jmpWrapper(stats.get(k), indent + 1, k == i + 1));
+        }
+        buf.appendIndent(indent).append("}").appendLineSeparator();
+        notempty = true;
+        break;
+      }
+
       // The target's table proves the source braced the rest of this block: the run's first local
       // closes with the sequence, while every row that opened before the run was written after it
       // — a nested block closes before its enclosing one, and a flat run shares the rising-slot
       // pass, where the earlier-allocated enclosing row comes first.
-      int braceAt = RoundTrip.trailingBareBlock(stats, i, this);
-      if (braceAt >= 0) {
+      int[] braceRun = RoundTrip.trailingBareBlock(stats, i, this);
+      if (braceRun != null) {
+        int headAt = braceRun[2];
         buf.appendIndent(indent).append("{").appendLineSeparator();
-        for (int k = braceAt; k < stats.size(); k++) {
-          buf.append(ExprProcessor.jmpWrapper(stats.get(k), indent + 1, k == braceAt));
+        for (int k = braceRun[0]; k < braceRun[1]; k++) {
+          buf.append(ExprProcessor.jmpWrapper(stats.get(k), indent + 1, k == braceRun[0]));
+        }
+        if (headAt >= 0) {
+          // The brace closes after the next if's head exprents: print them inside it, then the
+          // test and arms where the source wrote them.
+          Statement branch = stats.get(headAt);
+          buf.append(ExprProcessor.listToJava(branch.getVarDefinitions(), indent + 1));
+          buf.append(branch.getFirst().toJava(indent + 1));
         }
         buf.appendIndent(indent).append("}").appendLineSeparator();
+        if (headAt >= 0) {
+          RoundTrip.consumeHead(stats.get(headAt));
+          for (int k = headAt; k < stats.size(); k++) {
+            buf.append(ExprProcessor.jmpWrapper(stats.get(k), indent, false));
+          }
+        } else {
+          for (int k = braceRun[1]; k < stats.size(); k++) {
+            buf.append(ExprProcessor.jmpWrapper(stats.get(k), indent, false));
+          }
+        }
         notempty = true;
         break;
       }

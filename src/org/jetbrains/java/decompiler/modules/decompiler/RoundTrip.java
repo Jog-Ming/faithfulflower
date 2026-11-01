@@ -721,8 +721,124 @@ public final class RoundTrip {
    * ahead of every enclosing row. The run is the whole tail, so only the sequence's end is in
    * question; a row opening inside the run says nothing about the enclosing block.
    */
-  public static int trailingBareBlock(java.util.List<Statement> children, int i, Statement owner) {
+  public static int[] trailingBareBlock(java.util.List<Statement> children, int i, Statement owner) {
     if (!selector("blockbrace") || children == null || owner == null || i < 0 || i >= children.size()) {
+      return null;
+    }
+    StructMethod method = currentMethod();
+    StructLocalVariableTableAttribute table =
+      method == null ? null : method.getAttribute(StructGeneralAttribute.ATTRIBUTE_LOCAL_VARIABLE_TABLE);
+    if (table == null) {
+      return null;
+    }
+    // A run that starts after earlier statements is a block inside them: whatever prints the
+    // sequence (a method body, a try body, an arm) opened its brace before the run. A run that
+    // opens the sequence is only the source's own block when the sequence is the method body;
+    // anywhere else that brace is the enclosing construct's, and the printer already writes it.
+    if (i == 0 && !(owner.getParent() instanceof RootStatement)) {
+      return null;
+    }
+    // A sequence holding one basic block prints its exprents itself, and the block printer reads
+    // the same table at exprent granularity; two braces around one run would nest them.
+    if (children.size() == 1 && children.get(0).type == Statement.StatementType.BASIC_BLOCK) {
+      return null;
+    }
+    Statement firstStat = children.get(i);
+    LocalVariable first = closingRange(table.getVariables().toList(), firstPrefixLocal(firstStat));
+    int childStart = firstOffset(firstStat);
+    int close = lastEnd(owner);
+    if (first == null || first.getStart() <= 0 || childStart < 0 || close < 0
+        || first.getStart() < childStart) {
+      return null;
+    }
+    if (first.getEnd() == close) {
+      for (int k = i; k < children.size(); k++) {
+        if (lastEnd(children.get(k)) > close) {
+          return null;
+        }
+      }
+      ImplicitVars implicit = enclosingImplicitVars(firstStat);
+      int flat = 0;
+      int nested = 0;
+      for (LocalVariable row : table.getVariables().toList()) {
+        if (row.getOrder() < 0 || row.getStart() >= childStart || row.getEnd() != close
+            || implicit != null && implicit.matches(row)) {
+          continue;
+        }
+        if (row.getOrder() < first.getOrder()) {
+          flat++;
+        } else if (row.getOrder() > first.getOrder()) {
+          nested++;
+        }
+      }
+      return flat == 0 && nested > 0 ? new int[]{i, children.size(), -1} : null;
+    }
+    // The run's first local closes before the sequence's own block does. A local declared at the
+    // run's own level cannot do that unless the source braced a block around it, so the row's end
+    // is the brace. The block holds whole statements up to that offset; a boundary inside a
+    // statement can only be the head exprents of an if, which the caller prints and consumes.
+    int end = first.getEnd();
+    if (end <= 0 || end >= close) {
+      return null;
+    }
+    int j = i;
+    while (j + 1 < children.size() && lastEnd(children.get(j + 1)) <= end) {
+      j++;
+    }
+    int runEnd = j + 1;
+    int headChild = -1;
+    if (runEnd < children.size()) {
+      Statement next = children.get(runEnd);
+      if (firstOffset(next) < end) {
+        if (!(next instanceof IfStatement branch) || branch.isLabeled() || branch.isPatternMatched()
+            || isHeadConsumed(branch) || branch.getFirst() == null
+            || lastEnd(branch.getFirst()) != end || firstOffset(branch.getFirst()) >= end) {
+          return null;
+        }
+        headChild = runEnd;
+      } else if (lastEnd(children.get(j)) != end) {
+        return null;
+      }
+    } else if (lastEnd(children.get(j)) != end) {
+      return null;
+    }
+    ImplicitVars implicit = enclosingImplicitVars(firstStat);
+    for (LocalVariable row : table.getVariables().toList()) {
+      if (row.getOrder() < 0 || row.getStart() >= childStart
+          || implicit != null && implicit.matches(row)) {
+        continue;
+      }
+      if (row.getEnd() == end && row.getOrder() < first.getOrder()) {
+        return null;
+      }
+    }
+    return new int[]{i, runEnd, headChild};
+  }
+
+  /**
+   * The index of the exprent the source's brace stood before, inside the sequence's current
+   * child, or -1. The same row-order proof as the child-granularity case applies, but the run
+   * starts at a declaration in the middle of a basic block and closes where the sequence's
+   * printed content ends: the local's row closes with the sequence, while every row that opened
+   * before the run was written after it. A block that starts inside a statement cannot be
+   * printed by the child-granularity rule, and the caller wraps the child's remaining exprents
+   * together with the statements after it.
+   */
+  public static int trailingBlockFromExprents(java.util.List<Statement> children, int i, Statement owner) {
+    if (!selector("blockbrace") || children == null || owner == null || i < 0 || i >= children.size()) {
+      return -1;
+    }
+    Statement st = children.get(i);
+    if (st.type != Statement.StatementType.BASIC_BLOCK || st.isLabeled()) {
+      return -1;
+    }
+    // A run that opens the sequence is only the source's own block when the sequence is the
+    // method body; anywhere else that brace is the enclosing construct's.
+    if (i == 0 && !(owner.getParent() instanceof RootStatement)) {
+      return -1;
+    }
+    java.util.List<Exprent> exprents = st.getExprents();
+    if (exprents == null || exprents.size() < 2) {
       return -1;
     }
     StructMethod method = currentMethod();
@@ -731,46 +847,27 @@ public final class RoundTrip {
     if (table == null) {
       return -1;
     }
-    // A run that starts after earlier statements is a block inside them: whatever prints the
-    // sequence (a method body, a try body, an arm) opened its brace before the run. A run that
-    // opens the sequence is only the source's own block when the sequence is the method body;
-    // anywhere else that brace is the enclosing construct's, and the printer already writes it.
-    if (i == 0 && !(owner.getParent() instanceof RootStatement)) {
-      return -1;
-    }
-    // A sequence holding one basic block prints its exprents itself, and the block printer reads
-    // the same table at exprent granularity; two braces around one run would nest them.
-    if (children.size() == 1 && children.get(0).type == Statement.StatementType.BASIC_BLOCK) {
-      return -1;
-    }
-    Statement firstStat = children.get(i);
-    LocalVariable first = closingRange(table.getVariables().toList(), firstPrefixLocal(firstStat));
-    int childStart = firstOffset(firstStat);
     int close = lastEnd(owner);
-    if (first == null || first.getStart() <= 0 || childStart < 0 || close < 0
-        || first.getStart() < childStart || first.getEnd() != close) {
+    if (close < 0) {
       return -1;
     }
-    for (int k = i; k < children.size(); k++) {
-      if (lastEnd(children.get(k)) > close) {
-        return -1;
-      }
-    }
-    ImplicitVars implicit = enclosingImplicitVars(firstStat);
-    int flat = 0;
-    int nested = 0;
-    for (LocalVariable row : table.getVariables().toList()) {
-      if (row.getOrder() < 0 || row.getStart() >= childStart || row.getEnd() != close
-          || implicit != null && implicit.matches(row)) {
+    java.util.List<LocalVariable> rows = table.getVariables().toList();
+    ImplicitVars implicit = enclosingImplicitVars(st);
+    for (int a = 0; a < exprents.size(); a++) {
+      int s1 = lastEndOf(exprents.get(a));
+      if (s1 <= 0 || s1 >= close) {
         continue;
       }
-      if (row.getOrder() < first.getOrder()) {
-        flat++;
-      } else if (row.getOrder() > first.getOrder()) {
-        nested++;
+      for (LocalVariable row : rows) {
+        if (row.getStart() != s1 || row.getEnd() != close) {
+          continue;
+        }
+        if (rowOrderProvesBlock(rows, row, s1, close, close, implicit)) {
+          return a;
+        }
       }
     }
-    return flat == 0 && nested > 0 ? i : -1;
+    return -1;
   }
 
   /**
@@ -10874,6 +10971,12 @@ public final class RoundTrip {
   private static int blockPrintEnd(List<Exprent> exprents) {
     int max = -1;
     for (Exprent exprent : exprents) {
+      // A folded method-final return stands for the method's exit, not for this list's last
+      // statement: every local's scope ends at the enclosing brace, before that instruction.
+      // Counting it would make a flat run look like it closed before the list's own end.
+      if (isMethodFinalReturn(exprent)) {
+        continue;
+      }
       int end = printedEnd(exprent);
       if (end > max) {
         max = end;
