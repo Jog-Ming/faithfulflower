@@ -48,6 +48,9 @@ public class TextBuffer {
   private final StringBuilder myStringBuilder;
   private Map<Integer, Integer> myLineToOffsetMapping = null;
   private final Map<BytecodeMappingKey, Integer> myBytecodeOffsetMapping = new LinkedHashMap<>(); // bytecode offset -> offset in text
+  // Positions the line aligner uses that are not evidence for the constant-name pass: an anchor
+  // the aligner needs must not join that pass's pool-order model.
+  private final Map<BytecodeMappingKey, Integer> myAlignOnlyMapping = new LinkedHashMap<>(); // bytecode offset -> offset in text
   private final List<ClassRegion> myClassRegions = new ArrayList<>(); // text ranges a nested class was printed into
   private final Deque<ClassRegion> myOpenClassRegions = new ArrayDeque<>();
   private final DebugTrace myDebugTrace = DecompilerContext.getOption(IFernflowerPreferences.UNIT_TEST_MODE) ? new DebugTrace(this) : null;
@@ -351,6 +354,28 @@ public class TextBuffer {
   }
 
   /**
+   * Records a position for the line aligner only. The constant-name pass rebuilds javac's pool
+   * order from the printed positions, and an anchor whose text is not where the target's table
+   * says it sits would move the model's nearest-item point; the aligner still needs the anchor,
+   * so it is kept out of {@link #getBytecodePositions()}.
+   */
+  public void addAlignOnlyBytecodeMapping(int bytecodeOffset) {
+    if (myDebugTrace != null) {
+      myDebugTrace.myPreventDeletion = true;
+    }
+    myAlignOnlyMapping.put(new BytecodeMappingKey(bytecodeOffset, null, null), myStringBuilder.length());
+  }
+
+  public void addAlignOnlyBytecodeMapping(BitSet bytecodeOffsets) {
+    if (bytecodeOffsets == null) {
+      return;
+    }
+    for (int i = bytecodeOffsets.nextSetBit(0); i >= 0; i = bytecodeOffsets.nextSetBit(i + 1)) {
+      addAlignOnlyBytecodeMapping(i);
+    }
+  }
+
+  /**
    * Whether an earlier print already placed this offset in this buffer. A closing brace anchors
    * the jump the source's block ended with, but a statement the block printed (a written
    * `continue;`) owns that jump and its line; the brace must not claim it.
@@ -463,7 +488,9 @@ public class TextBuffer {
       newlineOffsets.add(i);
     }
     Map<Pair<String, String>, BytecodeMappingTracer> tracers = new LinkedHashMap<>();
-    myBytecodeOffsetMapping.forEach((key, textOffset) -> {
+    Map<BytecodeMappingKey, Integer> all = new LinkedHashMap<>(myBytecodeOffsetMapping);
+    all.putAll(myAlignOnlyMapping);
+    all.forEach((key, textOffset) -> {
       if (key.myClass == null) {
         throw new IllegalStateException("getTracers called when not all bytecode offsets have a valid class and method");
       }
@@ -605,6 +632,7 @@ public class TextBuffer {
     reformatGroup(myRootGroup, offsetMapping, 0);
 
     myBytecodeOffsetMapping.replaceAll((key, value) -> value + offsetMapping.get(value));
+    myAlignOnlyMapping.replaceAll((key, value) -> value + offsetMapping.get(value));
     for (ClassRegion region : myClassRegions) {
       int start = region.myStart;
       int end = region.myEnd;
@@ -802,6 +830,12 @@ public class TextBuffer {
       }
       myBytecodeOffsetMapping.putIfAbsent(key, value + myStringBuilder.length());
     });
+    buffer.myAlignOnlyMapping.forEach((key, value) -> {
+      if (key.myClass == null) {
+        key = new BytecodeMappingKey(key.myBytecodeOffset, className, methodKey);
+      }
+      myAlignOnlyMapping.putIfAbsent(key, value + myStringBuilder.length());
+    });
     NewlineGroup otherRoot = buffer.myRootGroup.copy();
     otherRoot.shift(myStringBuilder.length());
     myCurrentGroup.myReplacements.addAll(otherRoot.myReplacements);
@@ -849,6 +883,7 @@ public class TextBuffer {
     // `return` of an expression body). The text it referred to is gone, so the mapping belongs
     // at the new start; a negative position would resolve inside the preceding text instead.
     myBytecodeOffsetMapping.replaceAll((key, value) -> Math.max(0, value + shiftOffset));
+    myAlignOnlyMapping.replaceAll((key, value) -> Math.max(0, value + shiftOffset));
     myRootGroup.shift(shiftOffset);
   }
 

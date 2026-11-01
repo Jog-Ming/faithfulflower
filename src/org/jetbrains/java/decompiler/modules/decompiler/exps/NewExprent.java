@@ -648,6 +648,16 @@ public class NewExprent extends Exprent {
         // is the fallback. A body line later than this one is a break the source had.
         int callLine = Math.max(InvocationExprent.argumentTextStartLine(),
           InvocationExprent.enclosingCallLine());
+        // The target records the lambda's creation on the call's line when the source wrote them
+        // together, and the lambda's own text never maps it; the table-entry gate keeps a lambda
+        // whose creation the target puts on another line from being pulled to the call's. The
+        // anchor is for the line aligner only: as a pool-order position it would move the
+        // constant-name pass's nearest-item point inside the body.
+        if (!isMethodReference() && !InvocationExprent.enclosingCallIsInit()
+            && bytecode != null && !bytecode.isEmpty()
+            && RoundTrip.sourceLine(this) == InvocationExprent.enclosingCallLine()) {
+          buf.addAlignOnlyBytecodeMapping(bytecode);
+        }
         new ClassWriter().classLambdaToJava(child, buf, methodObject, indent,
           callLine >= 0 ? callLine : RoundTrip.sourceLine(this), methodReferenceQualifier(), getFunctionalReturnType());
         if (isMethodReference() && RoundTrip.selector("arg-head-line")) {
