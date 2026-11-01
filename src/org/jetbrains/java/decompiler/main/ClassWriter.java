@@ -2061,6 +2061,7 @@ public class ClassWriter implements StatementWriter {
         // its own key so the instruction's printed position stays where the argument text is and
         // the constant-name pass still reads it.
         int firstInstruction = RoundTrip.exprentStart(initializer);
+        boolean initializerOnOwnLine = false;
         StructMethod declarationOwner = staticInitializer ? null : wrapper.getDynamicInitializerOwner();
         String declarationKey = staticInitializer ? "<clinit> ()V"
           : declarationOwner == null ? null
@@ -2090,6 +2091,13 @@ public class ClassWriter implements StatementWriter {
             if (store >= 0 && table != null
                 && table.findLineNumber(store) != table.findLineNumber(firstInstruction)) {
               anchorOffset = store;
+              // The store's receiver load carries the declaration's line and the expression the
+              // next one: the source closed the declaration before its initializer, so both
+              // entries need a text line of their own. An annotation owns the block's first line
+              // and pushes the signature down without any break of the source's, and a call whose
+              // arguments are evaluated first gives its first instruction line to the argument,
+              // not to the expression's text.
+              initializerOnOwnLine = writtenAnnotations.isEmpty() && initializerStartsAtRoot(initializer);
             }
           }
           int anchor = staticInitializer ? buffer.length() : declarationStart;
@@ -2113,7 +2121,11 @@ public class ClassWriter implements StatementWriter {
         if (root instanceof NewExprent created && created.bytecode != null) {
           buffer.addBytecodeMapping(created.bytecode);
         }
-        buffer.append(" = ");
+        if (initializerOnOwnLine) {
+          buffer.appendLineSeparator().appendIndent(indent + 1).append("= ");
+        } else {
+          buffer.append(" = ");
+        }
 
         if (initializer instanceof ConstExprent) {
           ((ConstExprent) initializer).adjustConstType(fieldType);
@@ -2134,6 +2146,20 @@ public class ClassWriter implements StatementWriter {
     if (!isEnum) {
       buffer.append(";").appendLineSeparator();
     }
+  }
+
+  /**
+   * Whether the initializer's printed text begins at a class-qualified call that takes no
+   * arguments: the first instruction the expression emits is then the call itself, so the line
+   * javac gives it is the line the declaration's expression starts on.
+   */
+  private static boolean initializerStartsAtRoot(Exprent initializer) {
+    Exprent root = initializer;
+    while (root instanceof InvocationExprent invocation && invocation.getInstance() != null) {
+      root = invocation.getInstance();
+    }
+    return root instanceof InvocationExprent call && call.getInstance() == null
+      && (call.getLstParameters() == null || call.getLstParameters().isEmpty());
   }
 
   private static void methodLambdaToJava(ClassNode lambdaNode,
