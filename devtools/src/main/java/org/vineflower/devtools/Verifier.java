@@ -347,14 +347,46 @@ public final class Verifier {
     return problems;
   }
 
+  /**
+   * Whether javac reads this release's platform classes from the running JDK instead of ct.sym.
+   * A same-release compile can use the real classes, which carry the LVT and MethodParameters
+   * that ct.sym's signatures strip; the target class-file version is unchanged either way.
+   * {@code DEVTOOLS_CT_SYM=1} forces the old ct.sym behaviour for an A/B.
+   */
+  static boolean platformClasses(int release) {
+    return System.getenv("DEVTOOLS_CT_SYM") == null && release == Runtime.version().feature();
+  }
+
+  /**
+   * The javac invocation's platform-class source in the compile cache keys. Empty for ct.sym,
+   * which leaves the pre-existing entries valid: that invocation has not changed.
+   */
+  private static String modeStamp(int release) {
+    return platformClasses(release) ? "|platform-classes" : "";
+  }
+
   private static List<String> options(List<Path> classpath, int release) {
     // The lint categories feed the source-quality counters; they are measured, not acted on. A
     // diagnostic collector receives them instead of the console, so no -nowarn is needed.
-    return List.of(
-      "--release", Integer.toString(release),
+    // A constructor's parameter names come from its superclass's symbol, so an anonymous class
+    // extending a platform class got arg0 while --release read ct.sym, whose .sig entries have
+    // no names. -source/-target reads the running JDK's real classes and keeps those names; the
+    // produced class-file version is identical to --release's.
+    List<String> options = new ArrayList<>();
+    if (platformClasses(release)) {
+      options.add("-source");
+      options.add(Integer.toString(release));
+      options.add("-target");
+      options.add(Integer.toString(release));
+    } else {
+      options.add("--release");
+      options.add(Integer.toString(release));
+    }
+    options.addAll(List.of(
       "-g", "-parameters", "-proc:none", "-implicit:none",
       "-Xlint:rawtypes,cast,unchecked",
-      "-classpath", join(classpath));
+      "-classpath", join(classpath)));
+    return List.copyOf(options);
   }
 
   private static final Map<String, String> STAMPS = new java.util.concurrent.ConcurrentHashMap<>();
@@ -369,7 +401,7 @@ public final class Verifier {
 
   /** Identifies the compiler, its flags and the classpath a cached class set belongs to. */
   private static String compileStamp(List<Path> classpath, int release) {
-    String key = release + "|" + classpath;
+    String key = release + "|" + platformClasses(release) + "|" + classpath;
     return STAMPS.computeIfAbsent(key, ignored -> {
       StringBuilder libs = new StringBuilder();
       for (Path path : classpath) {
@@ -381,7 +413,8 @@ public final class Verifier {
       }
       String client = classpath.isEmpty() ? "" : Workspace.sha256(classpath.get(0));
       return Workspace.sha256(COMPARATOR_VERSION + "|" + System.getProperty("java.version") + "|"
-        + System.getProperty("java.home") + "|" + release + "|" + client + "|" + libs);
+        + System.getProperty("java.home") + "|" + release + modeStamp(release) + "|" + client + "|"
+        + libs);
     });
   }
 
@@ -875,8 +908,8 @@ public final class Verifier {
       libs.append(lib.getFileName()).append(':').append(Files.size(lib)).append(';');
     }
     return Workspace.sha256(COMPARATOR_VERSION + "|" + System.getProperty("java.version") + "|"
-      + System.getProperty("java.home") + "|" + release + "|" + Workspace.sha256(client) + "|"
-      + Workspace.sha256(libs.toString()));
+      + System.getProperty("java.home") + "|" + release + modeStamp(release) + "|"
+      + Workspace.sha256(client) + "|" + Workspace.sha256(libs.toString()));
   }
 
   static int releaseOf(Path jar) throws IOException {
