@@ -1993,7 +1993,49 @@ public class InvocationExprent extends Exprent {
         break;
       }
     }
-    return line >= 0 ? line : creationHead ? -1 : RoundTrip.sourceLine(current);
+    if (line >= 0) {
+      return line;
+    }
+    if (creationHead) {
+      return -1;
+    }
+    // A plain load's line is inherited from whatever expression precedes it unless the target
+    // starts a line somewhere inside the argument's own text. Only text the source put on a line
+    // carries such an entry; a bare load under an inherited line was written on the line above --
+    // inside a lambda body that line is the body's own recorded end -- and reading it as the
+    // argument's text start invents a break after the opening parenthesis.
+    if (RoundTrip.selector("load-head-line") && !carriesLineEntry(current)) {
+      return -1;
+    }
+    return RoundTrip.sourceLine(current);
+  }
+
+  /**
+   * Whether the target's table starts a source line somewhere inside this expression's bytecode.
+   *
+   * <p>The expression owns one contiguous stretch of instructions, including any synthetic ones
+   * between its parts (javac's null check for a constant field read through an instance, for one).
+   * An entry anywhere in that stretch proves the source put text of this expression on a line; a
+   * bare load with no entry inside it only inherits the line of the text before it.
+   */
+  private static boolean carriesLineEntry(Exprent argument) {
+    int from = Integer.MAX_VALUE;
+    int to = -1;
+    for (Exprent part : argument.getAllExprents(true, true)) {
+      if (part.bytecode == null) {
+        continue;
+      }
+      for (int offset = part.bytecode.nextSetBit(0); offset >= 0;
+           offset = part.bytecode.nextSetBit(offset + 1)) {
+        from = Math.min(from, offset);
+        to = Math.max(to, offset);
+      }
+    }
+    if (to < 0) {
+      return false;
+    }
+    int entry = RoundTrip.entryOffsetAfter(from - 1);
+    return entry >= 0 && entry <= to;
   }
 
   /**
