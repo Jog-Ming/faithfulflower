@@ -2008,6 +2008,10 @@ public class InvocationExprent extends Exprent {
         } else if (creationTextProved(created)) {
           line = creationCallLine(created);
           creationHead = true;
+        } else if (creationStartsOwnLine(created)) {
+          // The `new` carries a row of its own, so the creation's text starts there; the links
+          // walked through sit below it and must not be read as the start.
+          line = RoundTrip.sourceLine(created);
         }
         break;
       } else {
