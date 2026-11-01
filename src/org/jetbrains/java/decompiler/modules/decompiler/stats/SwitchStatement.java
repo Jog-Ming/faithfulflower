@@ -455,10 +455,24 @@ public class SwitchStatement extends Statement {
       && !isPhantom() && caseGuards.stream().noneMatch(Objects::nonNull)
       && defaultBreakJump < 0 && defaultBody.isEmpty() && joinArm == null && updateArm == null
       && caseJoinArm == null && spilled.isEmpty();
+    if (System.getenv("NEUROFLOWER_SWITCH_DEBUG") != null) {
+      SwitchInstruction at = switchInstruction();
+      System.err.println("arrow gate " + (RoundTrip.currentMethod() == null ? "?" : RoundTrip.currentMethod().getName())
+        + " at=" + (at == null ? -1 : at.startOffset)
+        + " end=" + switchEnd + " yields=" + yields + " orderUnknown=" + orderUnknown
+        + " phantom=" + isPhantom() + " defaultBreakJump=" + defaultBreakJump
+        + " defaultBody=" + defaultBody.size() + " joinArm=" + (joinArm != null)
+        + " updateArm=" + (updateArm != null) + " caseJoinArm=" + (caseJoinArm != null)
+        + " spilled=" + spilled.size());
+    }
     // A non-empty default rule whose body holds more than one expression prints as a block; the
     // implicit break its block ends with is the arm's own fall into the join, so the rule is only
     // convertible at the end of the switch, where javac elides that break.
     Set<Statement> arrowDefaultBlocks = new HashSet<>();
+    // A non-default rule whose body holds several statements was written inside a block: an
+    // unbraced rule carries one expression. The block's implicit break stands on the closing
+    // brace's line, so a table row at the arm's join jump is the proof of the brace.
+    Set<Statement> arrowBlocks = new HashSet<>();
     if (arrowSwitch) {
       boolean witness = false;
       for (int i : order) {
@@ -467,6 +481,7 @@ public class SwitchStatement extends Statement {
         // any other label is a name the arrow form cannot carry.
         if (arm == null || arm.isLabeled() && !labelsBreakToJoin(arm)) {
           arrowSwitch = false;
+          arrowRefuse("labeled arm " + i);
           break;
         }
         if (RoundTrip.synthesizedMatchThrow(arm)) {
@@ -476,6 +491,7 @@ public class SwitchStatement extends Statement {
             continue;
           }
           arrowSwitch = false;
+          arrowRefuse("match throw " + i);
           break;
         }
         List<StatEdge> armEdges = caseEdges.get(i);
@@ -491,6 +507,7 @@ public class SwitchStatement extends Statement {
         if (falls || (i < joinedReturns.length && joinedReturns[i] != null)
             || (empty && !(defaults && armEdges.size() == 1))) {
           arrowSwitch = false;
+          arrowRefuse("arm " + i + " falls=" + falls + " joined=" + (i < joinedReturns.length && joinedReturns[i] != null) + " empty=" + empty + " defaults=" + defaults);
           break;
         }
         if (!empty && defaults) {
@@ -499,6 +516,7 @@ public class SwitchStatement extends Statement {
           // jump the target does not hold at that point.
           if (armEdges.size() != 1 || i != lastPrinted) {
             arrowSwitch = false;
+            arrowRefuse("default arm " + i + " edges=" + armEdges.size());
             break;
           }
           if (!arrowRuleExpression(arm)) {
@@ -513,6 +531,7 @@ public class SwitchStatement extends Statement {
           // break whose line simply coincides with the block's close.
           if (jump >= 0 && !RoundTrip.lineStartsAt(jump)) {
             arrowSwitch = false;
+            arrowRefuse("braced arm " + i + " jump=" + jump + " no line start");
             break;
           }
           // The rule's block closed before the compiler's own break: its declared rows end where
@@ -522,19 +541,39 @@ public class SwitchStatement extends Statement {
           if (jump >= 0 && rowEndsAt(armRows.get(i), jump)
               && !declaredScopePast(armRows.get(i), jump, patternSlots)) {
             witness = true;
+          } else if (System.getenv("NEUROFLOWER_SWITCH_DEBUG") != null) {
+            System.err.println("arrow braced arm " + i + " no witness jump=" + jump);
           }
         } else if (!arrowRuleExpression(arm) && !arrowDefaultBlocks.contains(arm)) {
           // An unbraced rule carries one expression; a returned value or several statements
-          // need a block, whose implicit break would gain the brace's line.
-          arrowSwitch = false;
-          break;
-        } else if (jump >= 0) {
-          if (RoundTrip.lineStartsAt(jump)) {
+          // need a block, whose implicit break would gain the closing brace's line. That row is
+          // the proof the source wrote the brace: without it the arm could only be the colon
+          // form's list of statements. The last arm falls straight into the join, so javac
+          // elides the break the block ends with and no row marks the brace; the switch's style
+          // then rests on the other arms, which cannot mix with a colon group.
+          boolean elidedBreak = jump < 0 && switchEnd >= 0 && RoundTrip.blockEnd(arm) == switchEnd;
+          if ((jump < 0 || !RoundTrip.lineStartsAt(jump)) && !elidedBreak) {
             arrowSwitch = false;
+            arrowRefuse("unbraced arm " + i + " not an expression, jump=" + jump);
+            break;
+          }
+          arrowBlocks.add(arm);
+        } else if (jump >= 0) {
+          // An arrow rule's implicit break is attributed to the rule's first line, where a
+          // written `break;` stands on a line of its own; a break on the rule's own line
+          // compiles the same either way.
+          int armStart = RoundTrip.firstOffset(arm);
+          if (RoundTrip.lineStartsAt(jump) && (armStart < 0
+              || RoundTrip.lineAtOffset(armStart) != RoundTrip.lineAtOffset(jump))) {
+            arrowSwitch = false;
+            arrowRefuse("unbraced arm " + i + " jump " + jump + " starts a line");
             break;
           }
           witness = true;
         }
+      }
+      if (System.getenv("NEUROFLOWER_SWITCH_DEBUG") != null) {
+        System.err.println("arrow final switch=" + arrowSwitch + " witness=" + witness);
       }
       arrowSwitch = arrowSwitch && witness;
     }
@@ -598,7 +637,7 @@ public class SwitchStatement extends Statement {
         buf.append(" ->");
         if (emptyArrowArm) {
           buf.append(" {}");
-        } else if (braced.contains(stat) || arrowDefaultBlock) {
+        } else if (braced.contains(stat) || arrowBlocks.contains(stat) || arrowDefaultBlock) {
           buf.append(" {");
         }
         buf.appendLineSeparator();
@@ -812,7 +851,8 @@ public class SwitchStatement extends Statement {
       TextBuffer armBuf;
       try {
         armBuf = ExprProcessor.jmpWrapper(stat,
-          arrowSwitch && !braced.contains(stat) && !arrowDefaultBlock ? indent + 1 : indent + 2, false, breakMapping);
+          arrowSwitch && !braced.contains(stat) && !arrowBlocks.contains(stat) && !arrowDefaultBlock
+            ? indent + 1 : indent + 2, false, breakMapping);
       } finally {
         if (returnSuppressed) {
           stat.getExprents().add(joinedReturn);
@@ -844,7 +884,7 @@ public class SwitchStatement extends Statement {
         if (i == lastPrinted) {
           lastJoins = breakJump >= 0;
         }
-        if (braced.contains(stat)) {
+        if (braced.contains(stat) || arrowBlocks.contains(stat)) {
           buf.appendIndent(indent + 1).append("}");
           if (breakJump >= 0 && RoundTrip.lineStartsAt(breakJump)) {
             buf.addBytecodeMappingAt(buf.length(), breakJump, null, null);
@@ -1037,6 +1077,12 @@ public class SwitchStatement extends Statement {
   }
 
   /** True when the selector's type is a String: the lowering created the switch's temporaries. */
+  private static void arrowRefuse(String why) {
+    if (System.getenv("NEUROFLOWER_SWITCH_DEBUG") != null) {
+      System.err.println("arrow refused: " + why);
+    }
+  }
+
   private boolean isStringSwitch() {
     Exprent head = headexprent.isEmpty() ? null : headexprent.get(0);
     return head != null && VarType.VARTYPE_STRING.equals(head.getExprType());
