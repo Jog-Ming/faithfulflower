@@ -2095,10 +2095,16 @@ public class ClassWriter implements StatementWriter {
       if (isEnum && initializer instanceof NewExprent) {
         NewExprent expr = (NewExprent)initializer;
         expr.setEnumConst(true);
-        // The constant's construction runs in <clinit> but belongs to the constant's own line;
-        // the synthetic values()/$values() methods are anchored to that same first line.
+        // The constant's construction runs in <clinit> but belongs to the member's declaration
+        // block's first line, annotations included; the synthetic values()/$values() methods are
+        // anchored to that same first line. The expression's own text sits below an annotation,
+        // so its anchor is the block's start, captured before the annotations were printed.
         if (expr.bytecode != null) {
-          buffer.addBytecodeMapping(expr.bytecode);
+          String clinitKey = InterpreterUtil.makeUniqueKey(CodeConstants.CLINIT_NAME, "()V");
+          for (int offset = expr.bytecode.nextSetBit(0); offset >= 0;
+               offset = expr.bytecode.nextSetBit(offset + 1)) {
+            buffer.addBytecodeMappingAt(declarationStart, offset, cl.qualifiedName, clinitKey);
+          }
         }
         buffer.append(expr.toJava(indent));
       }
