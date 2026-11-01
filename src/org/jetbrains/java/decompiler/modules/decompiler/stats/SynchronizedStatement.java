@@ -107,11 +107,21 @@ public class SynchronizedStatement extends Statement {
     return buf;
   }
 
+  /**
+   * Anchors the closing brace on the monitor release the normal path runs. The block's fall-through
+   * path ends with a jump past the synthetic handler, so the release is not the block's last
+   * instruction; scan back for the monitorexit instead of requiring it last.
+   */
   private void mapMonitorExitInstr(TextBuffer buffer) {
     BasicBlock block = body.getBasichead().getBlock();
-    if (!block.getSeq().isEmpty() && block.getLastInstruction().opcode == CodeConstants.opc_monitorexit) {
-      Integer offset = block.getOldOffset(block.size() - 1);
-      if (offset > -1) buffer.addBytecodeMapping(offset);
+    for (int i = block.size() - 1; i >= 0; i--) {
+      if (block.getInstruction(i).opcode == CodeConstants.opc_monitorexit) {
+        Integer offset = block.getOldOffset(i);
+        if (offset != null && offset > -1) {
+          buffer.addBytecodeMapping(offset);
+        }
+        return;
+      }
     }
   }
 
