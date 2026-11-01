@@ -7974,6 +7974,65 @@ public final class RoundTrip {
   }
 
   /**
+   * The goto a hoisted arm ended with when the source wrote {@code continue;} at its end and
+   * closed the branch, so the other arm prints flat after the if instead of in an else. The
+   * same shape as {@link #armContinueSite}, but a for-each loop's update sits after the body
+   * and inside the increment exprent's own range, which the narrower continue landing test
+   * does not cover. The target's table has to start a line on the jump: a join jump javac
+   * wrote for the if/else carries the brace's line or none, never a statement's own line.
+   * -1 when any of that is unproven.
+   */
+  public static int flatContinueSite(Statement arm, Statement elseArm) {
+    if (!selector("continueflat") || arm == null || elseArm == null) {
+      return -1;
+    }
+    java.util.List<StatEdge> edges = arm.getSuccessorEdges(Statement.STATEDGE_DIRECT_ALL);
+    if (edges.size() != 1) {
+      return -1;
+    }
+    StatEdge edge = edges.get(0);
+    if (edge.getType() != StatEdge.TYPE_CONTINUE || edge.getDestination() != edge.closure
+        || !(edge.getDestination() instanceof org.jetbrains.java.decompiler.modules.decompiler.stats.DoStatement loop)) {
+      return -1;
+    }
+    if (loop.getLooptype() == org.jetbrains.java.decompiler.modules.decompiler.stats.DoStatement.Type.FOR
+        || loop.getLooptype() == org.jetbrains.java.decompiler.modules.decompiler.stats.DoStatement.Type.INFINITE) {
+      return -1;
+    }
+    StructMethod method = currentMethod();
+    if (method == null) {
+      return -1;
+    }
+    java.util.Map<Integer, Integer> gotos = GOTO_TARGETS.get(method);
+    int end = lastEnd(arm);
+    int limit = firstOffset(elseArm);
+    if (gotos == null || end < 0 || limit <= end) {
+      return -1;
+    }
+    int site = -1;
+    for (java.util.Map.Entry<Integer, Integer> entry : gotos.entrySet()) {
+      int at = entry.getKey();
+      if (at >= end && at < limit && (site < 0 || at < site)) {
+        site = at;
+      }
+    }
+    if (site < 0) {
+      return -1;
+    }
+    int target = gotos.get(site);
+    if (!isLoopHeadTarget(loop, target) && !isContinueTarget(loop, target)) {
+      return -1;
+    }
+    // The source wrote no continue when the else arm's own fall-through already reaches the same
+    // loop head: the arm's jump is then the if/else join javac emits over the else.
+    Integer elseTarget = continuationTarget(gotos, lastEnd(elseArm));
+    if (elseTarget == null || elseTarget.equals(target)) {
+      return -1;
+    }
+    return hasLineEntryAt(site) && lineStartsAt(site) ? site : -1;
+  }
+
+  /**
    * The target of the jump that continues the code after a statement, or null. The statement's
    * last exprent ends before any deleted instruction (a discarded call's {@code pop}), so the
    * jump is looked for in the few bytes right after its end.

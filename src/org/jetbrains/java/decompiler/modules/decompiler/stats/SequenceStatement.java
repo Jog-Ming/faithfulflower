@@ -1020,12 +1020,29 @@ public class SequenceStatement extends Statement {
         List<Statement> afterIf = RoundTrip.afterShell(ifStatement.getIfstat(), stats.subList(i + 1, stats.size()),
           RoundTrip.lastEnd(ifStatement.getIfstat()));
         RoundTrip.markAfterIf(afterIf);
+        // The hoisted arm ends in a jump to the enclosing loop's head and the target's table
+        // starts a line on that jump: the source wrote `continue;` there and closed the branch,
+        // and the other arm follows the if flat instead of sitting in its else.
+        int restContinue = -1;
+        if (RoundTrip.selector("continueflat") && afterIf.isEmpty() && stats.size() > i + 1) {
+          restContinue = RoundTrip.flatContinueSite(stats.get(stats.size() - 1),
+            ifStatement.getIfstat());
+        }
         if (!IfStatement.printSplitIf(buf, head, splitArm, ifStatement.getIfstat(), indent, false)) {
           buf.appendIndent(indent).append(head.toJava(indent)).append(" {").appendLineSeparator();
           buf.append(ExprProcessor.jmpWrapper(splitArm, indent + 1, true));
-          buf.appendIndent(indent).append("} else {").appendLineSeparator();
-          buf.append(ExprProcessor.jmpWrapper(ifStatement.getIfstat(), indent + 1, false));
-          buf.appendIndent(indent).append("}").appendLineSeparator();
+          if (restContinue >= 0) {
+            TextBuffer continueLine = new TextBuffer();
+            continueLine.appendIndent(indent + 1).append("continue;").appendLineSeparator();
+            continueLine.addStartBytecodeMapping(restContinue);
+            buf.append(continueLine);
+            buf.appendIndent(indent).append("}").appendLineSeparator();
+            buf.append(ExprProcessor.jmpWrapper(ifStatement.getIfstat(), indent, false));
+          } else {
+            buf.appendIndent(indent).append("} else {").appendLineSeparator();
+            buf.append(ExprProcessor.jmpWrapper(ifStatement.getIfstat(), indent + 1, false));
+            buf.appendIndent(indent).append("}").appendLineSeparator();
+          }
         }
         for (Statement after : afterIf) {
           // The block's own jump edge is the flow into the statement the if's parent prints
@@ -1522,6 +1539,16 @@ public class SequenceStatement extends Statement {
         if (restCopy != null) {
           rest = new SequenceStatement(restStats.subList(0, restStats.size() - 1));
         }
+        // The hoisted arm ends in a jump to the enclosing loop's head and the target's table
+        // starts a line on that jump: the source wrote `continue;` there and closed the branch,
+        // and the other arm follows the if flat instead of sitting in its else. The jump's line
+        // is the statement's own, so the print has to spell it out for the alignment; the arm's
+        // fall-through and the continue reach the same loop head.
+        int restContinue = -1;
+        if (RoundTrip.selector("continueflat") && straddle == null && afterIf.isEmpty()
+            && shellTail.isEmpty() && restCopy == null && !restStats.isEmpty()) {
+          restContinue = RoundTrip.flatContinueSite(restStats.get(restStats.size() - 1), elseArm);
+        }
         RoundTrip.markAfterIf(afterIf);
         buf.appendIndent(indent).append(head.toJava(indent)).append(" {").appendLineSeparator();
         List<Exprent> savedExprents = straddle == null ? null : straddle.getExprents();
@@ -1537,10 +1564,16 @@ public class SequenceStatement extends Statement {
             straddle.setExprents(savedExprents);
           }
         }
+        if (restContinue >= 0) {
+          TextBuffer continueLine = new TextBuffer();
+          continueLine.appendIndent(indent + 1).append("continue;").appendLineSeparator();
+          continueLine.addStartBytecodeMapping(restContinue);
+          buf.append(continueLine);
+        }
         // The target's local table can prove the source wrote this arm flat, as statements the
         // enclosing block ran after the then arm, and never as an else block: its declarations
         // then live in the enclosing block, and a brace here would move their scope.
-        boolean flatArm = RoundTrip.armWasFlat(elseArm);
+        boolean flatArm = restContinue >= 0 || RoundTrip.armWasFlat(elseArm);
         buf.appendIndent(indent).append(flatArm ? "}" : "} else {").appendLineSeparator();
         if (elseCopy != null && joinAfterArms && RoundTrip.isTailReturnCopy(elseCopy)) {
           ((SequenceStatement) elseArm).getStats().removeWithKey(elseCopy.id);
