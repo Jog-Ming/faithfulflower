@@ -1184,6 +1184,7 @@ public class InvocationExprent extends Exprent {
     // starts on, and for a class-qualified call that text is this name; the argument text the
     // printer writes after the dot belongs to the invoke's line.
     int qualifierTextStart = -1;
+    boolean brokeBeforeQualifier = false;
     if (genericArgs.isEmpty() && lambdaBodyWitness != null) {
       genericArgs.addAll(lambdaBodyWitness);
     }
@@ -1466,6 +1467,7 @@ public class InvocationExprent extends Exprent {
             qualifierBreak = false;
             buf.appendLineSeparator().appendIndent(indent + 1);
           } else if (staticQualifiedBreak) {
+            brokeBeforeQualifier = true;
             buf.appendLineSeparator().appendIndent(indent);
           }
           buf.append(".");
@@ -1559,10 +1561,17 @@ public class InvocationExprent extends Exprent {
       // class-name text, so the loads printed after the dot map back to it; leaving them on the
       // dot's line would make one printed line answer to two source lines.
       int inheritedLine = lstParameters.isEmpty() ? -1 : firstPrintedLine(lstParameters.get(0));
-      if (qualifierTextStart >= 0 && !insideOwnArgumentList()
-        && firstArgumentInheritsCallStartLine(inheritedLine, RoundTrip.sourceLineEnd(this))) {
+      int startLine = lstParameters.isEmpty() ? -1 : RoundTrip.textStartLine(this);
+      // A dot the printer broke above its arguments leaves the loads javac gave the class-name
+      // line printed after the dot. The class name is the only text on that line, so those
+      // offsets move onto it; the argument's own line and the invoke's stay where they printed.
+      int classLine = firstArgumentInheritsCallStartLine(inheritedLine, RoundTrip.sourceLineEnd(this))
+        ? inheritedLine
+        : brokeBeforeQualifier
+          && firstArgumentInheritsCallStartLine(startLine, RoundTrip.sourceLineEnd(this)) ? startLine : -1;
+      if (qualifierTextStart >= 0 && !insideOwnArgumentList() && classLine >= 0) {
         buf.moveBytecodeMappings(
-          offset -> RoundTrip.lineAtOffset(offset) == inheritedLine, qualifierTextStart);
+          offset -> RoundTrip.lineAtOffset(offset) == classLine, qualifierTextStart);
       }
     } finally {
       if (delegation) {
@@ -1593,12 +1602,17 @@ public class InvocationExprent extends Exprent {
       return false;
     }
     int invokeOffset = RoundTrip.lastInstructionStart(bytecode);
-    int argumentStart = lstParameters == null || lstParameters.isEmpty()
-      ? -1 : firstPrintedLine(lstParameters.get(0));
+    // The text before the dot is the class name, which has no exprent: the line the call's text
+    // starts on is the line of the call's smallest instruction offset. javac gives the argument
+    // loads that inherited line and only the invoke the dot's own, so an invoke below it is a dot
+    // the source put on a line of its own. A break behind the opening parenthesis instead leaves
+    // the invoke on the call's start line, where the argument printer already handles it.
+    int startLine = lstParameters == null || lstParameters.isEmpty()
+      ? -1 : RoundTrip.textStartLine(this);
     // The invoke's line is read even when the table starts no entry there: javac drops the entry
     // when the line it would record equals the last argument's, and the dot still began that line.
     return invokeOffset >= 0
-      && argumentStart >= 0 && RoundTrip.sourceLine(this) > argumentStart
+      && startLine >= 0 && RoundTrip.sourceLine(this) > startLine
       && !insideOwnArgumentList();
   }
 
