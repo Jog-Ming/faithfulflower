@@ -196,8 +196,7 @@ public class TypeAnnotation {
       }
 
       int first = 0;
-      if (memberName && RoundTrip.selector("typeuse") && type.arrayDim == 0 && fullClasses.size() > 1
-        && isMemberNameInScope(type)) {
+      if (memberName && RoundTrip.selector("typeuse") && type.arrayDim == 0 && fullClasses.size() > 1) {
         boolean plain = true;
         for (Pair<Queue<TypeAnnotation.PathValue>, AnnotationExprent> anno : typeAnnotations) {
           if (!anno.a.isEmpty() && anno.a.peek().kind() == TypeAnnotation.PathKind.DEEPER_NESTED) {
@@ -210,8 +209,25 @@ public class TypeAnnotation {
           // which javac only does for an annotation written in declaration position. A bare member
           // name lets the annotation lead the type; the enclosing name would trip the scoping
           // construct rule and leave the entry in the type-position group instead.
-          stepwiseWriteAnnotations(buffer, false, typeAnnotations, filter, v -> false);
-          first = fullClasses.size() - 1;
+          if (isMemberNameInScope(type)) {
+            stepwiseWriteAnnotations(buffer, false, typeAnnotations, filter, v -> false);
+            first = fullClasses.size() - 1;
+          }
+          else if (RoundTrip.selector("nestedimport")) {
+            // A nested type of another class is equally writable as an imported simple name
+            // (`import Owner.Inner;`), which is what lets a declaration-position annotation lead
+            // it; the qualified `Owner.@Nullable Inner` would record a type-position entry.
+            String imported = DecompilerContext.getImportCollector().getNestedImportName(type.value);
+            if (imported != null) {
+              stepwiseWriteAnnotations(buffer, false, typeAnnotations, filter, v -> false);
+              buffer.appendClass(imported, false, type.value);
+              buffer.append(appendBuffer);
+              if (flush) {
+                dumpUnwrittenAnnotations(buffer, typeAnnotations);
+              }
+              return;
+            }
+          }
         }
       }
 
@@ -319,7 +335,7 @@ public class TypeAnnotation {
    * class being written or of one of its enclosing classes, whose body is inside its scope, so a
    * leading annotation stays on this type rather than naming a scoping construct.
    */
-  private static boolean isMemberNameInScope(VarType type) {
+  public static boolean isMemberNameInScope(VarType type) {
     int dollar = type.value.lastIndexOf('$');
     if (dollar <= 0) {
       return false;

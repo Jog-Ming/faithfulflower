@@ -2957,8 +2957,18 @@ public class ClassWriter implements StatementWriter {
     // A parameter whose entry the target records in declaration position must be written with a
     // leading annotation, which javac only allows on a simple type name; the member-name form
     // (see TypeAnnotation.appendCastTypeName) supplies that name.
+    List<VarType> printedParameterTypes = new ArrayList<>();
+    for (int i = start; i < md.params.length; i++) {
+      boolean real = mask == null || mask.get(i) == null;
+      VarType parameterType = real && hasDescriptor
+        && printedParameterTypes.size() < descriptor.parameterTypes.size()
+        ? descriptor.parameterTypes.get(printedParameterTypes.size()) : md.params[i];
+      if (real) {
+        printedParameterTypes.add(parameterType);
+      }
+    }
     Set<Integer> declarationPosition = RoundTrip.selector("typeuse")
-      ? declarationPositionParameters(mt)
+      ? declarationPositionParameters(mt, printedParameterTypes)
       : Collections.emptySet();
 
     buffer.pushNewlineGroup(indent, 0);
@@ -4485,7 +4495,8 @@ public class ClassWriter implements StatementWriter {
    * (declaration position) followed by a suffix (type position), split at the first index that
    * falls; when it never falls, the target does not say how the groups were mixed.
    */
-  private static Set<Integer> declarationPositionParameters(StructMethod mt) {
+  private static Set<Integer> declarationPositionParameters(StructMethod mt,
+                                                            List<VarType> parameterTypes) {
     List<Integer> indices = new ArrayList<>();
     List<Boolean> topLevel = new ArrayList<>();
     for (Key<?> key : TYPE_ANNOTATION_ATTRIBUTES) {
@@ -4508,7 +4519,22 @@ public class ClassWriter implements StatementWriter {
       }
     }
     if (split < 0) {
-      return Collections.emptySet();
+      // No fall: the run ascends, so every entry is top-level and no type-position entry follows
+      // a declaration-position one. Writing every annotated parameter with a simple name in
+      // declaration position reproduces exactly this ascending table; the alternative -- a
+      // qualified type name -- would append its entry after the whole declaration group, which
+      // is what a fall records. The form is only taken when each type really has a simple name
+      // that the printer will use (`Owner.@Nullable Inner` cannot lead an annotation).
+      Set<Integer> ascending = new HashSet<>();
+      for (int i = 0; i < indices.size(); i++) {
+        int parameter = indices.get(i);
+        if (!topLevel.get(i) || parameter < 0 || parameter >= parameterTypes.size()
+            || !declarationPositionNameable(parameterTypes.get(parameter))) {
+          return Collections.emptySet();
+        }
+        ascending.add(parameter);
+      }
+      return ascending;
     }
 
     Set<Integer> result = new HashSet<>();
@@ -4518,6 +4544,14 @@ public class ClassWriter implements StatementWriter {
       }
     }
     return result;
+  }
+
+  /** Whether the printer writes this type's name bare, so a leading annotation stays on it. */
+  private static boolean declarationPositionNameable(VarType type) {
+    if (type == null || type.type != CodeType.OBJECT || type.arrayDim != 0 || type.value == null) {
+      return false;
+    }
+    return type.value.lastIndexOf('$') < 0 || TypeAnnotation.isMemberNameInScope(type);
   }
 
   /**
