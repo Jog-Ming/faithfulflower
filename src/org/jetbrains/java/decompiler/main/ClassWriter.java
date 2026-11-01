@@ -1834,6 +1834,7 @@ public class ClassWriter implements StatementWriter {
 
     buffer.appendIndent(indent);
 
+    boolean splitEnumStatic = false;
     if (isEnum) {
       // remove abstract and final flags (JLS 8.9 Enums)
       flags &= ~CodeConstants.ACC_ABSTRACT;
@@ -1843,6 +1844,11 @@ public class ClassWriter implements StatementWriter {
       if (node.type == ClassNode.Type.MEMBER || node.type == ClassNode.Type.LOCAL) {
         flags &= ~CodeConstants.ACC_STATIC;
       }
+      // javac puts the generated values() on the declaration block's first line and the implicit
+      // constructor on the enum keyword's. When the target separates the two by one line, the
+      // source had a token above the keyword, and the only byte-neutral one a nested enum may
+      // write is a redundant static.
+      splitEnumStatic = node.type == ClassNode.Type.MEMBER && enumDeclarationSplits(cl, node);
     }
 
     List<StructRecordComponent> components = cl.getRecordComponents();
@@ -1854,6 +1860,10 @@ public class ClassWriter implements StatementWriter {
     }
 
     appendModifiers(buffer, flags, CLASS_ALLOWED, isInterface, CLASS_EXCLUDED);
+
+    if (splitEnumStatic) {
+      buffer.append("static").appendLineSeparator().appendIndent(indent);
+    }
 
     if (!isEnum && isSealed) {
       buffer.append("sealed ");
@@ -4428,6 +4438,24 @@ public class ClassWriter implements StatementWriter {
       }
     }
     return line;
+  }
+
+  /**
+   * Whether a nested enum's declaration block starts one line above its keyword. javac records
+   * values() on the block's first line -- the first token, modifiers included -- and the implicit
+   * constructor on the keyword's; a one-line gap means the source had a token above the keyword,
+   * and a redundant {@code static} is the only one that leaves the class file alone.
+   */
+  private static boolean enumDeclarationSplits(StructClass cl, ClassNode node) {
+    StructMethod init = null;
+    for (StructMethod mt : cl.getMethods()) {
+      if (CodeConstants.INIT_NAME.equals(mt.getName())) {
+        init = mt;
+        break;
+      }
+    }
+    int declaration = classLine(node);
+    return init != null && declaration >= 0 && lineAt(init, 0) == declaration + 1;
   }
 
   private static List<Integer> methodWriteOrder(ClassNode node, VBStyleCollection<StructMethod, String> methods) {

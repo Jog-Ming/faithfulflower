@@ -41,6 +41,9 @@ public final class LineAlign {
    * following lines exactly the same way.
    */
   static final String PADDING = "";
+  private static final java.util.Set<String> DECLARATION_MODIFIERS = java.util.Set.of(
+    "public", "protected", "private", "static", "final", "abstract", "strictfp",
+    "sealed", "non-sealed");
   private static final String[][] RECORD_MEMBERS = {
     {"hashCode", "()I"},
     {"equals", "(Ljava/lang/Object;)Z"},
@@ -970,7 +973,7 @@ public final class LineAlign {
     return -1;
   }
 
-  /** The first line of the declaration block, annotations included; javac anchors bridges there. */
+  /** The first line of the declaration block, annotations and modifiers included; javac anchors bridges there. */
   private static int classDeclarationTop(String[] lines, int declaration, int enclosing) {
     if (declaration < 0) {
       return -1;
@@ -981,13 +984,30 @@ public final class LineAlign {
       if (text.isEmpty() || text.equals(PADDING)) {
         continue;
       }
-      if (annotationOnly(text)) {
+      if (annotationOnly(text) || modifiersOnly(text)) {
         top = i + 1;
         continue;
       }
       break;
     }
     return top;
+  }
+
+  /**
+   * Whether the line holds nothing but declaration modifiers. A nested enum whose keyword was on
+   * the line below its modifiers prints a redundant {@code static} alone: the target's values()
+   * line is the modifier's, and the declaration block begins there.
+   */
+  private static boolean modifiersOnly(String text) {
+    if (text.isEmpty()) {
+      return false;
+    }
+    for (String word : text.split("\\s+")) {
+      if (!DECLARATION_MODIFIERS.contains(word)) {
+        return false;
+      }
+    }
+    return true;
   }
 
   /**
