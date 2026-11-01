@@ -396,6 +396,20 @@ public class TextBuffer {
     }
   }
 
+  /**
+   * Moves every already-mapped offset the predicate accepts to one text position. An instruction
+   * can belong to a source line whose text it was not printed beside: javac gives a class-qualified
+   * static call's argument loads the line the class name sits on, while the printer writes them
+   * after the dot, and only the class-name text carries that line.
+   */
+  public void moveBytecodeMappings(java.util.function.IntPredicate select, int textOffset) {
+    for (Map.Entry<BytecodeMappingKey, Integer> entry : myBytecodeOffsetMapping.entrySet()) {
+      if (entry.getKey().myClass == null && select.test(entry.getKey().myBytecodeOffset)) {
+        entry.setValue(textOffset);
+      }
+    }
+  }
+
   public void clearUnassignedBytecodeMappingData() {
     myBytecodeOffsetMapping.keySet().removeIf(key -> key.myClass == null);
   }

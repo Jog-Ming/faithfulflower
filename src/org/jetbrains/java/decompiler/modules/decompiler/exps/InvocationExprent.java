@@ -1179,6 +1179,11 @@ public class InvocationExprent extends Exprent {
   @Override
   public TextBuffer toJava(int indent) {
     TextBuffer buf = new TextBuffer();
+    // Where the printed class name of a class-qualified static call begins, or -1 when no class
+    // name is printed. javac attributes the call's argument loads to the line the call's text
+    // starts on, and for a class-qualified call that text is this name; the argument text the
+    // printer writes after the dot belongs to the invoke's line.
+    int qualifierTextStart = -1;
     if (genericArgs.isEmpty() && lambdaBodyWitness != null) {
       genericArgs.addAll(lambdaBodyWitness);
     }
@@ -1220,6 +1225,7 @@ public class InvocationExprent extends Exprent {
         if (node == null || !classname.equals(node.classStruct.qualifiedName)
           || (witnessQualifier && !genericArgs.isEmpty())) {
           // An unqualified call has no place for a witness: `.m()` is not valid Java.
+          qualifierTextStart = buf.length();
           buf.appendAllClasses(DecompilerContext.getImportCollector().getShortNameInClassContext(ExprProcessor.buildJavaClassName(classname)), classname);
         }
       }
@@ -1545,7 +1551,19 @@ public class InvocationExprent extends Exprent {
       enterConstructorDelegation();
     }
     try {
-      buf.append(appendParamList(indent)).append(')');
+      TextBuffer parameters = appendParamList(indent);
+      buf.append(parameters).append(')');
+      // A class-qualified call whose invoke starts the line below its arguments' inherited line
+      // was written with the class name on one line and the dot with the argument list on the
+      // next. javac gives every argument instruction that carries the call's start line to the
+      // class-name text, so the loads printed after the dot map back to it; leaving them on the
+      // dot's line would make one printed line answer to two source lines.
+      int inheritedLine = lstParameters.isEmpty() ? -1 : firstPrintedLine(lstParameters.get(0));
+      if (qualifierTextStart >= 0 && !insideOwnArgumentList()
+        && firstArgumentInheritsCallStartLine(inheritedLine, RoundTrip.sourceLineEnd(this))) {
+        buf.moveBytecodeMappings(
+          offset -> RoundTrip.lineAtOffset(offset) == inheritedLine, qualifierTextStart);
+      }
     } finally {
       if (delegation) {
         exitConstructorDelegation();
@@ -1580,6 +1598,56 @@ public class InvocationExprent extends Exprent {
     return invokeOffset >= 0 && RoundTrip.lineStartsAt(invokeOffset)
       && argumentStart >= 0 && RoundTrip.sourceLine(this) > argumentStart
       && !insideOwnArgumentList();
+  }
+
+  /**
+   * Whether this class-qualified static call's first argument was written on the line the call's
+   * text starts on, not after a break behind the opening parenthesis.
+   *
+   * <p>javac records a class-qualified call's line at its invoke, the dot's line, while the class
+   * name before the dot and the first argument's own load inherit the line the call's text starts
+   * on. An invoke exactly one line below the first argument and starting a line of its own is
+   * therefore the source's {@code Class} above {@code .method(} with the argument list on the
+   * dot's line: the first argument belongs there, and a break the printer would add after the
+   * parenthesis would move its text onto a line the table never gave it.
+   *
+   * <p>The caller owns the context: inside an enclosing call's argument list the first argument
+   * inherits that call's last entry instead of a statement line, and the comparison proves
+   * nothing, so the predicate must not be consulted there.
+   */
+  private boolean firstArgumentInheritsCallStartLine(int firstLine, int callLine) {
+    if (functype != Type.GENERAL || instance != null || staticQualifier != null
+      || invocationType == InvocationType.DYNAMIC || invocationType == InvocationType.CONSTANT_DYNAMIC
+      || firstLine < 0 || callLine < 0 || firstLine != callLine - 1) {
+      return false;
+    }
+    int invokeOffset = RoundTrip.lastInstructionStart(bytecode);
+    return invokeOffset >= 0 && RoundTrip.lineStartsAt(invokeOffset)
+      && argumentsStartInheritedLine(firstLine);
+  }
+
+  /**
+   * Whether a line-table entry of the call's own arguments starts the given line. A call that is
+   * one element of a larger expression -- an array initializer or a field assignment -- also has
+   * an instruction of the enclosing construct one line above its invoke, and its arguments then
+   * inherit that line without the call's text starting there; only a line one of the arguments
+   * itself opens is the line the call's text begins on.
+   */
+  private boolean argumentsStartInheritedLine(int line) {
+    for (Exprent parameter : lstParameters) {
+      for (Exprent part : parameter.getAllExprents(true, true)) {
+        if (part.bytecode == null) {
+          continue;
+        }
+        for (int offset = part.bytecode.nextSetBit(0); offset >= 0;
+             offset = part.bytecode.nextSetBit(offset + 1)) {
+          if (RoundTrip.lineAtOffset(offset) == line && RoundTrip.lineStartsAt(offset)) {
+            return true;
+          }
+        }
+      }
+    }
+    return false;
   }
 
   /**
@@ -2606,9 +2674,15 @@ public class InvocationExprent extends Exprent {
       // The line a single instruction of the first argument carries can be inherited from
       // anywhere above, not just from the enclosing statement: when the enclosing argument's text
       // starts later than the argument's own line, the text before that line is not this call's.
-      boolean inheritedFirst = firstLine < callLine && firstEnd == firstLine
+      // This call's own argument list is already open here; only an enclosing call's argument
+      // list replaces the statement line with its own last entry.
+      int enclosingDepth = ARGUMENT.get()[0];
+      boolean insideEnclosingArguments = enclosingDepth >= 2
+        && ARGUMENT_AT.get()[enclosingDepth - 2] == RoundTrip.currentMethod();
+      boolean inheritedFirst = (firstLine < callLine && firstEnd == firstLine
         && (ARG_AT_LINE_START.get()
-            || RoundTrip.selector("arg-head-line") && ARGUMENT_TEXT_START.get()[0] > firstLine);
+            || RoundTrip.selector("arg-head-line") && ARGUMENT_TEXT_START.get()[0] > firstLine))
+        || !insideEnclosingArguments && firstArgumentInheritsCallStartLine(firstLine, callLine);
       // A constructor's own token is its `new`: the init invocation inherits the line of the last
       // instruction of the argument list, so comparing the first argument with it would read a
       // chain that starts on the creation's line and ends below it as a break after the
