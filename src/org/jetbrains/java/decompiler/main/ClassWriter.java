@@ -1331,6 +1331,12 @@ public class ClassWriter implements StatementWriter {
         // the field the source declared first (RuleTest's CODEC). Without such a field the old
         // behaviour stands.
         int carried = -1;
+        // A method without code has no line of its own and the source declared it right after the
+        // previous method the class file lists with one: methods are emitted in declaration order,
+        // and a field's line says nothing about a method's place. The constructor's line can be a
+        // lifted field initializer rather than its declaration, so it must not carry the method
+        // past fields the source declared after that method.
+        int carriedMethod = -1;
         // An interface has no constructor to anchor an unlined method, and a preceding static
         // method's line is not where the source put it: the field's initializer line is the only
         // declaration evidence left, and the source declared such methods after the field.
@@ -1347,9 +1353,21 @@ public class ClassWriter implements StatementWriter {
             if (tailMembers && member[0] == 2 && !rankedMemberClass) {
               continue; // the backward pass puts it after every lined member
             }
-            member[2] = noCtor && member[0] == 1 && maxFieldLine > carried ? maxFieldLine : carried;
-          } else if (!(isCtorMember(member, methods) && maxFieldLine > member[2])) {
-            carried = member[2];
+            if (member[0] == 1) {
+              member[2] = carriedMethod >= 0 ? carriedMethod : carried;
+            } else {
+              member[2] = noCtor && member[0] == 1 && maxFieldLine > carried ? maxFieldLine : carried;
+            }
+          } else {
+            if (member[0] == 1) {
+              StructMethod mt = methods.get(member[1]);
+              if (!CodeConstants.CLINIT_NAME.equals(mt.getName()) && !hiddenMethod(wrapper, mt)) {
+                carriedMethod = member[2];
+              }
+            }
+            if (!(isCtorMember(member, methods) && maxFieldLine > member[2])) {
+              carried = member[2];
+            }
           }
         }
         carried = Integer.MAX_VALUE;
