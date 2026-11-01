@@ -14,8 +14,10 @@ import org.jetbrains.java.decompiler.main.rels.MethodWrapper;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.*;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.FunctionExprent.FunctionType;
 import org.jetbrains.java.decompiler.modules.decompiler.stats.RootStatement;
+import org.jetbrains.java.decompiler.modules.decompiler.stats.SequenceStatement;
 import org.jetbrains.java.decompiler.modules.decompiler.stats.Statement;
 import org.jetbrains.java.decompiler.modules.decompiler.stats.Statements;
+import org.jetbrains.java.decompiler.modules.decompiler.stats.SwitchStatement;
 import org.jetbrains.java.decompiler.modules.decompiler.vars.VarVersionPair;
 import org.jetbrains.java.decompiler.struct.StructClass;
 import org.jetbrains.java.decompiler.struct.StructField;
@@ -176,26 +178,50 @@ public final class InitializerProcessor {
       List<AssignmentExprent> exprentsToRemove = new LinkedList<>();//when we loop back through the list, stores ones we need to remove outside iterator loop
       Map<Integer, AssignmentExprent> nonFieldAssigns = new HashMap<>();
 
+      // A switch expression assigned to a field is structured as a switch statement whose arms
+      // yield the value, and the assignment stands in the block after it. The switch's selector
+      // block is what findFirstData returns, so the field's own store sits in the next sibling:
+      // the assignment is the same expression the source wrote as the field's initializer.
+      List<List<Exprent>> dataLists = new ArrayList<>();
+      dataLists.add(firstData.getExprents());
+      List<Exprent> switchAssignment = null;
+      Statement parent = firstData.getParent();
+      if (parent instanceof SwitchStatement switchStatement
+          && switchStatement.getParent() instanceof SequenceStatement sequence) {
+        int at = sequence.getStats().indexOf(switchStatement);
+        if (at >= 0 && at + 1 < sequence.getStats().size()) {
+          Statement next = sequence.getStats().get(at + 1);
+          if (next.getExprents() != null && !next.getExprents().isEmpty()
+              && next.getExprents().get(0) instanceof AssignmentExprent assign
+              && assign.getRight() instanceof SwitchExprent) {
+            switchAssignment = next.getExprents();
+            dataLists.add(switchAssignment);
+          }
+        }
+      }
+
       // Store fields that have been assigned to more than once. These aren't safe to inline.
       List<String> seen = new ArrayList<>();
       List<String> multiAssign = new ArrayList<>();
 
-      for (Exprent exprent : firstData.getExprents()) {
-        if (exprent instanceof AssignmentExprent) {
-          AssignmentExprent assignExpr = (AssignmentExprent) exprent;
-          if (assignExpr.getLeft() instanceof FieldExprent) {
-            FieldExprent fExpr = (FieldExprent) assignExpr.getLeft();
+      for (List<Exprent> exprents : dataLists) {
+        for (Exprent exprent : exprents) {
+          if (exprent instanceof AssignmentExprent) {
+            AssignmentExprent assignExpr = (AssignmentExprent) exprent;
+            if (assignExpr.getLeft() instanceof FieldExprent) {
+              FieldExprent fExpr = (FieldExprent) assignExpr.getLeft();
 
-            // If the field has been seen already, add it to the list of multi-assigned fields
-            String name = fExpr.getName();
-            if (seen.contains(name)) {
-              if (!multiAssign.contains(name)) {
-                // If this hasn't been seen, add to list of multi assigned variables
-                multiAssign.add(name);
+              // If the field has been seen already, add it to the list of multi-assigned fields
+              String name = fExpr.getName();
+              if (seen.contains(name)) {
+                if (!multiAssign.contains(name)) {
+                  // If this hasn't been seen, add it to the list of multi assigned variables
+                  multiAssign.add(name);
+                }
+              } else {
+                // If it hasn't been seen, store it for later to check
+                seen.add(name);
               }
-            } else {
-              // If it hasn't been seen, store it for later to check
-              seen.add(name);
             }
           }
         }
@@ -203,7 +229,8 @@ public final class InitializerProcessor {
 
       List<FieldExprent> notInlined = new ArrayList<>();
 
-      Iterator<Exprent> itr = firstData.getExprents().iterator();
+      for (List<Exprent> exprents : dataLists) {
+      Iterator<Exprent> itr = exprents.iterator();
       while (itr.hasNext()) {
         Exprent exprent = itr.next();
 
@@ -262,8 +289,12 @@ public final class InitializerProcessor {
 //          DecompilerContext.getLogger().writeMessage("Non assignment found in initializer when we're needing to inline all", IFernflowerLogger.Severity.ERROR);
         }
       }
+      }
       if (exprentsToRemove.size() > 0){
         firstData.getExprents().removeAll(exprentsToRemove);
+        if (switchAssignment != null) {
+          switchAssignment.removeAll(exprentsToRemove);
+        }
       }
     }
 
