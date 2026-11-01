@@ -64,6 +64,12 @@ public class VarExprent extends Exprent implements Pattern {
   private VarType boundType;
   private boolean isIntersectionType = false;
   private boolean isCatchTempVar = false;
+  /**
+   * The source declared this local as Java 22's unnamed variable {@code _}. The class file proves
+   * it (see {@link RoundTrip#unnamedDeclaration}); the printer must write the underscore instead
+   * of a generated name so the recompiled class records no local variable entry either.
+   */
+  private boolean unnamedDeclaration = false;
 
   public VarExprent(int index, VarType varType, VarProcessor processor) {
     this(index, varType, processor, null);
@@ -248,6 +254,12 @@ public class VarExprent extends Exprent implements Pattern {
         }
 
         buffer.append(" ");
+        if (unnamedDeclaration) {
+          // Java 22's `_` binds no name, so no name may reach the buffer's variable tokens: the
+          // recompiled class must record no local entry for this slot.
+          buffer.append("_");
+          return buffer;
+        }
       }
 
       String name = getName();
@@ -555,6 +567,15 @@ public class VarExprent extends Exprent implements Pattern {
 
   public LocalVariable getLVT() {
     return lvt;
+  }
+
+  /** Marks this declaration as Java 22's unnamed variable {@code _}, which prints no name. */
+  public void setUnnamedDeclaration(boolean unnamed) {
+    this.unnamedDeclaration = unnamed;
+  }
+
+  public boolean isUnnamedDeclaration() {
+    return unnamedDeclaration;
   }
 
   public void setEffectivelyFinal(boolean isEffectivelyFinal) {

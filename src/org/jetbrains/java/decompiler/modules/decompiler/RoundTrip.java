@@ -1767,6 +1767,46 @@ public final class RoundTrip {
     return !variable.isVarReferenced(arm);
   }
 
+  /**
+   * True when a binding the printer has to declare — a try-with-resources resource, say — was
+   * written as Java 22's unnamed variable {@code _}. javac writes a local variable table row for
+   * every name the source wrote, even one the body never reads, and none for {@code _}; the row
+   * begins at the instruction after the binding's store. The row's absence at that offset is the
+   * proof. A row the slot carries elsewhere names a later variable that reused the slot: its
+   * range starts after this binding's store and cannot be this binding's name.
+   */
+  public static boolean unnamedDeclaration(VarExprent variable) {
+    if (!selector("unnamedbind") || variable == null || variable.bytecode == null || variable.bytecode.isEmpty()) {
+      return false;
+    }
+    if (!hasUnnamedVariables()) {
+      return false;
+    }
+    StructMethod method = currentMethod();
+    if (method == null) {
+      return false;
+    }
+    int store = variable.bytecode.nextSetBit(0);
+    int after = instructionEnd(method, store);
+    if (after < 0) {
+      return false;
+    }
+    StructLocalVariableTableAttribute table = method.getLocalVariableAttr();
+    // A method whose table is absent names nothing at all: javac writes the attribute as soon as
+    // any binding has a name.
+    if (table == null) {
+      return true;
+    }
+    return table.matchingVars(originalSlot(variable), after).findFirst().isEmpty();
+  }
+
+  /** True when the class being printed is version 66 (Java 22) or later. */
+  public static boolean hasUnnamedVariables() {
+    org.jetbrains.java.decompiler.main.ClassesProcessor.ClassNode node =
+      DecompilerContext.getContextProperty(DecompilerContext.CURRENT_CLASS_NODE);
+    return node != null && node.classStruct != null && node.classStruct.getVersion().major >= 66;
+  }
+
   /** The first offset a statement covers, its head exprents included, or -1. */
   private static int rangeStart(Statement statement) {
     BitSet bits = statementOffsets(statement);
@@ -3936,6 +3976,17 @@ public final class RoundTrip {
     java.util.Map<Integer, Integer> map = method == null ? null : STORE_SLOTS.get(method);
     Integer slot = map == null ? null : map.get(offset);
     return slot == null ? -1 : slot;
+  }
+
+  /** The slot any store at this start offset writes, the compact operand forms included, or -1. */
+  public static int storeSlotAtEither(StructMethod method, int offset) {
+    int slot = storeSlotAt(method, offset);
+    if (slot >= 0) {
+      return slot;
+    }
+    java.util.Map<Integer, Integer> map = method == null ? null : ALL_STORE_SLOTS.get(method);
+    Integer any = map == null ? null : map.get(offset);
+    return any == null ? -1 : any;
   }
 
   /**

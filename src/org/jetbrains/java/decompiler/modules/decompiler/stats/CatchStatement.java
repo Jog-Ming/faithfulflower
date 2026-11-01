@@ -164,6 +164,16 @@ public class CatchStatement extends Statement {
       buf.appendIndent(indent).append("try {").appendLineSeparator();
     }
     else {
+      // A resource whose slot the target's table never names was written as Java 22's `_`; the
+      // declaration must print the underscore, or the recompiled class records a name the target
+      // does not have.
+      for (Exprent resource : resources) {
+        if (resource instanceof AssignmentExprent assignment
+            && assignment.getLeft() instanceof VarExprent declaration
+            && RoundTrip.unnamedDeclaration(declaration)) {
+          declaration.setUnnamedDeclaration(true);
+        }
+      }
       buf.appendIndent(indent).append("try");
       if (resourceHandlerOffset >= 0) {
         // The synthetic close's store is the line's only instruction: the closer itself prints
@@ -293,6 +303,10 @@ public class CatchStatement extends Statement {
         && (getParent().type == StatementType.SEQUENCE || getParent().type == StatementType.ROOT)
         && catchScopeEnd(stat) < 0 && unnamedCatchParameter(stat, var.getIndex());
 
+      // Java 22's `_` binds no name: javac writes no local variable row for it, while a written
+      // name keeps its row even when the body never reads it.
+      boolean unnamedBinding = !unnamedParameter && unnamedCatchDeclaration(handlerOffset);
+
       // A rename for a lambda clash reaches the uses (which lose their lvt) but not this
       // declaration. The renamed form extends the lvt name; a synthetic varN from the processor
       // does not, and there the lvt is the right name.
@@ -307,7 +321,7 @@ public class CatchStatement extends Statement {
 
       // Temporarily set variable as not a definition, since we just wrote the type above
       try (var v = var.new DefinitionLocker()) {
-        if (unnamedParameter) {
+        if (unnamedParameter || unnamedBinding) {
           buf.append("_");
         } else {
           buf.append(var.toJava(indent));
@@ -524,6 +538,44 @@ public class CatchStatement extends Statement {
     }
     return lvt.matchingVars(block.getInstruction(0).operand(0), body)
       .findFirst().map(StructLocalVariableTableAttribute.LocalVariable::getEnd).orElse(-1);
+  }
+
+  /**
+   * True when the class file proves this catch parameter was written as Java 22's unnamed variable
+   * `_`: the class is version 66 or later and no local variable row begins where the handler's
+   * store ends. javac writes that row for every written name, even one the body never reads, and
+   * none for `_`.
+   */
+  private static boolean unnamedCatchDeclaration(Integer handlerOffset) {
+    if (!RoundTrip.selector("unnamedbind") || !RoundTrip.hasUnnamedVariables()) {
+      return false;
+    }
+    if (handlerOffset == null || handlerOffset < 0) {
+      return false;
+    }
+    StructMethod mt = DecompilerContext.getContextProperty(DecompilerContext.CURRENT_STRUCT_METHOD);
+    if (mt == null) {
+      return false;
+    }
+    // The store opens the handler; the parameter's row, when the source wrote a name, starts at
+    // the instruction that follows it.
+    int slot = RoundTrip.storeSlotAtEither(mt, handlerOffset);
+    int after = RoundTrip.instructionEnd(mt, handlerOffset);
+    if (slot < 0 || after < 0) {
+      return false;
+    }
+    StructLocalVariableTableAttribute lvt = mt.getLocalVariableAttr();
+    // A method whose table is absent names nothing at all: javac writes the attribute as soon as
+    // any binding has a name, an empty catch's parameter included.
+    if (lvt == null) {
+      return true;
+    }
+    // An empty table is that trace of a written name: javac writes the attribute without entries
+    // for a named parameter over an empty body, and `_` would remove the attribute altogether.
+    if (lvt.getVariables().findFirst().isEmpty()) {
+      return false;
+    }
+    return lvt.matchingVars(slot, after).findFirst().isEmpty();
   }
 
   /**
