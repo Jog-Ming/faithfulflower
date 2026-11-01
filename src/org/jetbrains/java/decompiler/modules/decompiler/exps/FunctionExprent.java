@@ -725,12 +725,19 @@ public class FunctionExprent extends Exprent {
         }
       }
 
+      boolean isBoolean = funcType == FunctionType.BOOLEAN_AND || funcType == FunctionType.BOOLEAN_OR;
+      boolean orChain = isBoolean && funcType == FunctionType.BOOLEAN_OR;
+      // The outermost boolean node of a chain owns the one source break the target's end line
+      // proves for it, and every node of the chain prints before it, so the whole print runs
+      // with the target operand in scope.
+      boolean outerChain = isBoolean && !RoundTrip.inBooleanChain();
+      Exprent openOperand = outerChain ? RoundTrip.booleanOpenLineOperand(this) : null;
+      Exprent priorOpen = outerChain ? RoundTrip.enterBooleanChain(openOperand) : null;
+      try {
       if (!disableNewlineGroupCreation) {
         buf.pushNewlineGroup(indent, 1);
       }
       buf.append(wrapOperandString(left, false, indent, true));
-      boolean isBoolean = funcType == FunctionType.BOOLEAN_AND || funcType == FunctionType.BOOLEAN_OR;
-      boolean orChain = isBoolean && funcType == FunctionType.BOOLEAN_OR;
       // javac stamps the chain's first instruction with the outermost operator's line; an entry
       // below the right operand's line means the operator stood on a line of its own. The chain
       // then continues on that operator's line, so the last operand starts the following line.
@@ -742,6 +749,7 @@ public class FunctionExprent extends Exprent {
         ? operatorLine || lastInChain
           || RoundTrip.newlineBeforeOperand(left, right) || RoundTrip.operatorStartsLine(left, right)
           || orChain && RoundTrip.patternBindingStartsLater(left, right)
+          || RoundTrip.chainOpenStartsRight(right)
         : RoundTrip.newlineBetween(left, right);
       int operandStart;
       if (breakHere) {
@@ -789,10 +797,24 @@ public class FunctionExprent extends Exprent {
             offset -> offset >= rightFirst && RoundTrip.lineAtOffset(offset) == midLine, operandStart);
         }
       }
+      if (outerChain && openOperand != null && RoundTrip.chainOpenIsLast(this, openOperand)) {
+        // The last operand's code carries rows of the operand above it, so only the chain's own
+        // first instruction names the line the expression ends on. Pin that mapping to the end
+        // of the printed text, where the operand's text sits, so the aligner keeps its line.
+        int chainLine = RoundTrip.textStartLine(this);
+        if (chainLine >= 0) {
+          buf.moveBytecodeMappings(offset -> RoundTrip.lineAtOffset(offset) == chainLine, buf.length());
+        }
+      }
       if (!disableNewlineGroupCreation) {
         buf.popNewlineGroup();
       }
       return buf;
+      } finally {
+        if (outerChain) {
+          RoundTrip.exitBooleanChain(priorOpen);
+        }
+      }
     }
 
     switch (funcType) {

@@ -3369,6 +3369,123 @@ public final class RoundTrip {
   }
 
   /**
+   * The operand of a boolean chain that begins the line the whole expression ends on, or null.
+   * TransPatterns gives the synthetic test it builds for a chain holding a pattern the end
+   * position of the whole condition, so the chain's first instruction carries the expression's
+   * last line while the second operand's code keeps its own. The last operand never gets a
+   * statement start of its own: its code inherits the previous operand's line while its text
+   * sits on the end line. The operand the source opened that line with is the first one after
+   * the head whose own first instruction starts there, or the last operand when none does.
+   */
+  public static Exprent booleanOpenLineOperand(Exprent chain) {
+    if (!selector("booleantail") || !(chain instanceof FunctionExprent function)
+        || function.getFuncType() != FunctionExprent.FunctionType.BOOLEAN_AND
+        || chain.bytecode == null || chain.bytecode.isEmpty()) {
+      return null;
+    }
+    StructMethod method = currentMethod();
+    if (method == null) {
+      return null;
+    }
+    java.util.List<Exprent> operands = new java.util.ArrayList<>();
+    collectSameBooleanOperands(chain, function.getFuncType(), operands);
+    if (operands.size() < 2) {
+      return null;
+    }
+    int first = chain.bytecode.nextSetBit(0);
+    int second = firstOffsetOf(operands.get(1));
+    if (first < 0 || second < 0) {
+      return null;
+    }
+    int endLine = lineAt(method, first);
+    // The stamped first instruction must sit below the second operand's own line; a one-line
+    // chain carries the same line on both, and a chain without the synthetic test starts on its
+    // head's line, so neither is a source break.
+    if (endLine < 0 || lineAt(method, second) >= endLine) {
+      return null;
+    }
+    for (int i = 1; i < operands.size(); i++) {
+      int at = firstOffsetOf(operands.get(i));
+      if (at >= 0 && lineStartsAt(at) && lineAt(method, at) == endLine) {
+        return operands.get(i);
+      }
+    }
+    return operands.get(operands.size() - 1);
+  }
+
+  private static void collectSameBooleanOperands(Exprent exprent, FunctionExprent.FunctionType type,
+                                                 java.util.List<Exprent> out) {
+    if (exprent instanceof FunctionExprent function && function.getFuncType() == type
+        && function.getLstOperands().size() >= 2) {
+      for (Exprent operand : function.getLstOperands()) {
+        collectSameBooleanOperands(operand, type, out);
+      }
+    } else {
+      out.add(exprent);
+    }
+  }
+
+  /** The operand a boolean chain's break must precede, while the chain's print runs. */
+  private static final ThreadLocal<Exprent> CHAIN_OPEN_OPERAND = new ThreadLocal<>();
+  private static final ThreadLocal<Boolean> IN_BOOLEAN_CHAIN = new ThreadLocal<>();
+
+  public static boolean inBooleanChain() {
+    return Boolean.TRUE.equals(IN_BOOLEAN_CHAIN.get());
+  }
+
+  public static Exprent enterBooleanChain(Exprent target) {
+    Exprent prior = CHAIN_OPEN_OPERAND.get();
+    IN_BOOLEAN_CHAIN.set(Boolean.TRUE);
+    if (target != null) {
+      CHAIN_OPEN_OPERAND.set(target);
+    }
+    return prior;
+  }
+
+  public static void exitBooleanChain(Exprent prior) {
+    IN_BOOLEAN_CHAIN.remove();
+    if (prior == null) {
+      CHAIN_OPEN_OPERAND.remove();
+    } else {
+      CHAIN_OPEN_OPERAND.set(prior);
+    }
+  }
+
+  /**
+   * Whether this right operand's printed text opens with the operand the chain's break belongs
+   * before: the operand itself, or the leftmost leaf of a nested chain that starts with it.
+   */
+  public static boolean chainOpenStartsRight(Exprent right) {
+    Exprent target = CHAIN_OPEN_OPERAND.get();
+    if (target == null || right == null) {
+      return false;
+    }
+    Exprent current = right;
+    while (current instanceof FunctionExprent function
+        && (function.getFuncType() == FunctionExprent.FunctionType.BOOLEAN_AND
+            || function.getFuncType() == FunctionExprent.FunctionType.BOOLEAN_OR)
+        && function.getLstOperands().size() >= 2) {
+      current = function.getLstOperands().get(0);
+    }
+    return current == target;
+  }
+
+  /**
+   * Whether {@code open} is the chain's last operand. The last operand gets no statement start
+   * of its own, so the chain's first instruction is the only offset carrying the line the whole
+   * expression ends on; moving that mapping to the end of the printed text is what lets the
+   * aligner keep the operand's own line from being joined onto the one above it.
+   */
+  public static boolean chainOpenIsLast(Exprent chain, Exprent open) {
+    if (open == null || !(chain instanceof FunctionExprent function)) {
+      return false;
+    }
+    java.util.List<Exprent> operands = new java.util.ArrayList<>();
+    collectSameBooleanOperands(chain, function.getFuncType(), operands);
+    return !operands.isEmpty() && operands.get(operands.size() - 1) == open;
+  }
+
+  /**
    * Whether a boolean operand contains a pattern test whose binding the target records on a later
    * line than the test itself. The binding's store opens the operand's use of the variable, so
    * its line is where the operand's text began: the source broke before the whole operand.
