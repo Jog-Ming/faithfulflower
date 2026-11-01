@@ -5784,7 +5784,50 @@ public final class RoundTrip {
         back = entry.getKey();
       }
     }
-    return back >= 0 ? back : tailJumpOffset(loop);
+    if (back >= 0) {
+      return back;
+    }
+    int tail = tailJumpOffset(loop);
+    if (loop instanceof org.jetbrains.java.decompiler.modules.decompiler.stats.DoStatement doLoop) {
+      Integer tailTarget = tail < 0 ? null : gotos.get(tail);
+      if (tailTarget != null && tailTarget < tail && atLoopContinueTarget(doLoop, tailTarget)) {
+        // The jump that ends the loop already returns to its head: keep it.
+        return tail;
+      }
+      // A for-each's head is the synthetic iterator code between the iterable's expression and
+      // the body, which no exprent covers; firstOffset then names the body and the exact-head
+      // search misses. The tail jump can be a forward skip-goto inside a try, not the latch. A
+      // backward jump to an offset a continue of this loop lands on is the latch — but only when
+      // it returns to this loop's own head. The head lies at or past the first instruction of
+      // the loop's printed header; an enclosing loop's head lies before it, so without that
+      // bound the search would take the enclosing latch.
+      int headerStart = -1;
+      for (java.util.List<Exprent> parts : java.util.Arrays.asList(
+          doLoop.getInitExprentList(), doLoop.getConditionExprentList(), doLoop.getIncExprentList())) {
+        for (Exprent part : parts) {
+          int at = part == null ? -1 : exprentStart(part);
+          if (at >= 0 && (headerStart < 0 || at < headerStart)) {
+            headerStart = at;
+          }
+        }
+      }
+      if (headerStart < 0) {
+        return tail;
+      }
+      int latch = -1;
+      for (java.util.Map.Entry<Integer, Integer> entry : gotos.entrySet()) {
+        int at = entry.getKey();
+        Integer target = entry.getValue();
+        if (target != null && target < at && target >= headerStart && at > latch
+            && atLoopContinueTarget(doLoop, target)) {
+          latch = at;
+        }
+      }
+      if (latch >= 0) {
+        return latch;
+      }
+    }
+    return tail;
   }
 
   /**
