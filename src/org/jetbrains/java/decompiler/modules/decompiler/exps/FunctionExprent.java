@@ -169,6 +169,11 @@ public class FunctionExprent extends Exprent {
   /** The cast was born from a checkcast instruction: the target's own source wrote it. */
   private boolean recordedCheckcast = false;
   private boolean disableNewlineGroupCreation = false;
+  /**
+   * Set while a boolean {@code ||} chain whose operator owns the chain's first line prints its
+   * right operand: the chain's last operand then starts a line of its own.
+   */
+  private static final ThreadLocal<Boolean> LAST_OPERAND_CHAIN = new ThreadLocal<>();
 
   public FunctionExprent(FunctionType funcType, ListStack<Exprent> stack, BitSet bytecodeOffsets) {
     this(funcType, new ArrayList<>(), bytecodeOffsets);
@@ -725,23 +730,64 @@ public class FunctionExprent extends Exprent {
       }
       buf.append(wrapOperandString(left, false, indent, true));
       boolean isBoolean = funcType == FunctionType.BOOLEAN_AND || funcType == FunctionType.BOOLEAN_OR;
+      boolean orChain = isBoolean && funcType == FunctionType.BOOLEAN_OR;
+      // javac stamps the chain's first instruction with the outermost operator's line; an entry
+      // below the right operand's line means the operator stood on a line of its own. The chain
+      // then continues on that operator's line, so the last operand starts the following line.
+      boolean operatorLine = orChain && RoundTrip.operatorStartsChainLine(this, right);
+      Boolean chainPrior = LAST_OPERAND_CHAIN.get();
+      boolean lastInChain = orChain && Boolean.TRUE.equals(chainPrior)
+        && !(right instanceof FunctionExprent next && next.getFuncType() == FunctionType.BOOLEAN_OR);
       boolean breakHere = isBoolean
-        ? RoundTrip.newlineBeforeOperand(left, right) || RoundTrip.operatorStartsLine(left, right)
+        ? operatorLine || lastInChain
+          || RoundTrip.newlineBeforeOperand(left, right) || RoundTrip.operatorStartsLine(left, right)
+          || orChain && RoundTrip.patternBindingStartsLater(left, right)
         : RoundTrip.newlineBetween(left, right);
+      int operandStart;
       if (breakHere) {
         buf.appendLineSeparator().appendIndent(indent + 1).append(funcType.operator).append(" ");
       } else {
         buf.appendPossibleNewline(" ").append(funcType.operator).append(" ");
       }
-      if (isBoolean && breakHere) {
-        java.util.Set<Exprent> prior = RoundTrip.enterLeadingOperand(right);
-        try {
+      operandStart = buf.length();
+      boolean chainDown = orChain && (operatorLine || Boolean.TRUE.equals(chainPrior));
+      if (chainDown) {
+        LAST_OPERAND_CHAIN.set(Boolean.TRUE);
+      } else if (orChain) {
+        LAST_OPERAND_CHAIN.remove();
+      }
+      try {
+        if (isBoolean && breakHere) {
+          java.util.Set<Exprent> prior = RoundTrip.enterLeadingOperand(right);
+          try {
+            buf.append(wrapOperandString(right, true, indent, true));
+          } finally {
+            RoundTrip.exitLeadingOperand(prior);
+          }
+        } else {
           buf.append(wrapOperandString(right, true, indent, true));
-        } finally {
-          RoundTrip.exitLeadingOperand(prior);
         }
-      } else {
-        buf.append(wrapOperandString(right, true, indent, true));
+      } finally {
+        if (chainPrior == null) {
+          LAST_OPERAND_CHAIN.remove();
+        } else {
+          LAST_OPERAND_CHAIN.set(chainPrior);
+        }
+      }
+      if (operatorLine) {
+        // The chain's first-line offsets answer to the outermost operator's line, and the
+        // operands after the first line answer to the line the chain's own first operand sits
+        // on: the printer wrote their text where the table does not record it.
+        int chainLine = RoundTrip.textStartLine(this);
+        int midLine = RoundTrip.textStartLine(right);
+        if (chainLine >= 0) {
+          buf.moveBytecodeMappings(offset -> RoundTrip.lineAtOffset(offset) == chainLine, buf.length());
+        }
+        if (midLine >= 0 && midLine != chainLine) {
+          int rightFirst = RoundTrip.exprentStart(right);
+          buf.moveBytecodeMappings(
+            offset -> offset >= rightFirst && RoundTrip.lineAtOffset(offset) == midLine, operandStart);
+        }
       }
       if (!disableNewlineGroupCreation) {
         buf.popNewlineGroup();

@@ -3063,6 +3063,62 @@ public final class RoundTrip {
     return start >= 0 && handlerLine >= 0 && lineAtOffset(start) == handlerLine + 1;
   }
 
+  /** The line the exprent's text starts on: the smallest instruction offset over every part. */
+  public static int textStartLine(Exprent exprent) {
+    int first = firstOffsetOf(exprent);
+    return first < 0 ? -1 : lineAtOffset(first);
+  }
+
+  /**
+   * Whether a boolean chain's first instruction carries a line below the line its right operand's
+   * text starts on. javac stamps a conditional expression's first instruction with the outermost
+   * operator token's line, so the inversion means the operator stood on a line of its own below
+   * the operand's own line: the source broke before the right operand.
+   */
+  public static boolean operatorStartsChainLine(Exprent compound, Exprent right) {
+    if (!enabled() || compound == null || right == null) {
+      return false;
+    }
+    int own = textStartLine(compound);
+    int start = textStartLine(right);
+    return own >= 0 && start >= 0 && start < own;
+  }
+
+  /**
+   * Whether a boolean operand contains a pattern test whose binding the target records on a later
+   * line than the test itself. The binding's store opens the operand's use of the variable, so
+   * its line is where the operand's text began: the source broke before the whole operand.
+   */
+  public static boolean patternBindingStartsLater(Exprent before, Exprent after) {
+    if (!enabled() || before == null || after == null) {
+      return false;
+    }
+    int end = Math.max(lastLine(before), sourceLineEnd(before));
+    if (end < 0) {
+      return false;
+    }
+    for (Exprent part : after.getAllExprents(true, true)) {
+      if (!(part instanceof FunctionExprent function)
+          || function.getFuncType() != FunctionExprent.FunctionType.INSTANCEOF
+          || function.getLstOperands().size() < 3
+          || !(function.getLstOperands().get(2) instanceof VarExprent var)
+          || var.getLVT() == null) {
+        continue;
+      }
+      int test = firstOffsetOf(function);
+      int binding = var.getLVT().getStart();
+      if (test < 0 || binding < 0) {
+        continue;
+      }
+      int testLine = lineAtOffset(test);
+      int bindingLine = lineAtOffset(binding);
+      if (testLine >= 0 && bindingLine > testLine && end < bindingLine) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   /**
    * Whether a boolean operator's right operand starts on a line of its own. Both operands' own
    * bitsets can cover only a short-circuit branch, laid on the line the whole expression ends
