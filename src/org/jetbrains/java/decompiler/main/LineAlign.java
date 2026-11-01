@@ -1166,7 +1166,13 @@ public final class LineAlign {
     int previousLine = -1;
     int highest = -1;
     for (int[] entry : entries) {
-      if (entry[1] < previousLine && entry[2] >= highest && entry[2] <= highest + 1) {
+      // A switch's dispatch record carries no line of its own: the table places the comparison on
+      // the switch's line while the printer writes it beside the label it matches, so the label's
+      // printed line must never become an anchor. The text tells the two lines apart.
+      String text = entry[1] >= 1 && entry[1] <= lines.length ? lines[entry[1] - 1].trim() : "";
+      boolean label = text.startsWith("case ") || text.startsWith("default");
+      boolean boundary = entry[1] < previousLine || entry[3] == 0 && entry[2] == highest && label;
+      if (boundary && entry[2] >= highest && entry[2] <= highest + 1) {
         highest = entry[2];
         entryLines.add(previousLine);
         candidate(candidates, previousLine, entry[2] - previousLine, entry[3], entry[0]);
