@@ -260,6 +260,17 @@ public class IfStatement extends Statement {
       TextBuffer returnLine = new TextBuffer();
       returnLine.appendIndent(indent + 1).append("return;").appendLineSeparator();
       int exit = RoundTrip.voidReturnEndingAt(RoundTrip.firstOffset(guardBody));
+      if (exit < 0 && condition instanceof IfExprent branchHead) {
+        // The arm prints nothing because the fold took its return, so the body's first offset
+        // may not lie where the arm's exit ended. The test's first branch names that exit: the
+        // branch either lands on the body start, just past the return, or jumps into the return
+        // itself when the source wrote `if (!C) { return; }`.
+        int target = RoundTrip.firstBranchTarget(branchHead);
+        exit = RoundTrip.voidReturnEndingAt(target);
+        if (exit < 0 && RoundTrip.isVoidReturn(target)) {
+          exit = target;
+        }
+      }
       if (exit >= 0) {
         RoundTrip.mapSynthesizedLine(returnLine, exit);
       }
