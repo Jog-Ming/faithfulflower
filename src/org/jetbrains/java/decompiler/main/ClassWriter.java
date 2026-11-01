@@ -414,7 +414,12 @@ public class ClassWriter implements StatementWriter {
                       buffer.appendLineSeparator();
                     }
 
-                    codeBuffer.addBytecodeMapping(root.getDummyExit().bytecode);
+                    // The lambda method's implicit return carries the line its body starts on:
+                    // javac positions the whole body expression at its first token, while the
+                    // chain's own invoke keeps its line. Registering the return at the body text's
+                    // end instead would make one printed line answer to the body's start and the
+                    // aligner fold the chain back up; the body's first token is where it belongs.
+                    codeBuffer.addStartBytecodeMapping(root.getDummyExit().bytecode);
                     buffer.append(codeBuffer, node.classStruct.qualifiedName, InterpreterUtil.makeUniqueKey(methodWrapper.methodStruct.getName(), methodWrapper.methodStruct.getDescriptor()));
                     }
                   }
