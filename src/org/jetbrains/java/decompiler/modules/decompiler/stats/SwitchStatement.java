@@ -410,6 +410,21 @@ public class SwitchStatement extends Statement {
         }
       }
     }
+    // A trailing `default: break;` closes the switch's own scope on the jump the break compiles
+    // to: javac emits that jump's frame while the string switch's selector temporaries are still
+    // live, then elides the jump because it lands on the next instruction. A `default: return;`
+    // closes their rows one instruction later, and no default at all leaves the join's frame
+    // chopping the slots instead.
+    if (defaultBreakJump < 0 && switchEnd >= 0 && !yields && !isPattern()
+        && caseGuards.stream().noneMatch(Objects::nonNull)
+        && RoundTrip.selector("switchbreak") && RoundTrip.selector("switchdefault")
+        && defaultTargetOffset() == switchEnd) {
+      SwitchInstruction instruction = switchInstruction();
+      int switchOffset = instruction == null ? -1 : instruction.startOffset;
+      if (RoundTrip.selectorTempsEndAt(switchOffset, switchEnd)) {
+        defaultBreakJump = switchEnd;
+      }
+    }
 
     boolean defaultPrinted = false;
     boolean defaultBreakPrinted = false;
@@ -990,7 +1005,7 @@ public class SwitchStatement extends Statement {
     // the source still wrote out: the group is what keeps the last arm's `break;` jump in place,
     // so it has to be printed back even though it compiles to no instruction of its own.
     if (RoundTrip.selector("switchbreak") && RoundTrip.selector("switchdefault")
-        && switchEnd >= 0 && !defaultPrinted && lastPrinted >= 0 && lastJoins
+        && switchEnd >= 0 && !defaultPrinted && defaultBreakJump < 0 && lastPrinted >= 0 && lastJoins
         && !yields && !orderUnknown && !isPattern() && caseGuards.stream().noneMatch(Objects::nonNull)
         && defaultTargetOffset() == switchEnd) {
       if (arrowSwitch) {
