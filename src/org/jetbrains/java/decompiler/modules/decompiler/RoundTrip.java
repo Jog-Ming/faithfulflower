@@ -3079,9 +3079,30 @@ public final class RoundTrip {
     if (!resources || previous == null || handlerOffset < 0) {
       return false;
     }
-    int braceLine = highestLineBetween(0, handlerOffset);
+    // The brace's line is the synthetic close's own line, not the greatest entry in the range: a
+    // skip-goto ending the protected range carries the line of the statement after the try and
+    // would sit past a brace the source broke onto its own line.
+    int braceLine = closeCallLine(handlerOffset);
+    if (braceLine < 0) {
+      braceLine = highestLineBetween(0, handlerOffset);
+    }
     int handlerLine = lineAtOffset(handlerOffset);
     return braceLine >= 0 && handlerLine > braceLine;
+  }
+
+  /** The line of the last resource close the target records before the handler, or -1. */
+  private static int closeCallLine(int handlerOffset) {
+    StructMethod method = currentMethod();
+    BitSet closes = method == null ? null : CLOSE_CALLS.get(method);
+    if (closes == null || handlerOffset < 0) {
+      return -1;
+    }
+    int line = -1;
+    for (int close = closes.nextSetBit(0); close >= 0 && close < handlerOffset;
+         close = closes.nextSetBit(close + 1)) {
+      line = Math.max(line, lineAtOffset(close));
+    }
+    return line;
   }
 
   /**
@@ -3096,7 +3117,10 @@ public final class RoundTrip {
     if (closes == null || firstHandlerOffset < 0) {
       return null;
     }
-    int braceLine = highestLineBetween(0, firstHandlerOffset);
+    int braceLine = closeCallLine(firstHandlerOffset);
+    if (braceLine < 0) {
+      braceLine = highestLineBetween(0, firstHandlerOffset);
+    }
     if (braceLine < 0) {
       return null;
     }
