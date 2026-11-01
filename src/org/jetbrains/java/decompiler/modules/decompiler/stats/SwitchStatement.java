@@ -385,6 +385,10 @@ public class SwitchStatement extends Statement {
     boolean defaultPrinted = false;
     boolean defaultBreakPrinted = false;
     boolean lastJoins = false;
+    // Whether the last printed arm's page ends in a statement that falls into the join without a
+    // `break;` of its own, and whether any of the breaks below already printed one for it.
+    boolean lastFallsIntoJoin = false;
+    boolean lastBreakPrinted = false;
     // The method's final return when several pattern arms jump to it instead of returning
     // themselves: javac gives every arm that ends at the switch's join one jump to a shared
     // return, and the source wrote `break;` in those arms and the return once after the switch.
@@ -725,6 +729,9 @@ public class SwitchStatement extends Statement {
       if (joinedReturn != null) {
         buf.append(breakLine(indent + 2, joinedReturn.bytecode == null ? -1
           : joinedReturn.bytecode.previousSetBit(Integer.MAX_VALUE)));
+        if (i == lastPrinted) {
+          lastBreakPrinted = true;
+        }
       }
       // What the arm actually printed decides whether it still needs a `break;`. The tree's own
       // edge is not enough evidence: an explicit break edge can hang off a statement the printer
@@ -743,6 +750,7 @@ public class SwitchStatement extends Statement {
       boolean joins = breakJump >= 0 || tailJumpsToJoin;
       if (i == lastPrinted) {
         lastJoins = joins;
+        lastFallsIntoJoin = !armLeaves && RoundTrip.canCompleteNormally(stat);
       }
       // The arm's tail instruction is a jump past the switch, but the source may have written the
       // break inside a nested branch: an arm ending in `if (...) { ...; break; }` falls through on
@@ -780,6 +788,9 @@ public class SwitchStatement extends Statement {
       }
       if (loopJoin) {
         buf.append(breakLine(indent + 2, loopJoinJump));
+        if (i == lastPrinted) {
+          lastBreakPrinted = true;
+        }
       }
       boolean breakInside = false;
       if (RoundTrip.selector("switchbreak") && joins && !yields && !orderUnknown
@@ -790,6 +801,9 @@ public class SwitchStatement extends Statement {
         breakInside = braced.contains(stat) && declaredScopePast(armRows.get(i), breakJump);
         if (!braced.contains(stat) || breakInside) {
           buf.append(breakLine(indent + 2, breakJump));
+          if (i == lastPrinted) {
+            lastBreakPrinted = true;
+          }
         }
       }
 
@@ -820,9 +834,29 @@ public class SwitchStatement extends Statement {
           int at = buf.length();
           buf.append(" break;");
           buf.addBytecodeMappingAt(at, deferredBreak > 0 ? deferredBreak : breakJump, null, null);
+          if (i == lastPrinted) {
+            lastBreakPrinted = true;
+          }
         }
         buf.appendLineSeparator();
       }
+    }
+
+    // The last arm's written `break;` the tree dropped: the join is the goto that jump compiled
+    // to, the target's table records the statement's line on it, and the page mapped nothing
+    // there. The arm falls into the jump as printed, so the break is the only statement that can
+    // carry the line; javac folds it into the join jump the arm already had.
+    if (RoundTrip.selector("switchtailbreak") && switchEnd >= 0 && lastPrinted >= 0
+        && lastFallsIntoJoin && !lastJoins && !lastBreakPrinted
+        && !yields && !arrowSwitch && !orderUnknown && !braced.contains(caseStatements.get(lastPrinted))
+        && defaultBreakJump < 0 && defaultBody.isEmpty()
+        && joinArm == null && caseJoinArm == null && updateArm == null
+        // A break jump lands past the switch; a backward target is the loop's own latch, whose
+        // line the compiler writes without any statement the arm printed.
+        && RoundTrip.jumpTargetAt(switchEnd) > switchEnd && RoundTrip.hasLineEntryAt(switchEnd)
+        && !RoundTrip.enclosingContinueTarget(this, switchEnd)
+        && !buf.hasBytecodeMapping(switchEnd)) {
+      buf.append(breakLine(indent + 2, switchEnd));
     }
 
     if (defaultBreakJump >= 0 && !defaultBreakPrinted) {
