@@ -179,6 +179,11 @@ public final class ConstantNames {
     nanSites(text, rootSpans, root, imports, packageName, sites);
     deadNamings(text, rootSpans, rootRules, root.classStruct, packageName, sites,
       anonymousPadding(root.classStruct));
+    // After deadNamings: the empty-if insertion it builds is the preferred carrier of a folded
+    // naming, and a condition operand placed first would take that site away from it.
+    if (rootRules != null) {
+      conditionOperandSites(text, rootSpans, rootRules, sites);
+    }
     for (Map.Entry<String, List<int[]>> entry : spansByClass.entrySet()) {
       ClassNode node = byName.get(entry.getKey());
       if (node == null) {
@@ -194,6 +199,9 @@ public final class ConstantNames {
       interfaceStringSites(text, entry.getValue(), node, sites);
       nanSites(text, entry.getValue(), node, imports, packageName, sites);
       deadNamings(text, entry.getValue(), classRules, node.classStruct, packageName, sites, 0);
+      if (classRules != null) {
+        conditionOperandSites(text, entry.getValue(), classRules, sites);
+      }
     }
     if (sites.isEmpty()) {
       return text;
@@ -212,7 +220,7 @@ public final class ConstantNames {
                        Set<String> strict, Set<String> missing,
                        Map<String, List<Constant>> compositeCandidates, Set<String> compositeOwners,
                        String own, Map<String, List<int[]>> ownInitializers,
-                       List<String> imports, String packageName) {
+                       List<String> imports, String packageName, Set<String> earlyNested) {
   }
 
   /**
@@ -1093,6 +1101,25 @@ public final class ConstantNames {
     // the InnerClasses table's and the StackMapTable's Class entries. A pair above that point is
     // attribute data, not a folded naming, however pair-shaped it looks.
     int writeStart = attributeStart(own);
+    // A nested type whose Class entry sits above every instruction-referenced entry, has no
+    // direct instruction use and was not created as a reference's operand was entered by a folded
+    // naming of one of its constants, inside a generated body. Writing `Owner.Nested.NAME` names
+    // the owner and the nested type exactly as that naming did.
+    Set<String> earlyNested = new LinkedHashSet<>();
+    for (Map.Entry<String, Integer> entry : classIndices.entrySet()) {
+      String name = entry.getKey();
+      int index = entry.getValue();
+      if (!name.startsWith(nestOf(own.qualifiedName) + "$") || firstUses.containsKey(index)
+          || internedAt.containsKey(name) || index >= writeStart) {
+        continue;
+      }
+      for (int key : firstUses.keySet()) {
+        if (key > index) {
+          earlyNested.add(name);
+          break;
+        }
+      }
+    }
     // A Class entry the pool leaves completely unexplained, entered as a bare pair (its name, then
     // neither a value nor a reference), exists only because the source named one of the owner's
     // constants, and that naming left no value entry: the constant folded to an immediate or to a
@@ -1157,7 +1184,7 @@ public final class ConstantNames {
         inheritedNames, activePairs, activeValues, valueRecords, bares, earlyOwners, ownEarly,
         ownProven, own, text, bare, !firstUses.isEmpty(), fieldDeclarations(text, spans, own)),
       strict, missing, compositeCandidates, compositeOwners, own.qualifiedName,
-      ownInitializers(text, spans, own), imports, packageName);
+      ownInitializers(text, spans, own), imports, packageName, earlyNested);
   }
 
   /**
@@ -2000,10 +2027,15 @@ public final class ConstantNames {
                           int lowerAt, int nextClass, boolean ownMember, boolean unprintedCall) {
     /** Whether naming a constant of this value enters no pool entry the original did not have. */
     boolean valueAvailable(String key) {
+      return valueAvailable(key, false);
+    }
+
+    /** As {@link #valueAvailable(String)}, for a literal written behind a unary minus. */
+    boolean valueAvailable(String key, boolean negative) {
       if (key.equals(successorKey)) {
         return true; // the naming entered this very value; the pair's neighbour is it
       }
-      return immediateKey(key) || pooled.contains(key);
+      return immediateKey(key, negative) || pooled.contains(key);
     }
   }
 
@@ -2042,9 +2074,13 @@ public final class ConstantNames {
       String owner = entry.getString();
       // The class's own entry is `this_class`'s unless the pool proves it was interned before the
       // attribute data existed: then a folded naming of one of the class's own constants created
-      // it, and a pair there records that naming like any other.
+      // it, and a pair there records that naming like any other. A direct instruction use of the
+      // entry explains it only when that use is generated before the pair's successor: a direct
+      // use in a later method (an enum's synthesized body, `<clinit>`'s own `ldc this_class`)
+      // cannot have entered an entry the pool already holds below the reference.
       boolean ownNaming = owner.equals(cls.qualifiedName) && i < writeStart
-        && (ownProven || ownChain);
+        && (ownProven || ownChain
+            || (RoundTrip.selector("ownpair") && directUseAfterPair(firstUses, i)));
       if (classOperand(cls, indices, i)) {
         continue; // a reference below the pair entered this Class entry as its operand
       }
@@ -2228,6 +2264,24 @@ public final class ConstantNames {
       && tilesString(DecompilerContext.getStructContext().getClass(superName), value, depth + 1);
   }
 
+  /**
+   * Whether a direct instruction use of a {@code Class} entry is generated after the pair's
+   * successor, so it cannot be the event that entered the entry.
+   *
+   * <p>A direct use in a later-generated method says the entry already existed there; the pool
+   * places the entry below the successor, so the successor's own generation is later still, and
+   * a folded naming right before it is what entered the entry.
+   */
+  private static boolean directUseAfterPair(Map<Integer, FirstUse> firstUses, int i) {
+    FirstUse direct = firstUses.get(i);
+    FirstUse successor = firstUses.get(i + 2);
+    if (direct == null || successor == null) {
+      return false;
+    }
+    return coordinate(direct.order(), direct.offset())
+      > coordinate(successor.order(), successor.offset());
+  }
+
   /** Whether the pool entry is a {@code Class} entry followed by its own name: another naming. */
   private static boolean anotherNaming(List<PooledConstant> pool, int index) {
     if (index + 1 >= pool.size()) {
@@ -2274,11 +2328,18 @@ public final class ConstantNames {
         // the next naming's Class entry, and its first use is the point that places the pair.
         continue;
       }
-      if (key > index && key != index + 2 && untrusted.contains(entry.getValue().methodKey())) {
+      if (key != index + 2 && untrusted.contains(entry.getValue().methodKey())
+          && (key > index || (RoundTrip.selector("untrustedpair")
+              && valuesMethod(entry.getValue().methodKey())))) {
         // The method's class-file position is not where it was generated (a synthetic lambda is
         // generated with its enclosing method, a record's generated methods after every source
-        // method), so its first use says nothing about when this entry was created. The pair's
-        // own successor is the anchor and always counts.
+        // method, an enum's synthesized {@code $values} after them), so its first use says
+        // nothing about when this entry was created -- not as an upper bound and not as a lower
+        // one. A lambda's use is left as a lower bound: its body is generated with the enclosing
+        // method, so its class-file rank only overshoots, and skipping every such bound widens the
+        // gap enough to admit a naming in an unrelated method. Only the enum's {@code $values},
+        // whose whole body is synthesized after every source method, is skipped on the lower side.
+        // The pair's own successor is the anchor and always counts.
         continue;
       }
       long point = coordinate(entry.getValue().order(), entry.getValue().offset());
@@ -3108,6 +3169,12 @@ public final class ConstantNames {
       }
     }
     if (best < 0 || bestName == null) {
+      Site nested = nestedPrefixSite(text, spans, owner, rules, cls, last);
+      if (nested != null) {
+        return nested;
+      }
+    }
+    if (best < 0 || bestName == null) {
       // An arithmetic expression over the owner's int constants can reproduce a literal no single
       // constant holds (`MAX_SIZE - 1`); the naming is the constant, the arithmetic is the
       // source's. The expression's type is the literal's own, so no overload can change, and the
@@ -3153,6 +3220,70 @@ public final class ConstantNames {
       return null;
     }
     return new Site(best, bestEnd, bestReplacement, owner);
+  }
+
+  /**
+   * The literal a constant of an early-entered nested type of the bare owner names, or null.
+   *
+   * <p>A nested type whose {@code Class} entry the pool proves a folded naming created during a
+   * generated body is named through its owner: {@code Owner.Nested.NAME} resolves the owner while
+   * the class's names are resolved (the pair that opens the pool) and folds the nested constant
+   * where the body was generated, which is the position the nested pair records. The nested type
+   * and the site share a nest, so any constant it declares is writable here.
+   */
+  private static Site nestedPrefixSite(String text, List<int[]> spans, String owner, Rules rules,
+                                       StructClass cls, boolean last) {
+    if (!RoundTrip.selector("nestedprefix") || rules.earlyNested().isEmpty()
+        || !nestOf(owner).equals(nestOf(cls.qualifiedName))) {
+      return null; // the owner's simple name must be in scope at the site
+    }
+    String root = simpleName(owner);
+    if (root.isEmpty() || !Character.isJavaIdentifierStart(root.charAt(0))) {
+      return null;
+    }
+    Site found = null;
+    for (String nested : rules.earlyNested()) {
+      if (!nested.startsWith(owner + "$")) {
+        continue;
+      }
+      StructClass nestedCls = DecompilerContext.getStructContext().getClass(nested);
+      if (nestedCls == null) {
+        continue;
+      }
+      String rest = nested.substring(owner.length() + 1).replace('$', '.');
+      boolean nameable = true;
+      for (String part : rest.split("\\.")) {
+        if (part.isEmpty() || !Character.isJavaIdentifierStart(part.charAt(0))) {
+          nameable = false;
+          break;
+        }
+      }
+      if (!nameable) {
+        continue;
+      }
+      String qualifier = root + "." + rest;
+      for (StructField field : nestedCls.getFields()) {
+        if ((field.getAccessFlags() & (CodeConstants.ACC_STATIC | CodeConstants.ACC_FINAL))
+            != (CodeConstants.ACC_STATIC | CodeConstants.ACC_FINAL)) {
+          continue;
+        }
+        PrimitiveConstant value = constantValue(nestedCls, field);
+        if (value == null || kind(field.getDescriptor()) != VariableType.INT
+            || !(value.value instanceof Integer constant)) {
+          continue;
+        }
+        for (long[] literal : intLiterals(text, spans)) {
+          int start = (int) literal[0];
+          if (literal[2] != constant
+              || (last ? start <= (found == null ? -1 : found.start())
+                       : found != null && start >= found.start())) {
+            continue;
+          }
+          found = new Site(start, (int) literal[1], qualifier + "." + field.getName(), owner);
+        }
+      }
+    }
+    return found;
   }
 
   /** The position of this owner among the pool's leading pairs, or -1. */
@@ -4032,6 +4163,103 @@ public final class ConstantNames {
     return best;
   }
 
+  /**
+   * Appends a folded boolean operand to a condition the pool proves named its owner there.
+   *
+   * <p>A constant variable used as an operand of {@code &&} or {@code ||} folds away but still
+   * interns its owner's {@code Class}: {@code x || !y && Owner.FLAG} compiles exactly as
+   * {@code x || !y} while the pool holds the owner's entry right before the branch body. The pair
+   * records that the naming was the last pool-entering event before the successor, so the operand
+   * stood at the end of the condition that encloses the last lower use and closes before the
+   * successor's instruction. A true constant is appended with {@code &&} and a false one with
+   * {@code ||}, which folds away and leaves the condition's value and instructions unchanged.
+   */
+  private static void conditionOperandSites(String text, List<int[]> spans, Rules rules,
+                                            List<Site> sites) {
+    if (!RoundTrip.selector("condoperand") || rules.placement().pairs() == null
+        || rules.placement().pairs().isEmpty()) {
+      return;
+    }
+    StructClass cls = rules.placement().cls();
+    if (cls == null) {
+      return;
+    }
+    for (Map.Entry<String, PairSite> entry : rules.placement().pairs().entrySet()) {
+      String owner = entry.getKey();
+      PairSite pair = entry.getValue();
+      if (pair.lowerAt() < 0 || pair.successorAt() < 0
+          || siteIn(sites, owner, spans) || owner.equals(cls.qualifiedName)
+          || rules.placement().values().containsKey(owner)
+          || rules.placement().valueRecords().contains(owner)) {
+        // A pair whose successor is a value the owner produces is the ordinary scan's record;
+        // any other successor leaves the naming as the last pool-entering event before it.
+        continue;
+      }
+      int lower = pair.lowerAt();
+      int successor = pair.successorAt();
+      if (!inside(spans, lower) || successor <= lower) {
+        continue;
+      }
+      // The naming's operands are generated after the last lower use, so the condition that
+      // carries the appended operand is the first test printed after that use whose own
+      // parenthesized condition closes before the successor's instruction.
+      int close = -1;
+      for (int at = text.indexOf("if (", lower); at >= 0 && at < successor;
+           at = text.indexOf("if (", at + 1)) {
+        int open = at + 3;
+        int end = matchingParen(text, open);
+        if (open > lower && end > open && end < successor) {
+          close = end;
+          break;
+        }
+      }
+      if (close < 0 || hasSiteAt(sites, close)) {
+        continue;
+      }
+      StructField flag = uniqueBooleanConstant(owner);
+      if (flag == null) {
+        continue;
+      }
+      String qualifier = solverQualifier(owner, rules.packageName());
+      if (qualifier == null) {
+        continue;
+      }
+      PrimitiveConstant value = constantValue(
+        DecompilerContext.getStructContext().getClass(owner), flag);
+      if (value == null || !(value.value instanceof Integer flagValue)) {
+        continue;
+      }
+      String operand = (flagValue != 0 ? " && " : " || ") + qualifier + "." + flag.getName();
+      addSiteOnce(sites, new Site(close, close, operand, owner));
+    }
+  }
+
+  /**
+   * The first accessible boolean constant variable of the owner, or null when it has none.
+   *
+   * <p>Which boolean flag the source named is not recorded and does not matter: every one folds
+   * away, and the operator chosen from its value keeps the appended operand neutral, so the
+   * compiled condition and the pool are the same for all of them.
+   */
+  private static StructField uniqueBooleanConstant(String owner) {
+    StructClass cls = DecompilerContext.getStructContext().getClass(owner);
+    if (cls == null) {
+      return null;
+    }
+    for (StructField field : cls.getFields()) {
+      int access = field.getAccessFlags();
+      if ((access & (CodeConstants.ACC_STATIC | CodeConstants.ACC_FINAL)) !=
+          (CodeConstants.ACC_STATIC | CodeConstants.ACC_FINAL)
+          || (access & CodeConstants.ACC_PUBLIC) == 0
+          || kind(field.getDescriptor()) != VariableType.BOOLEAN
+          || field.getAttribute(StructGeneralAttribute.ATTRIBUTE_CONSTANT_VALUE) == null) {
+        continue;
+      }
+      return field;
+    }
+    return null;
+  }
+
   private static boolean hasSiteAt(List<Site> sites, int start) {
     for (Site site : sites) {
       if (site.start() == start) {
@@ -4208,6 +4436,13 @@ public final class ConstantNames {
    */
   private static Site solvedSite(String key, int start, int end, String own, List<String> imports,
                                  String packageName, Placement placement, boolean[] exactProof) {
+    return solvedSite(key, start, end, own, imports, packageName, placement, exactProof, false);
+  }
+
+  /** As above, for a literal written behind a unary minus. */
+  private static Site solvedSite(String key, int start, int end, String own, List<String> imports,
+                                 String packageName, Placement placement, boolean[] exactProof,
+                                 boolean negative) {
     if (placement == null || placement.pairs() == null || placement.spaces() == null) {
       return null;
     }
@@ -4266,7 +4501,7 @@ public final class ConstantNames {
       // The printer maps a quoted literal's content start, one past the opening quote it adds.
       int anchor = key.startsWith(VariableType.STRING.name() + "|")
         || key.startsWith(VariableType.CHAR.name() + "|") ? start + 1 : start;
-      if (!pairProvesSite(pair, entry.getKey(), key, anchor, placement)) {
+      if (!pairProvesSite(pair, entry.getKey(), key, anchor, placement, negative)) {
         continue;
       }
       boolean referenceSuccessor = pair.successorKey() == null;
@@ -4450,10 +4685,16 @@ public final class ConstantNames {
   /** Whether the pair's own record places a naming at this literal, for that literal's value. */
   private static boolean pairProvesSite(PairSite pair, String owner, String key, int position,
                                         Placement placement) {
+    return pairProvesSite(pair, owner, key, position, placement, false);
+  }
+
+  /** As above, for a literal written behind a unary minus. */
+  private static boolean pairProvesSite(PairSite pair, String owner, String key, int position,
+                                        Placement placement, boolean negative) {
     if (pair.successorKey() != null && !key.equals(pair.successorKey())) {
       return false; // the value the naming entered is not this literal's
     }
-    return pair.valueAvailable(key) && pairProvesBounds(pair, owner, position, placement);
+    return pair.valueAvailable(key, negative) && pairProvesBounds(pair, owner, position, placement);
   }
 
   /**
@@ -6205,9 +6446,18 @@ public final class ConstantNames {
     }
     for (InheritedConstant inherited : inheritedConstants(cls)) {
       int access = inherited.field().getAccessFlags();
+      // The member's accessibility is the declaring class's: a private constant of a remote
+      // superclass is not writable through a subclass's name, and a protected one only inside a
+      // body that extends the declaring class.
+      String declaring = inherited.declaring().qualifiedName;
       boolean visible = (access & CodeConstants.ACC_PUBLIC) != 0
-        || (packagePrivateInherited && samePackage && (access & CodeConstants.ACC_PRIVATE) == 0)
-        || ((access & CodeConstants.ACC_PRIVATE) != 0 && sameNest);
+        || (packagePrivateInherited && packageName.equals(packageOf(declaring))
+            && (access & CodeConstants.ACC_PRIVATE) == 0)
+        || ((access & CodeConstants.ACC_PROTECTED) != 0
+            && (packageName.equals(packageOf(declaring))
+                || extendsClass(nestOf(site.qualifiedName), declaring)))
+        || ((access & CodeConstants.ACC_PRIVATE) != 0
+            && nestOf(declaring).equals(nestOf(site.qualifiedName)));
       if (inherited.declaring() == cls || !visible) {
         continue;
       }
@@ -6779,6 +7029,18 @@ public final class ConstantNames {
    * pair, so a naming that would introduce one cannot reproduce the pool.
    */
   private static boolean immediateKey(String key) {
+    return immediateKey(key, false);
+  }
+
+  /**
+   * Whether the folded literal of this kind and magnitude enters no pool entry.
+   *
+   * <p>{@code negative} says the literal is written behind a unary minus whose operand is the
+   * constant's positive magnitude. An int keeps its immediate encoding (bipush/sipush take a
+   * signed operand), but a long has no negative immediate and a float or double has no negative
+   * {@code const} instruction: {@code -1.0F} is an {@code ldc} value.
+   */
+  private static boolean immediateKey(String key, boolean negative) {
     if (key.startsWith(VariableType.BOOLEAN.name() + "|")) {
       return true;
     }
@@ -6790,7 +7052,16 @@ public final class ConstantNames {
       if (key.startsWith(VariableType.LONG.name() + "|")) {
         // javac has lconst_0 and lconst_1 only; every other long is an ldc2_w value.
         long value = Long.parseLong(key.substring(bar + 1));
-        return value == 0L || value == 1L;
+        return negative ? value == 0L : value == 0L || value == 1L;
+      }
+      if (RoundTrip.selector("immediatefp") && key.startsWith(VariableType.FLOAT.name() + "|")) {
+        // javac has fconst_0..2: those fold to an immediate and enter no pool value.
+        float value = Float.parseFloat(key.substring(bar + 1));
+        return !negative && (value == 0.0F || value == 1.0F || value == 2.0F);
+      }
+      if (RoundTrip.selector("immediatefp") && key.startsWith(VariableType.DOUBLE.name() + "|")) {
+        double value = Double.parseDouble(key.substring(bar + 1));
+        return !negative && (value == 0.0 || value == 1.0);
       }
       if (!key.startsWith(VariableType.INT.name() + "|")
           && !key.startsWith(VariableType.CHAR.name() + "|")) {
@@ -6836,8 +7107,26 @@ public final class ConstantNames {
         }
         break;
       }
+      // A unary minus changes the folded value's encoding: `-1.0F` is an ldc value, not an
+      // immediate, so the sign must reach the check. A binary minus does not (its right operand
+      // is the positive literal).
+      boolean negative = false;
+      int before = i - 1;
+      while (before >= 0 && Character.isWhitespace(expression.charAt(before))) {
+        before--;
+      }
+      if (before >= 0 && expression.charAt(before) == '-') {
+        int operand = before - 1;
+        while (operand >= 0 && Character.isWhitespace(expression.charAt(operand))) {
+          operand--;
+        }
+        negative = operand < 0 || !(isIdentifierPart(expression.charAt(operand))
+          || Character.isDigit(expression.charAt(operand))
+          || expression.charAt(operand) == ')' || expression.charAt(operand) == ']');
+      }
       String key = literalKey(expression.substring(i, end));
-      if (key != null && !immediateKey(key) && pooledBefore != null && !pooledBefore.contains(key)) {
+      if (key != null && !immediateKey(key, negative) && pooledBefore != null
+          && !pooledBefore.contains(key)) {
         return false;
       }
       i = end - 1;
@@ -7049,10 +7338,13 @@ public final class ConstantNames {
   }
 
   private static boolean isBootstrapOwner(String owner) {
+    // `java/lang/constant/ConstantDescs` is a regular source-nameable class holding public
+    // constant descriptors; the rest of the package is invokedynamic bootstrap material.
     return owner.startsWith("java/lang/invoke/")
       || owner.equals("java/lang/runtime/ObjectMethods")
       || owner.equals("java/lang/runtime/SwitchBootstraps")
-      || owner.startsWith("java/lang/constant/");
+      || owner.startsWith("java/lang/constant/")
+        && !(RoundTrip.selector("constantdescs") && owner.equals("java/lang/constant/ConstantDescs"));
   }
 
   private static void candidate(Map<String, List<Constant>> map, String key, Constant constant) {
@@ -8368,10 +8660,12 @@ public final class ConstantNames {
     boolean ownCandidate = ownConstant != null;
     // [0] a value successor is the exact folded value, [1] the solution is the constant's own
     // name (not an expression the solver built from one of its constants).
+    boolean negativeLiteral = "-".equals(prefix);
     boolean[] exactProof = new boolean[2];
     Site solved = allowSolved && placement != null && placement.pairs() != null
       && !placement.pairs().isEmpty()
-      ? solvedSite(key, start, end, own, imports, packageName, placement, exactProof) : null;
+      ? solvedSite(key, start, end, own, imports, packageName, placement, exactProof,
+          negativeLiteral) : null;
     // The class's own constant keeps precedence over a naming placed by the generation gap: its
     // Class entry is in the pool regardless, so the gap proves less about it. A value successor
     // is the exact folded value, though, and settles which owner the source named. The same holds
@@ -8664,7 +8958,7 @@ public final class ConstantNames {
       return;
     }
     if (!lexical && pair != null && window == null && !placed) {
-      if (pair.valueAvailable(key) && deferred != null) {
+      if (pair.valueAvailable(key, negativeLiteral) && deferred != null) {
         deferred.computeIfAbsent(constant.owner(), k -> new ArrayList<>())
           .add(new Site(start, end, printed, constant.owner()));
       }
@@ -9102,6 +9396,10 @@ public final class ConstantNames {
           }
         }
       }
+    }
+    if (anonymous <= 0) {
+      trimUncoveredConditions(prefixOwners(own), indices, constantInitializers, sites, spans,
+        conditions, own);
     }
     // The pruned-tree scan runs last-pruned-first, so the pool's pair order is the reverse of the
     // source order. Writing the conditions by descending pool index puts them back in source
@@ -9594,12 +9892,15 @@ public final class ConstantNames {
                                        List<Map.Entry<Integer, String>> conditions,
                                        Set<Integer> added, boolean recordBody) {
     Integer ownIndex = indices.get(own.qualifiedName);
+    Integer superIndex = own.superClass == null ? null : indices.get(own.superClass.getString());
     if (own.superClass != null && owner.equals(own.superClass.getString())
-        && (ownIndex == null || ownIndex != 1)) {
+        && !(RoundTrip.selector("superdead") && opensThePool(superIndex))
+        && !opensThePool(ownIndex)) {
       // The superclass's Class entry is entered when the class is set up, before any folded
       // naming, and a constant use the generation resolves enters it at that code point; neither
-      // is a dead condition. Only a class whose own Class pair opens the pool proves that setup
-      // happened before the first naming, which leaves a later superclass pair to a folded name.
+      // is a dead condition. The pool proves a naming when either pair opens it: a class whose own
+      // pair is first was set up before the first naming, and a superclass pair first was itself
+      // entered by a naming before setup ran.
       return;
     }
     Integer index = indices.get(owner);
@@ -9627,6 +9928,66 @@ public final class ConstantNames {
     String condition = deadCondition(owner, own.qualifiedName, packageName, recordBody);
     if (condition != null) {
       conditions.add(Map.entry(index, condition));
+    }
+  }
+
+  /** Whether the entry opens the pool, before any code generation. */
+  private static boolean opensThePool(Integer index) {
+    return index != null && index == 1;
+  }
+
+  /** Whether the printed-key names an enum's synthesized {@code $values} method. */
+  private static boolean valuesMethod(String methodKey) {
+    return methodKey != null && methodKey.startsWith("$values ");
+  }
+
+  /**
+   * Drops conditions the dead block cannot order.
+   *
+   * <p>The block is attributed before every generated body, so its conditions enter their owners'
+   * {@code Class} entries at the pool's front, in source order. A prefix pair left without a
+   * condition is entered later by its own reference or setup, and it can then only sit above
+   * every conditioned pair; a pool that puts it below one is not reproducible from this block.
+   * The conditions above the first such pair are withdrawn. The class's own pair is exempt (its
+   * entry is {@code this_class}), and an owner a site already names or a constant initializer
+   * explains is not this block's to place.
+   */
+  private static void trimUncoveredConditions(List<String> prefixOwners,
+                                              Map<String, Integer> indices,
+                                              Map<String, List<int[]>> initializers,
+                                              List<Site> sites, List<int[]> spans,
+                                              List<Map.Entry<Integer, String>> conditions,
+                                              StructClass own) {
+    if (conditions.isEmpty()) {
+      return;
+    }
+    int max = Integer.MIN_VALUE;
+    for (Map.Entry<Integer, String> condition : conditions) {
+      max = Math.max(max, condition.getKey());
+    }
+    for (String owner : prefixOwners) {
+      Integer index = indices.get(owner);
+      if (index == null || index >= max) {
+        continue;
+      }
+      boolean covered = false;
+      for (Map.Entry<Integer, String> condition : conditions) {
+        if (condition.getKey().equals(index)) {
+          covered = true;
+          break;
+        }
+      }
+      if (covered || owner.equals(own.qualifiedName)
+          || siteInConstantInitializer(sites, owner, initializers)
+          || firstInitializerSite(sites, owner, spans, initializers) != null
+          || hasSiteFor(sites, owner)) {
+        continue;
+      }
+      conditions.removeIf(condition -> condition.getKey() > index);
+      if (conditions.isEmpty()) {
+        return;
+      }
+      max = index;
     }
   }
 
@@ -9769,31 +10130,68 @@ public final class ConstantNames {
       // context through the class's own entry, which is what the pool's front pair records. A
       // qualified own name in a folded condition is not interned at all.
       String name = owner.equals(ownName) ? field.getName() : qualifier + "." + field.getName();
-      switch (kind) {
-        case BOOLEAN:
-          return trueForm ? name : number.intValue() != 0 ? "!" + name : name;
-        case INT:
-        case BYTE:
-        case SHORT:
-        case CHAR: {
-          long integral = number.longValue();
-          if (trueForm) {
-            return name + " == " + integral;
-          }
-          return name + " == " + (integral == Integer.MAX_VALUE ? integral - 1 : integral + 1);
-        }
-        case LONG: {
-          long integral = number.longValue();
-          if (trueForm) {
-            return name + " == " + integral + "L";
-          }
-          return name + " == " + (integral == Long.MAX_VALUE ? integral - 1 : integral + 1) + "L";
-        }
-        default:
-          break;
+      String condition = constantCondition(name, kind, number, trueForm);
+      if (condition != null) {
+        return condition;
+      }
+    }
+    // A type with no constant of its own can still have been named through an inherited one:
+    // `Sub.INHERITED` resolves the subclass's Class entry and folds the field. The field's
+    // accessibility is the declaring class's, and the qualifier is the named subclass.
+    for (InheritedConstant inherited : RoundTrip.selector("inheriteddead")
+        ? inheritedConstants(cls) : List.<InheritedConstant>of()) {
+      if (inherited.declaring() == cls || !(inherited.value() instanceof Number number)) {
+        continue;
+      }
+      int access = inherited.field().getAccessFlags();
+      // The qualifier is the named subclass, but the member's accessibility is the declaring
+      // class's: a private constant of a remote superclass is not reachable through a subclass's
+      // name, and a protected one is only writable where the site extends its declaring class.
+      String declaring = inherited.declaring().qualifiedName;
+      boolean accessible = (access & CodeConstants.ACC_PUBLIC) != 0
+        || ((access & CodeConstants.ACC_PRIVATE) == 0
+            && packageName.equals(packageOf(declaring)))
+        || ((access & CodeConstants.ACC_PROTECTED) != 0 && extendsClass(nestOf(ownName), declaring))
+        || ((access & CodeConstants.ACC_PRIVATE) != 0
+            && nestOf(declaring).equals(nestOf(ownName)));
+      if (!accessible || (trueForm && (access & CodeConstants.ACC_PUBLIC) == 0)) {
+        continue;
+      }
+      String condition = constantCondition(qualifier + "." + inherited.field().getName(),
+        inherited.kind(), number, trueForm);
+      if (condition != null) {
+        return condition;
       }
     }
     return null;
+  }
+
+  /** The false- or true-form comparison a numeric constant of this kind is written with. */
+  private static String constantCondition(String name, VariableType kind, Number number,
+                                          boolean trueForm) {
+    switch (kind) {
+      case BOOLEAN:
+        return trueForm ? name : number.intValue() != 0 ? "!" + name : name;
+      case INT:
+      case BYTE:
+      case SHORT:
+      case CHAR: {
+        long integral = number.longValue();
+        if (trueForm) {
+          return name + " == " + integral;
+        }
+        return name + " == " + (integral == Integer.MAX_VALUE ? integral - 1 : integral + 1);
+      }
+      case LONG: {
+        long integral = number.longValue();
+        if (trueForm) {
+          return name + " == " + integral + "L";
+        }
+        return name + " == " + (integral == Long.MAX_VALUE ? integral - 1 : integral + 1) + "L";
+      }
+      default:
+        return null;
+    }
   }
 
   /** The pool indices of the leading {@code Class, Utf8} pairs, entered before any code. */
