@@ -1297,6 +1297,20 @@ public class ExprProcessor implements CodeConstants {
   }
 
   public static TextBuffer jmpWrapper(Statement stat, int indent, boolean semicolon) {
+    return jmpWrapper(stat, indent, semicolon, -1);
+  }
+
+  /**
+   * Prints the statement, then the jump its out-edge stands for, mapping the jump's bytecode
+   * offset onto the printed keyword.
+   *
+   * <p>{@code fallbackJump} is the offset of the jump the printed {@code break;}/{@code continue;}
+   * compiles to when the statement itself no longer records it: an empty block has no deleted
+   * instruction to read, and a non-block statement never had its offsets harvested. The switch
+   * that owns the arm knows the jump's offset from the table, and without the mapping the
+   * alignment cannot tell the jump's line from the next statement's.
+   */
+  public static TextBuffer jmpWrapper(Statement stat, int indent, boolean semicolon, int fallbackJump) {
     if (RoundTrip.isDeferredExit(stat)) {
       // The loop prints this block after its closing brace; here the source jumped to it.
       TextBuffer jump = new TextBuffer();
@@ -1323,6 +1337,12 @@ public class ExprProcessor implements CodeConstants {
         && !(edge.getType() == StatEdge.TYPE_CONTINUE && !edge.labeled
              && RoundTrip.landsOnLoopLatch(stat))) {
         int jumpOffset = addDeletedGotoInstructionMapping(stat, buf);
+        if (jumpOffset < 0 && fallbackJump >= 0) {
+          // The statement no longer carries the deleted jump's offset; the arm's owner knows it.
+          // Only the mapping is taken from it: the keyword's kind and its line are decided by the
+          // tree's own evidence, and an offset this block never had must not change them.
+          buf.addBytecodeMapping(fallbackJump);
+        }
         // The target starts no line at the jump when the source ended the previous statement with
         // `break;`/`continue;` on the same line; keep it there.
         boolean join = jumpOffset >= 0 && !RoundTrip.lineStartsAt(jumpOffset)

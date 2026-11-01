@@ -11398,7 +11398,37 @@ public final class RoundTrip {
         }
       }
     }
+    if (cur instanceof org.jetbrains.java.decompiler.modules.decompiler.stats.DoStatement loop) {
+      // A for or while head prints above the body, and its instructions come before the body's
+      // first offset: the jump over the arm ends where the head begins, not where the body does.
+      int start = loopHeadStart(loop);
+      if (start >= 0) {
+        return start;
+      }
+    }
     return firstOffset(arm);
+  }
+
+  /** The first instruction of a loop's printed head, or -1 for a loop whose body runs first. */
+  private static int loopHeadStart(
+      org.jetbrains.java.decompiler.modules.decompiler.stats.DoStatement loop) {
+    org.jetbrains.java.decompiler.modules.decompiler.stats.DoStatement.Type type = loop.getLooptype();
+    if (type != org.jetbrains.java.decompiler.modules.decompiler.stats.DoStatement.Type.FOR
+        && type != org.jetbrains.java.decompiler.modules.decompiler.stats.DoStatement.Type.FOR_EACH
+        && type != org.jetbrains.java.decompiler.modules.decompiler.stats.DoStatement.Type.WHILE) {
+      return -1;
+    }
+    int start = -1;
+    for (List<Exprent> parts : java.util.Arrays.asList(
+        loop.getInitExprentList(), loop.getConditionExprentList())) {
+      for (Exprent part : parts) {
+        int at = part == null ? -1 : exprentStart(part);
+        if (at >= 0 && (start < 0 || at < start)) {
+          start = at;
+        }
+      }
+    }
+    return start;
   }
 
   /**

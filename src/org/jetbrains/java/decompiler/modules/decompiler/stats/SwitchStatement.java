@@ -597,6 +597,18 @@ public class SwitchStatement extends Statement {
       // it does not merge with the arm's last jump. Everything the `} break;` print below needs
       // is decided here: removing the arm's own jump without printing it back would drop a break.
       int breakJump = armBreakJump(stat, edges, switchEnd);
+      // The jump the arm's printed `break;` compiles to, for the mapping that lets the aligner
+      // keep its line apart from the next arm's. The tree may not carry it: an empty arm has no
+      // instruction to read its offset from, and a non-block arm was never harvested. The table's
+      // target for the label is the jump the source wrote, and the jump that closes the arm ends
+      // exactly where the next arm's code begins.
+      int breakMapping = breakJump;
+      if (breakMapping < 0) {
+        breakMapping = RoundTrip.tailJumpOffset(stat);
+      }
+      if (breakMapping < 0 && i + 1 < caseStatements.size()) {
+        breakMapping = RoundTrip.armExitGoto(stat, caseStatements.get(i + 1));
+      }
       boolean patternArm = values.stream().anyMatch(value -> value instanceof FunctionExprent function
         && function.getFuncType() == FunctionType.INSTANCEOF);
       boolean breakOutside = braced.contains(stat) && bracedEarly.contains(stat) && breakJump >= 0
@@ -695,7 +707,7 @@ public class SwitchStatement extends Statement {
       TextBuffer armBuf;
       try {
         armBuf = ExprProcessor.jmpWrapper(stat,
-          arrowSwitch && !braced.contains(stat) ? indent + 1 : indent + 2, false);
+          arrowSwitch && !braced.contains(stat) ? indent + 1 : indent + 2, false, breakMapping);
       } finally {
         if (returnSuppressed) {
           stat.getExprents().add(joinedReturn);
