@@ -703,12 +703,17 @@ public class IfStatement extends Statement {
     // brace prints the continue, pinned to the jump the target records after the last test. A
     // break guard leaves the loop or switch instead: its edge is a written break, and the recorded
     // site is the goto past the loop, which the innermost brace prints as `break;`.
+    // The merger folds a conditional expression `cmp ? false : rest` into the same `!(cmp) && rest`
+    // and the target records the rest operand's line as a break too, but only the `?:` form sends
+    // the comparison's branch onto that operand with a goto behind it. Nested ifs never lay the
+    // branch out that way, so print the condition as the conditional the target proves.
     if (ifstat == null && elsestat == null && !isLabeled() && ifedge != null
         && condition instanceof IfExprent ifHead) {
       boolean continues = ifedge.getType() == StatEdge.TYPE_CONTINUE
         || ifedge.getType() == StatEdge.TYPE_BREAK && RoundTrip.printContinueGuardAtHead(ifHead, this);
       boolean writtenBreak = !continues && ifedge.getType() == StatEdge.TYPE_BREAK
-        && ifedge.explicit && !ifedge.labeled && !RoundTrip.isClosureHidden(ifedge);
+        && ifedge.explicit && !ifedge.labeled && !RoundTrip.isClosureHidden(ifedge)
+        && RoundTrip.ternaryCondition(ifHead) == null;
       if ((continues || writtenBreak) && RoundTrip.continueGoto(ifHead) >= 0
           && printSplitIf(buf, ifHead, null, null, indent, false, writtenBreak ? "break;" : null)) {
         return buf;
