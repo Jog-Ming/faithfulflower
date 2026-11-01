@@ -3566,7 +3566,27 @@ public final class RoundTrip {
       return false;
     }
     int first = firstOffsetOf(after);
-    if (first < 0 || !lineStartsAt(first)) {
+    if (first < 0) {
+      return false;
+    }
+    // The operand's text can open with a load the exprent carries no bits for -- a receiver or a
+    // local read the printer writes as part of it -- so the first bit is a getfield or invoke
+    // whose table entry belongs to the expression before. The entry the table starts at that
+    // load is the only proof of the break, and the loads feeding the first bit are contiguous.
+    // A pattern test is the exception: a `&&` broken across lines records the same entry at the
+    // test's value load, while only the test's own instruction could prove a statement, so the
+    // walk would mistake the continuation for a nested if.
+    int start;
+    if (lineStartsAt(first)) {
+      start = lineAtOffset(first);
+    }
+    else if (startsWithPatternTest(after)) {
+      return false;
+    }
+    else {
+      start = operandStartLine(after);
+    }
+    if (start < 0) {
       return false;
     }
     // A variable has no child exprents, so lastLine sees no offset of its own; the instruction
@@ -3575,8 +3595,21 @@ public final class RoundTrip {
     if (end < 0) {
       end = sourceLineEnd(before);
     }
-    int start = lineAtOffset(first);
     return end >= 0 && start > end;
+  }
+
+  /** Whether the operand's printed text begins with a pattern test, `x instanceof T t`. */
+  private static boolean startsWithPatternTest(Exprent exprent) {
+    Exprent leftmost = exprent;
+    while (leftmost instanceof FunctionExprent function
+        && (function.getFuncType() == FunctionExprent.FunctionType.BOOLEAN_AND
+            || function.getFuncType() == FunctionExprent.FunctionType.BOOLEAN_OR)
+        && function.getLstOperands().size() == 2) {
+      leftmost = function.getLstOperands().get(0);
+    }
+    return leftmost instanceof FunctionExprent test
+      && test.getFuncType() == FunctionExprent.FunctionType.INSTANCEOF
+      && test.getLstOperands().size() > 2;
   }
 
   /**
