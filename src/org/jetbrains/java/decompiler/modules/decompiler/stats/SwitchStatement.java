@@ -227,6 +227,24 @@ public class SwitchStatement extends Statement {
 
     VarType switch_type = headexprent.get(0).getExprType();
 
+    // The string switch lowering names its selector temporary from the block-local counter it
+    // shares with the switch's arms. A switch whose temporary is `s0$` opened that block's
+    // counter, so a nested string switch in one of its arms cannot have shared the block: the
+    // nested switch would have consumed the counter first and this one would be named `s2$`. The
+    // arm was a naked block.
+    if (RoundTrip.selector("switcharmblock") && switch_type != null
+        && switch_type.equals(VarType.VARTYPE_STRING)) {
+      SwitchInstruction instruction = switchInstruction();
+      int switchOffset = instruction == null ? -1 : instruction.startOffset;
+      if (RoundTrip.stringSwitchTempIndex(switchOffset) == 0) {
+        for (Statement arm : caseStatements) {
+          if (directlyContainsStringSwitch(arm)) {
+            braced.add(arm);
+          }
+        }
+      }
+    }
+
     // The instruction just after the whole switch: an arm whose block ends with a jump landing
     // there ended in a `break;` the source wrote and the tree dropped. The sibling's first
     // instruction can overshoot the join when its condition exprent records no offset of its own,
@@ -1001,6 +1019,34 @@ public class SwitchStatement extends Statement {
     }
 
     return buf;
+  }
+
+  /** True when the selector's type is a String: the lowering created the switch's temporaries. */
+  private boolean isStringSwitch() {
+    Exprent head = headexprent.isEmpty() ? null : headexprent.get(0);
+    return head != null && VarType.VARTYPE_STRING.equals(head.getExprType());
+  }
+
+  /**
+   * True when this arm's body holds a string switch in the switch's own block: the arm is the
+   * switch itself, or a sequence of statements holds it with no construct in between that opens a
+   * block of its own.
+   */
+  private static boolean directlyContainsStringSwitch(Statement stat) {
+    if (stat == null) {
+      return false;
+    }
+    if (stat instanceof SwitchStatement nested) {
+      return nested.isStringSwitch();
+    }
+    if (stat instanceof SequenceStatement) {
+      for (Statement child : stat.getStats()) {
+        if (directlyContainsStringSwitch(child)) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   /**

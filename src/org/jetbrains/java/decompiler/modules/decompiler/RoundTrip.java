@@ -10528,6 +10528,139 @@ public final class RoundTrip {
     return false;
   }
 
+  /** True when this table row is one of the string switch lowering's synthetic temporaries. */
+  private static boolean stringSwitchTemp(StructLocalVariableTableAttribute.LocalVariable row) {
+    String name = row.getName();
+    if (name == null || name.length() < 3 || name.charAt(name.length() - 1) != '$') {
+      return false;
+    }
+    int digitsStart;
+    if (name.startsWith("tmp")) {
+      if (!"I".equals(row.getDescriptor())) {
+        return false;
+      }
+      digitsStart = 3;
+    } else if (name.charAt(0) == 's') {
+      if (!"Ljava/lang/String;".equals(row.getDescriptor())) {
+        return false;
+      }
+      digitsStart = 1;
+    } else {
+      return false;
+    }
+    if (digitsStart >= name.length() - 1) {
+      return false;
+    }
+    for (int i = digitsStart; i < name.length() - 1; i++) {
+      char ch = name.charAt(i);
+      if (ch < '0' || ch > '9') {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * The string switch lowering's temporaries this switch created. Every table row named {@code
+   * s<i>$}/{@code tmp<j>$} that covers the switch instruction belongs to a switch enclosing this
+   * one or to this switch; the enclosing ones opened earlier, so this switch's selector row is the
+   * covering {@code s$} row with the latest start, and its dispatch temp the covering {@code tmp$}
+   * row that starts right after it.
+   */
+  private static java.util.List<StructLocalVariableTableAttribute.LocalVariable> ownStringSwitchTemps(
+      int switchOffset) {
+    StructMethod method = currentMethod();
+    java.util.List<StructLocalVariableTableAttribute.LocalVariable> out = new java.util.ArrayList<>();
+    if (method == null || switchOffset < 0) {
+      return out;
+    }
+    StructLocalVariableTableAttribute table =
+      method.getAttribute(StructGeneralAttribute.ATTRIBUTE_LOCAL_VARIABLE_TABLE);
+    if (table == null) {
+      return out;
+    }
+    java.util.List<StructLocalVariableTableAttribute.LocalVariable> rows = table.getVariables().toList();
+    StructLocalVariableTableAttribute.LocalVariable selector = null;
+    for (StructLocalVariableTableAttribute.LocalVariable row : rows) {
+      if (!stringSwitchTemp(row) || row.getName().charAt(0) != 's'
+          || row.getStart() > switchOffset || row.getEnd() <= switchOffset) {
+        continue;
+      }
+      if (selector == null || row.getStart() > selector.getStart()) {
+        selector = row;
+      }
+    }
+    if (selector == null) {
+      return out;
+    }
+    out.add(selector);
+    StructLocalVariableTableAttribute.LocalVariable dispatch = null;
+    for (StructLocalVariableTableAttribute.LocalVariable row : rows) {
+      if (!stringSwitchTemp(row) || row.getName().charAt(0) != 't'
+          || row.getStart() <= selector.getStart()
+          || row.getStart() > switchOffset || row.getEnd() <= switchOffset) {
+        continue;
+      }
+      if (dispatch == null || row.getStart() < dispatch.getStart()) {
+        dispatch = row;
+      }
+    }
+    if (dispatch != null) {
+      out.add(dispatch);
+    }
+    return out;
+  }
+
+  /**
+   * The counter index the string switch lowering gave the selector temporary this switch created,
+   * or -1 when the switch holds none. javac names the lowered selector {@code s<i>$} out of a
+   * block-local counter, so the index says how many synthetic variables the switch's block already
+   * held before it.
+   */
+  public static int stringSwitchTempIndex(int switchOffset) {
+    int best = -1;
+    for (StructLocalVariableTableAttribute.LocalVariable row : ownStringSwitchTemps(switchOffset)) {
+      if (row.getName().charAt(0) != 's') {
+        continue;
+      }
+      int index = Integer.parseInt(row.getName().substring(1, row.getName().length() - 1));
+      if (best < 0 || index < best) {
+        best = index;
+      }
+    }
+    return best;
+  }
+
+  /**
+   * True when this string switch's selector temporaries are still held by the target's frame at
+   * {@code end} while their table rows close exactly there. javac records that frame and those
+   * row ends only for a trailing {@code default: break;}: the break's jump is a branch target
+   * inside the switch's block, so the frame naming the temporaries is emitted before the scopes
+   * close on it, and the compiler then elides the jump because it lands on the next instruction.
+   * A {@code default: return;} closes the rows one instruction later; no default leaves the join's
+   * frame chopping the slots instead.
+   */
+  public static boolean selectorTempsEndAt(int switchOffset, int end) {
+    if (end < 0) {
+      return false;
+    }
+    java.util.List<StructLocalVariableTableAttribute.LocalVariable> rows =
+      ownStringSwitchTemps(switchOffset);
+    if (rows.isEmpty()) {
+      return false;
+    }
+    java.util.BitSet live = frameLiveLocals(end);
+    if (live == null) {
+      return false;
+    }
+    for (StructLocalVariableTableAttribute.LocalVariable row : rows) {
+      if (row.getEnd() != end || !live.get(row.getIndex())) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   /**
    * The slots of the pattern variables a case label's values bind. A case pattern's variables are
    * declared by the label and close with the switch's own block, so a local table row for one of
