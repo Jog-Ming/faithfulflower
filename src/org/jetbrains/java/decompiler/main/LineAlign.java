@@ -80,12 +80,13 @@ public final class LineAlign {
     applyFieldDeclarationAnchors(tracers);
 
     if (RoundTrip.selector("rt-same-line-join")) {
-      String joined = joinSameTargetLines(text, separator, lines, tracers);
+      String joined = joinSameTargetLines(text, separator, lines, tracers, lineRecords(tracers, lines));
       if (joined != null) {
         text = joined;
         lines = text.split(java.util.regex.Pattern.quote(separator), -1);
       }
     }
+    LineRecords records = lineRecords(tracers, lines);
 
     boolean gapAlign = RoundTrip.selector("rt-gap-align");
     TreeMap<Integer, Integer> shifts = new TreeMap<>();
@@ -93,6 +94,7 @@ public final class LineAlign {
     Set<Integer> unmergeable = new HashSet<>();
     Set<Integer> inherited = new HashSet<>();
     Set<Integer> entryLines = new HashSet<>();
+    Set<Integer> joinBlocked = new HashSet<>();
     Map<Integer, List<int[]>> candidates = new TreeMap<>();
     for (Map.Entry<Pair<String, String>, BytecodeMappingTracer> tracerEntry : tracers.entrySet()) {
       String className = tracerEntry.getKey().a;
@@ -109,7 +111,8 @@ public final class LineAlign {
         if (owner != null && gapAlign) {
           // The lifted initializer's offsets belong to a constructor, not to a method the tracer
           // names, so there is no code to read an opcode from; the walk keeps its old rules.
-          addMethodConstraints(owner, mapping, lines, candidates, entryLines, null, null, tracers);
+          addMethodConstraints(owner, mapping, lines, candidates, entryLines, null, null, tracers,
+            null);
           continue;
         }
         Integer target = fieldInitLine(className, mapping.keySet());
@@ -133,7 +136,8 @@ public final class LineAlign {
       if (gapAlign) {
         StructClass cls = DecompilerContext.getStructContext().getClass(className);
         StructMethod method = cls == null ? null : cls.getMethod(methodKey);
-        addMethodConstraints(table, mapping, lines, candidates, entryLines, cls, method, tracers);
+        addMethodConstraints(table, mapping, lines, candidates, entryLines, cls, method, tracers,
+          joinBlocked);
         continue;
       }
       for (Map.Entry<Integer, Integer> entry : mapping.entrySet()) {
@@ -162,9 +166,9 @@ public final class LineAlign {
     List<int[]> inserts = new ArrayList<>();
     List<Integer> removals = new ArrayList<>();
     List<Integer> joins = new ArrayList<>();
-
     if (gapAlign) {
-      if (!walkGaps(lines, shifts, unmergeable, inherited, entryLines, inserts, removals, joins)) {
+      if (!walkGaps(lines, shifts, unmergeable, inherited, entryLines, joinBlocked, records, inserts,
+          removals, joins)) {
         return text;
       }
     }
@@ -194,8 +198,9 @@ public final class LineAlign {
           }
           for (int i = Math.min(index - 1, lines.length - 1); i > lowest && need > 0; i--) {
             // A join moves line i onto line i-1, so neither may be a line another edit deletes.
-            if (joinable(lines, i, entryLines, false) && !removals.contains(i) && !removals.contains(i - 1)
-                && !joins.contains(i)) {
+            if (joinable(lines, i, entryLines, false)
+                && joinRecordsSupport(i + 1, i, entry.getKey() + entry.getValue(), records)
+                && !removals.contains(i) && !removals.contains(i - 1) && !joins.contains(i)) {
               joins.add(i);
               need--;
             }
@@ -337,7 +342,7 @@ public final class LineAlign {
    * begin a statement, so a preceding line with no entry start of its own belongs to it.
    */
   private static String joinSameTargetLines(String text, String separator, String[] lines,
-      Map<Pair<String, String>, BytecodeMappingTracer> tracers) {
+      Map<Pair<String, String>, BytecodeMappingTracer> tracers, LineRecords records) {
     Map<Integer, Integer> target = new java.util.HashMap<>();
     Map<Integer, String> owner = new java.util.HashMap<>();
     Set<Integer> mixed = new HashSet<>();
@@ -419,7 +424,9 @@ public final class LineAlign {
         && resolved != null && targets.containsKey(aboveLine)
         && targets.get(aboveLine).equals(targets.get(line))
         && continuesAbove(lines[line - 1]);
-      if (same || inheritsAbove || absorbsAbove) {
+      Integer joinTargetValue = target.get(line);
+      if ((same || inheritsAbove || absorbsAbove) && joinTargetValue != null
+          && joinRecordsSupport(line, aboveLine, joinTargetValue, records)) {
         joins.add(line);
         joinAbove.put(line, aboveLine);
         for (int removed = line; removed > aboveLine; removed--) {
@@ -473,6 +480,148 @@ public final class LineAlign {
   private static boolean continuesAbove(String line) {
     String trimmed = line.trim();
     return !trimmed.isEmpty() && "+-*/%&|^?:)".indexOf(trimmed.charAt(0)) >= 0;
+  }
+
+  /** The printed lines' records, grouped so a join can tell where its evidence came from. */
+  private static final class LineRecords {
+    final Map<Integer, Pair<String, String>> lineMethod;
+    final Set<Integer> shared;
+    final Map<Integer, int[]> lineSpan;
+    final Map<Integer, Set<Integer>> lineOffsets;
+    final Map<Pair<String, String>, Map<Integer, Integer>> methodMapping;
+    final Map<Pair<String, String>, StructLineNumberTableAttribute> methodTables;
+    final Map<Pair<String, String>, Set<Integer>> methodTargets;
+
+    LineRecords(Map<Integer, Pair<String, String>> lineMethod, Set<Integer> shared,
+        Map<Integer, int[]> lineSpan, Map<Integer, Set<Integer>> lineOffsets,
+        Map<Pair<String, String>, Map<Integer, Integer>> methodMapping,
+        Map<Pair<String, String>, StructLineNumberTableAttribute> methodTables,
+        Map<Pair<String, String>, Set<Integer>> methodTargets) {
+      this.lineMethod = lineMethod;
+      this.shared = shared;
+      this.lineSpan = lineSpan;
+      this.lineOffsets = lineOffsets;
+      this.methodMapping = methodMapping;
+      this.methodTables = methodTables;
+      this.methodTargets = methodTargets;
+    }
+  }
+
+  /**
+   * Groups every method record by the printed line it names.
+   *
+   * <p>A line usually belongs to one method, but an inline lambda's body shares the enclosing
+   * method's text, so a line whose records come from two methods is marked shared and its records
+   * are not used to prove a join.
+   */
+  private static LineRecords lineRecords(Map<Pair<String, String>, BytecodeMappingTracer> tracers,
+      String[] lines) {
+    Map<Integer, Pair<String, String>> lineMethod = new java.util.HashMap<>();
+    Set<Integer> shared = new HashSet<>();
+    Map<Integer, int[]> lineSpan = new java.util.HashMap<>();
+    Map<Integer, Set<Integer>> lineOffsets = new java.util.HashMap<>();
+    Map<Pair<String, String>, Map<Integer, Integer>> methodMapping = new java.util.HashMap<>();
+    Map<Pair<String, String>, StructLineNumberTableAttribute> methodTables = new java.util.HashMap<>();
+    Map<Pair<String, String>, Set<Integer>> methodTargets = new java.util.HashMap<>();
+    for (Map.Entry<Pair<String, String>, BytecodeMappingTracer> tracerEntry : tracers.entrySet()) {
+      Pair<String, String> method = tracerEntry.getKey();
+      String methodKey = method.b;
+      if (methodKey.startsWith("<field-init ") || methodKey.startsWith("<field-decl ")) {
+        continue;
+      }
+      StructLineNumberTableAttribute table = lineTable(method.a, methodKey);
+      if (table == null) {
+        continue;
+      }
+      Map<Integer, Integer> mapping = tracerEntry.getValue().getMapping();
+      methodMapping.put(method, mapping);
+      methodTables.put(method, table);
+      Set<Integer> targets = methodTargets.computeIfAbsent(method, k -> new HashSet<>());
+      for (Map.Entry<Integer, Integer> entry : mapping.entrySet()) {
+        int target = table.findLineNumber(entry.getKey());
+        if (target >= 0) {
+          targets.add(target);
+        }
+        int line = entry.getValue() + 1;
+        if (line < 1 || line > lines.length) {
+          continue;
+        }
+        Pair<String, String> owner = lineMethod.putIfAbsent(line, method);
+        if (owner != null && !owner.equals(method)) {
+          shared.add(line);
+        }
+        lineOffsets.computeIfAbsent(line, k -> new HashSet<>()).add(entry.getKey());
+        int[] span = lineSpan.get(line);
+        if (span == null) {
+          lineSpan.put(line, new int[]{entry.getKey(), entry.getKey()});
+        }
+        else {
+          span[0] = Math.min(span[0], entry.getKey());
+          span[1] = Math.max(span[1], entry.getKey());
+        }
+      }
+    }
+    return new LineRecords(lineMethod, shared, lineSpan, lineOffsets, methodMapping, methodTables,
+      methodTargets);
+  }
+
+  /**
+   * Whether the class file's records let a join of {@code lower} onto {@code upper} stand.
+   *
+   * <p>An instruction has one source position, so a byte of it recorded beside one printed line
+   * while another byte sits on a different line is a printer artifact -- the store ending a catch
+   * body's expression is recorded beside the catch header. The upper line's record then proves
+   * nothing about where its text sits, and the equal target it seemed to show is no evidence.
+   *
+   * <p>An entry start the printer never mapped marks a source line that no printed instruction
+   * holds: the synthetic store javac places on the closing brace of a synchronized block, or on
+   * the brace that ends a switch expression. When that line is exactly the next one after the line
+   * the join would settle on, the brace's text belongs there and the join would erase the line --
+   * the walk then leaves the gap underpaid, and the brace lands on its own line.
+   */
+  private static boolean joinRecordsSupport(int lower, int upper, int joinTarget, LineRecords records) {
+    if (records.shared.contains(lower) || records.shared.contains(upper)) {
+      return true;
+    }
+    Pair<String, String> lowerMethod = records.lineMethod.get(lower);
+    Pair<String, String> upperMethod = records.lineMethod.get(upper);
+    if (lowerMethod != null && upperMethod != null && !lowerMethod.equals(upperMethod)) {
+      return true;
+    }
+    Pair<String, String> method = lowerMethod != null ? lowerMethod : upperMethod;
+    if (method == null) {
+      return true;
+    }
+    int[] lowerSpan = records.lineSpan.get(lower);
+    int[] upperSpan = records.lineSpan.get(upper);
+    if (isSplitRecord(method, upper, records)) {
+      // One instruction's bytes recorded on two printed lines: the printer wrote an operand of a
+      // later statement beside the text above it. The upper line's record is stale and proves
+      // nothing about where that text sits.
+      return false;
+    }
+    int max = Math.max(lowerSpan == null ? -1 : lowerSpan[1], upperSpan == null ? -1 : upperSpan[1]);
+    if (max < 0) {
+      return true;
+    }
+    StructLineNumberTableAttribute table = records.methodTables.get(method);
+    Map<Integer, Integer> mapping = records.methodMapping.get(method);
+    if (table == null || mapping == null) {
+      return true;
+    }
+    int[] raw = table.getRawData();
+    int next = Integer.MAX_VALUE;
+    for (int i = 0; i + 1 < raw.length; i += 2) {
+      if (raw[i] > max && raw[i] < next) {
+        next = raw[i];
+      }
+    }
+    if (next == Integer.MAX_VALUE || mapping.containsKey(next)) {
+      return true;
+    }
+    int target = table.findLineNumber(next);
+    Set<Integer> printed = records.methodTargets.get(method);
+    return target != joinTarget + 1 || printed != null && printed.contains(target);
   }
 
   /** A line the aligner deletes on its own: blank padding, or a label standing alone. */
@@ -1096,7 +1245,7 @@ public final class LineAlign {
   private static void addMethodConstraints(StructLineNumberTableAttribute table,
       Map<Integer, Integer> mapping, String[] lines, Map<Integer, List<int[]>> candidates,
       Set<Integer> entryLines, StructClass cls, StructMethod method,
-      Map<Pair<String, String>, BytecodeMappingTracer> tracers) {
+      Map<Pair<String, String>, BytecodeMappingTracer> tracers, Set<Integer> joinBlocked) {
     int[] raw = table.getRawData();
     Set<Integer> exact = new HashSet<>();
     for (int i = 0; i + 1 < raw.length; i += 2) {
@@ -1109,9 +1258,37 @@ public final class LineAlign {
       if (target < 0 || ours < 1 || ours > lines.length) {
         continue;
       }
-      entries.add(new int[]{entry.getKey(), ours, target, exact.contains(entry.getKey()) ? 1 : 0});
+      int kind = 0;
+      if (exact.contains(entry.getKey())) {
+        kind = 1;
+        Instruction instruction = cls == null || method == null ? null
+          : instructionAt(method, cls, entry.getKey());
+        if (instruction != null && instruction.opcode >= CodeConstants.opc_istore
+            && instruction.opcode <= CodeConstants.opc_astore_3) {
+          // A store ending a switch expression is placed on the closing brace's line while the
+          // printer records it beside the last arm; the arm still starts where its own text does.
+          kind = 2;
+        }
+      }
+      entries.add(new int[]{entry.getKey(), ours, target, kind});
     }
     entries.sort((a, b) -> Integer.compare(a[0], b[0]));
+    if (joinBlocked != null && cls != null && method != null) {
+      // A loop's back-edge is emitted at the closing brace but the printer records it beside the
+      // statement below, so its line's first record names the brace line above. When the anchor
+      // is a statement -- a break after the loop -- paying its gap by joining would move that
+      // statement onto the brace's line and erase the source line the branch proves; leaving the
+      // gap underpaid keeps both lines. A brace line's own joins only gather closing braces, which
+      // the table can share on one line, so it stays joinable.
+      Set<Integer> firstLines = new HashSet<>();
+      for (int[] entry : entries) {
+        if (firstLines.add(entry[1]) && isBackwardGoto(instructionAt(method, cls, entry[0]))
+            && entry[1] >= 1 && entry[1] <= lines.length
+            && !lines[entry[1] - 1].trim().startsWith("}")) {
+          joinBlocked.add(entry[1]);
+        }
+      }
+    }
     int previousLine = -1;
     int highest = -1;
     Set<Integer> exactPrinted = new HashSet<>();
@@ -1260,6 +1437,89 @@ public final class LineAlign {
       }
       if (table.findLineNumber(offset) > callTarget) {
         return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * The inherited shift of a printed line that starts on an earlier line and holds one entry of
+   * its own at its end, or null when the line has another shape.
+   *
+   * <p>A switch expression's value is stored by an instruction javac places on the line its closing
+   * brace sits on, while the printer records the store beside the last arm it printed. The arm's
+   * own instructions inherit the arm's line while the store's entry names the following source
+   * line, so the printed line begins where its inherited instructions do, and the brace line that
+   * follows it -- carrying no record of its own -- takes the store's line. Choosing the store's
+   * shift instead would pull the arm one line down and force a join onto a statement, losing that
+   * source line. The shape is proven only when every inherited instruction before the entry agrees
+   * on the line above it and every one after it agrees with the entry.
+   */
+  private static Integer inheritedStartShift(List<int[]> candidates, int[] firstExact) {
+    if (firstExact == null || firstExact[1] != 2) {
+      return null;
+    }
+    Integer before = null;
+    for (int[] candidate : candidates) {
+      if (candidate == firstExact || candidate[1] != 0) {
+        continue;
+      }
+      if (candidate[2] < firstExact[2]) {
+        if (before != null && before != candidate[0]) {
+          return null;
+        }
+        before = candidate[0];
+      }
+      else if (candidate[0] != firstExact[0]) {
+        return null;
+      }
+    }
+    return before != null && before == firstExact[0] - 1 ? before : null;
+  }
+
+  /** Whether the instruction is a goto that jumps backwards, such as a loop's back-edge. */
+  private static boolean isBackwardGoto(Instruction instruction) {
+    if (instruction == null
+        || instruction.opcode != CodeConstants.opc_goto && instruction.opcode != CodeConstants.opc_goto_w) {
+      return false;
+    }
+    return instruction.operand(0) < 0;
+  }
+
+  /**
+   * Whether a printed line holds a store's record whose other bytes are recorded on another line.
+   *
+   * <p>One instruction has one source position, so a store split across two printed lines is a
+   * printer artifact: the store that ends a catch body's expression is recorded beside the catch
+   * header, while the rest of its statement is printed below. The line above then names a source
+   * line its text does not occupy, and it cannot prove that the text below shared that line. The
+   * shape is specific to stores: a local declaration's `new` is recorded on the declaration's
+   * line while its operands are printed with the statement below, and joining the statement onto
+   * its declaration is harmless because the declaration line carries no instruction at all.
+   */
+  private static boolean isSplitRecord(Pair<String, String> method, int line, LineRecords records) {
+    Set<Integer> offsets = records.lineOffsets.get(line);
+    if (offsets == null) {
+      return false;
+    }
+    StructClass cls = DecompilerContext.getStructContext().getClass(method.a);
+    StructMethod struct = cls == null ? null : cls.getMethod(method.b);
+    Map<Integer, Integer> mapping = records.methodMapping.get(method);
+    if (struct == null || mapping == null) {
+      return false;
+    }
+    for (int offset : offsets) {
+      Instruction instruction = instructionAt(struct, cls, offset);
+      if (instruction == null || instruction.length <= 1
+          || instruction.opcode < CodeConstants.opc_istore
+          || instruction.opcode > CodeConstants.opc_astore_3) {
+        continue;
+      }
+      for (int pc = instruction.startOffset; pc < instruction.startOffset + instruction.length; pc++) {
+        Integer other = mapping.get(pc);
+        if (other != null && other + 1 != line) {
+          return true;
+        }
       }
     }
     return false;
@@ -1421,7 +1681,9 @@ public final class LineAlign {
               }
             }
           }
-          chosenShift = exact.iterator().next();
+          Integer inheritedStart = exact.size() == 1 && !splitByFirst
+            ? inheritedStartShift(line.getValue(), firstExact) : null;
+          chosenShift = inheritedStart != null ? inheritedStart : exact.iterator().next();
           chosenTarget = line.getKey() + chosenShift;
         }
         previousExactTarget = chosenTarget;
@@ -1444,8 +1706,9 @@ public final class LineAlign {
    * must stay as printed.
    */
   private static boolean walkGaps(String[] lines, TreeMap<Integer, Integer> shifts,
-      Set<Integer> unmergeable, Set<Integer> inherited, Set<Integer> entryLines, List<int[]> inserts,
-      List<Integer> removals, List<Integer> joins) {
+      Set<Integer> unmergeable, Set<Integer> inherited, Set<Integer> entryLines,
+      Set<Integer> joinBlocked, LineRecords records, List<int[]> inserts, List<Integer> removals,
+      List<Integer> joins) {
     List<int[]> placed = new ArrayList<>(); // {index, paid shift, required shift}
     int previous = 0;
     int previousIndex = -1;
@@ -1476,14 +1739,17 @@ public final class LineAlign {
         // anchor by one, which is exactly what a negative gap wants. It is an entry line itself,
         // so the entry-line veto is waived for it alone -- but only where the merge cannot put
         // the anchor's text on a line the table places somewhere else.
-        for (int i = Math.min(index, lines.length - 1); i > lowest && need > 0; i--) {
-          boolean anchorLine = i == index
-            && selfJoinSafe(entry.getKey(), desired, shifts, unmergeable, inherited, entryLines);
-          // A join moves line i onto line i-1, so neither may be a line another edit deletes.
-          if (joinable(lines, i, entryLines, anchorLine) && !removals.contains(i) && !removals.contains(i - 1)
-              && !joins.contains(i)) {
-            joins.add(i);
-            need--;
+        if (!joinBlocked.contains(entry.getKey())) {
+          for (int i = Math.min(index, lines.length - 1); i > lowest && need > 0; i--) {
+            boolean anchorLine = i == index
+              && selfJoinSafe(entry.getKey(), desired, shifts, unmergeable, inherited, entryLines);
+            // A join moves line i onto line i-1, so neither may be a line another edit deletes.
+            if (joinable(lines, i, entryLines, anchorLine)
+                && joinRecordsSupport(i + 1, i, entry.getKey() + desired, records)
+                && !removals.contains(i) && !removals.contains(i - 1) && !joins.contains(i)) {
+              joins.add(i);
+              need--;
+            }
           }
         }
         if (need > 0) {
