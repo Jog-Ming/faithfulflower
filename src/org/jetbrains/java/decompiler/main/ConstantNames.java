@@ -902,6 +902,7 @@ public final class ConstantNames {
         claimed.add(ancestor);
         if (candidateOwners.add(ancestor)) {
           addOwnerCandidates(candidates, ancestor, nest, packageName, imports);
+          addEnclosingInstanceCandidates(candidates, ancestor, own);
         }
       }
     }
@@ -1049,6 +1050,7 @@ public final class ConstantNames {
         claimed.add(owner);
         if (candidateOwners.add(owner)) {
           addOwnerCandidates(candidates, owner, nest, packageName, imports);
+          addEnclosingInstanceCandidates(candidates, owner, own);
         }
         continue;
       }
@@ -1775,11 +1777,12 @@ public final class ConstantNames {
     }
     String nest = nestOf(own.qualifiedName);
     String packageName = packageOf(own.qualifiedName);
-    List<PooledConstant> pool = own.getPool().getPool();
+    List<String> prefix = prefixOwners(own);
+    int ownPrefix = prefix.indexOf(own.qualifiedName);
     for (Map.Entry<String, Integer> entry : classIndices.entrySet()) {
       int index = entry.getValue();
       String owner = entry.getKey();
-      if (index >= firstReferenced || setup.contains(index) || owner.equals(own.qualifiedName)) {
+      if (owner.equals(own.qualifiedName)) {
         continue;
       }
       // Only two kinds of name are resolved before any generated code: the enclosing class's,
@@ -1790,16 +1793,27 @@ public final class ConstantNames {
       if (!enclosing && !remoteSuper) {
         continue;
       }
-      boolean operand = false;
-      for (int i = index + 1; i < Math.min(pool.size(), index + 5); i++) {
-        if (pool.get(i) instanceof LinkConstant link && owner.equals(link.classname)) {
-          operand = true;
-          break;
-        }
+      // The pool writer numbers a reference first and enters the Class it names as that
+      // reference's dependency afterwards, so a Class entry below its first reference was the
+      // operand (the reference created it); one above every reference was entered earlier, by
+      // the naming this rule reproduces. A reference that merely follows the pair is what the
+      // naming's own use of the class looks like (a constructor call on an enclosing superclass),
+      // not evidence against it.
+      if (classOperand(own, classIndices, index)) {
+        continue;
       }
-      if (!operand) {
-        owners.add(owner);
+      // A pair opening the pool was entered before this_class did. The class-file writer enters
+      // this_class, the superclass and the interfaces in that order when it writes the class, so
+      // a leading pair of another type precedes them only if a folded naming interned it during
+      // class generation. That position is stronger than the first instruction use: a synthetic
+      // assertion initializer loads the outermost class literal long after the bodies, and its
+      // reuse of the entry says nothing about when the entry was created.
+      int at = prefix.indexOf(owner);
+      boolean leading = at >= 0 && (ownPrefix < 0 || at < ownPrefix);
+      if (!leading && index >= firstReferenced) {
+        continue;
       }
+      owners.add(owner);
     }
     return owners;
   }
@@ -5201,6 +5215,112 @@ public final class ConstantNames {
   }
 
   /**
+   * Names a foreign constant in a constant field initializer whose owner's {@code Class} pair
+   * opens the pool.
+   *
+   * <p>{@code Gen.normalizeDefs} runs before any method body is generated, and for every static
+   * final field with a constant initializer it scans that initializer for class references. A
+   * qualified constant access ({@code Integer.BYTES}) enters the selected class and an
+   * unqualified one enters the declaring class, and either pair opens the pool, ahead of
+   * {@code this_class}. So a pool whose leading Class pairs name types that are neither this
+   * class nor one of its supertypes records constant field initializers, in source order. The
+   * field's printed literal is that initializer's folded value; writing a constant expression of
+   * the named type reproduces the pair, and because the initializer is a constant expression it
+   * generates no code and the field data is unchanged.
+   */
+  private static void earlyConstantInitializerSites(String text, List<int[]> spans, StructClass own,
+                                                    List<Site> sites) {
+    List<String> prefix = prefixOwners(own);
+    if (prefix.isEmpty()) {
+      return;
+    }
+    List<StructField> fields = new ArrayList<>();
+    List<int[]> ranges = new ArrayList<>();
+    for (StructField field : own.getFields()) {
+      if ((field.getAccessFlags() & (CodeConstants.ACC_STATIC | CodeConstants.ACC_FINAL))
+          != (CodeConstants.ACC_STATIC | CodeConstants.ACC_FINAL)) {
+        continue;
+      }
+      if (field.getAttribute(StructGeneralAttribute.ATTRIBUTE_CONSTANT_VALUE) == null) {
+        continue;
+      }
+      if (constantValue(own, field) == null || kind(field.getDescriptor()) == null) {
+        continue;
+      }
+      int[] range = initializerRange(text, spans, field.getName());
+      if (range == null) {
+        continue;
+      }
+      fields.add(field);
+      ranges.add(range);
+    }
+    if (fields.isEmpty()) {
+      return;
+    }
+    Set<String> setup = new HashSet<>(List.of(own.getInterfaceNames()));
+    if (own.superClass != null && own.superClass.getString() != null) {
+      setup.add(own.superClass.getString());
+    }
+    // The class-file writer enters this_class, the superclass and the interfaces at write time.
+    // A pair before this_class's own pair was entered during generation -- by a constant field
+    // initializer, since normalizeDefs runs first -- while a pair after it was entered by the
+    // writer itself or by code (which the ordinary rules place). Only the former is this pass's.
+    int ownPrefix = prefix.indexOf(own.qualifiedName);
+    List<String> imports = imports(text);
+    String packageName = packageName(text);
+    boolean[] used = new boolean[fields.size()];
+    for (int p = 0; p < prefix.size(); p++) {
+      String owner = prefix.get(p);
+      if (owner.equals(own.qualifiedName) || setup.contains(owner) || isBootstrapOwner(owner)
+          || (ownPrefix >= 0 && p >= ownPrefix) || siteIn(sites, owner, spans)) {
+        continue;
+      }
+      List<SourceConstant> sources = sourceConstants(owner, own, imports, packageName, null, true);
+      if (sources.isEmpty()) {
+        continue;
+      }
+      for (int f = 0; f < fields.size(); f++) {
+        if (used[f]) {
+          continue;
+        }
+        StructField field = fields.get(f);
+        int[] range = ranges.get(f);
+        int equals = text.indexOf('=', range[0]);
+        if (equals < 0 || equals >= range[1]) {
+          continue;
+        }
+        String key = literalKey(text.substring(equals + 1, range[1]).trim());
+        if (key == null) {
+          continue; // not a single literal: the initializer already names something
+        }
+        VariableType target = kind(field.getDescriptor());
+        PrimitiveConstant value = constantValue(own, field);
+        String printedValue = target == VariableType.BOOLEAN && value.value instanceof Integer flag
+          ? Boolean.toString(flag != 0) : String.valueOf(value.value);
+        if (!canonicalKey(key).equals(canonicalKey(target.name() + "|" + printedValue))) {
+          continue; // the printed literal is not this field's folded value
+        }
+        String expression = null;
+        for (SourceConstant source : sources) {
+          String candidate = constantExpression(
+            new FieldConstant(null, target, value.value), source.kind(), source.value(),
+            source.name());
+          if (candidate != null) {
+            expression = candidate;
+            break;
+          }
+        }
+        if (expression == null || occupied(sites, range)) {
+          continue;
+        }
+        sites.add(new Site(equals + 1, range[1], " " + expression, owner));
+        used[f] = true;
+        break;
+      }
+    }
+  }
+
+  /**
    * Names a constant of the class itself in an instance field initializer the pool records.
    *
    * <p>javac enters the class's own {@code Class} entry and its name when it resolves a constant
@@ -5218,7 +5338,11 @@ public final class ConstantNames {
    */
   private static void initializerSites(String text, List<int[]> spans, ClassNode node, List<Site> sites) {
     StructClass own = node == null ? null : node.classStruct;
-    if (own == null || (own.getAccessFlags() & CodeConstants.ACC_INTERFACE) != 0) {
+    if (own == null) {
+      return;
+    }
+    earlyConstantInitializerSites(text, spans, own, sites);
+    if ((own.getAccessFlags() & CodeConstants.ACC_INTERFACE) != 0) {
       return;
     }
     if (prefixOwners(own).contains(own.qualifiedName)) {
@@ -5552,6 +5676,19 @@ public final class ConstantNames {
   private static List<SourceConstant> sourceConstants(String owner, StructClass site,
                                                      List<String> imports, String packageName,
                                                      String root) {
+    return sourceConstants(owner, site, imports, packageName, root, false);
+  }
+
+  /**
+   * The accessible constant fields of a prefix owner, printed for this class's scope.
+   *
+   * <p>{@code packagePrivateInherited} admits an inherited constant a same-package site can
+   * still write through the owner's name: the visibility check is the site's, not the declaring
+   * class's, and a package-private constant of a superclass in the same package is in scope.
+   */
+  private static List<SourceConstant> sourceConstants(String owner, StructClass site,
+                                                     List<String> imports, String packageName,
+                                                     String root, boolean packagePrivateInherited) {
     StructClass cls = DecompilerContext.getStructContext().getClass(owner);
     if (cls == null) {
       return List.of();
@@ -5588,8 +5725,11 @@ public final class ConstantNames {
       return sources; // an anonymous class has no writable name
     }
     for (InheritedConstant inherited : inheritedConstants(cls)) {
-      if (inherited.declaring() == cls
-          || (inherited.field().getAccessFlags() & CodeConstants.ACC_PUBLIC) == 0) {
+      int access = inherited.field().getAccessFlags();
+      boolean visible = (access & CodeConstants.ACC_PUBLIC) != 0
+        || (packagePrivateInherited && samePackage && (access & CodeConstants.ACC_PRIVATE) == 0)
+        || ((access & CodeConstants.ACC_PRIVATE) != 0 && sameNest);
+      if (inherited.declaring() == cls || !visible) {
         continue;
       }
       sources.add(new SourceConstant(qualifier + "." + inherited.field().getName(),
@@ -6440,6 +6580,38 @@ public final class ConstantNames {
     map.computeIfAbsent(key, k -> new ArrayList<>()).add(constant);
   }
 
+  /**
+   * Adds an enclosing class's instance constant variables as bare-name candidates.
+   *
+   * <p>A final instance field with a constant initializer is a constant variable, so a bare name
+   * that resolves to it through the enclosing instance is replaced by its value when the class
+   * is lowered -- the same pruned access a static constant produces, and the same early entry of
+   * the enclosing class's {@code Class}. The field only ever appears folded, so the class file
+   * carries a {@code ConstantValue} and nothing else that distinguishes it.
+   */
+  private static void addEnclosingInstanceCandidates(Map<String, List<Constant>> candidates,
+                                                     String owner, StructClass site) {
+    StructClass cls = DecompilerContext.getStructContext().getClass(owner);
+    if (cls == null || !site.qualifiedName.startsWith(owner + "$")) {
+      return;
+    }
+    for (StructField field : cls.getFields()) {
+      int access = field.getAccessFlags();
+      if ((access & CodeConstants.ACC_FINAL) == 0
+          || (access & CodeConstants.ACC_STATIC) != 0) {
+        continue;
+      }
+      PrimitiveConstant value = constantValue(cls, field);
+      VariableType kind = value == null ? null : kind(field.getDescriptor());
+      if (value == null || kind == null || value.value == null) {
+        continue;
+      }
+      String printed = kind == VariableType.BOOLEAN && value.value instanceof Integer flag
+        ? Boolean.toString(flag != 0) : String.valueOf(value.value);
+      candidate(candidates, kind + "|" + printed, new Constant(owner, field.getName(), kind));
+    }
+  }
+
   /** Every static final field of the class itself that carries a ConstantValue. */
   private static void ownCandidates(Map<String, List<Constant>> candidates, StructClass own) {
     for (StructField field : own.getFields()) {
@@ -6922,8 +7094,14 @@ public final class ConstantNames {
     StructContext context = DecompilerContext.getStructContext();
     String current = site.qualifiedName;
     while (current != null && !current.equals(owner)) {
-      if (declaresField(context.getClass(current), context, name)) {
-        return false; // a field of this class or an enclosing one shadows the name
+      StructClass declaring = fieldDeclaration(context.getClass(current), context, name);
+      if (declaring != null) {
+        // A field the site class or one of its supertypes declares is nearer than any enclosing
+        // scope and shadows the name. When that type is the owner itself, the simple name is
+        // exactly the owner's constant -- the case of a nested class inheriting the constant
+        // from the enclosing class it also extends, which javac resolves through the class's
+        // own hierarchy.
+        return declaring.qualifiedName.equals(owner);
       }
       int dollar = current.lastIndexOf('$');
       if (dollar < 0) {
@@ -6949,17 +7127,18 @@ public final class ConstantNames {
     return false;
   }
 
-  private static boolean declaresField(StructClass cls, StructContext context, String name) {
+  /** The class in this hierarchy that declares the field, nearest first, or null. */
+  private static StructClass fieldDeclaration(StructClass cls, StructContext context, String name) {
     while (cls != null) {
       for (StructField field : cls.getFields()) {
         if (field.getName().equals(name)) {
-          return true;
+          return cls;
         }
       }
       String superName = cls.superClass == null ? null : cls.superClass.getString();
       cls = superName == null ? null : context.getClass(superName);
     }
-    return false;
+    return null;
   }
 
   private static String packageOf(String internal) {
