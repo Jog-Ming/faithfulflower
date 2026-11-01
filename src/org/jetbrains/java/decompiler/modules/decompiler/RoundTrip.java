@@ -3026,6 +3026,20 @@ public final class RoundTrip {
   }
 
   /**
+   * Whether the original wrote the try-with-resources header on two lines: javac attributes the
+   * synthetic catch's store to the `try` line, and the resource initialization starts on the line
+   * right below it. When both sit on the same line the header was written in one piece.
+   */
+  public static boolean resourceOnNextLine(int handlerOffset, Exprent resource) {
+    if (handlerOffset < 0 || resource == null) {
+      return false;
+    }
+    int start = firstExprentOffset(resource);
+    int handlerLine = lineAtOffset(handlerOffset);
+    return start >= 0 && handlerLine >= 0 && lineAtOffset(start) == handlerLine + 1;
+  }
+
+  /**
    * Whether a boolean operator's right operand starts on a line of its own. Both operands' own
    * bitsets can cover only a short-circuit branch, laid on the line the whole expression ends
    * on, so the line the operand's text begins and ends on is read from its parts, and the

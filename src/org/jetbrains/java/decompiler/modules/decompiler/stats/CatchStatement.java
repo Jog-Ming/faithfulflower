@@ -164,13 +164,21 @@ public class CatchStatement extends Statement {
       buf.appendIndent(indent).append("try {").appendLineSeparator();
     }
     else {
-      buf.appendIndent(indent).append("try (");
+      buf.appendIndent(indent).append("try");
       if (resourceHandlerOffset >= 0) {
         // The synthetic close's store is the line's only instruction: the closer itself prints
         // nothing, so without this mapping the aligner pays the gap at the first resource and
         // the padding lands inside the parentheses instead of in front of them.
         buf.addBytecodeMapping(resourceHandlerOffset);
       }
+      // The target puts the resource initialization on its own line: the `try` line carries only
+      // the synthetic close's store, and the resource starts one line below it.
+      if (RoundTrip.resourceOnNextLine(resourceHandlerOffset, resources.get(0))) {
+        buf.appendLineSeparator().appendIndent(indent + 1);
+      } else {
+        buf.append(" ");
+      }
+      buf.append("(");
 
       if (resources.size() > 1) {
         buf.appendLineSeparator();
