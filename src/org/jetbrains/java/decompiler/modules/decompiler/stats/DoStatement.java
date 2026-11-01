@@ -285,9 +285,14 @@ public class DoStatement extends Statement {
         // A guard statement the decompiler fused into the condition lands on a later line in the
         // target than the loop's increment: that line difference is the guard's, not proof of a
         // split `int i = 0; while (...) { ...; i++; }`. When the branch-then-goto pair proves the
-        // guard, the for form below prints it and its condition stays on the header's line.
-        if (incLine >= 0 && condLine >= 0 && incLine != condLine
-            && RoundTrip.foldedBreakGuard(conditionExprent.get(0), this, first) == null) {
+        // guard, the for form below prints it and its condition stays on the header's line. The
+        // merge that moved the update into the header emptied the body, so the recorded guard is
+        // the only evidence left.
+        Exprent forGuard = RoundTrip.foldedBreakGuard(conditionExprent.get(0), this, first);
+        if (forGuard == null) {
+          forGuard = RoundTrip.recordedLoopGuard(this);
+        }
+        if (incLine >= 0 && condLine >= 0 && incLine != condLine && forGuard == null) {
           TextBuffer body = ExprProcessor.jmpWrapper(first, indent + 1, false);
           if (!endsWithTransfer(body)) {
             Exprent init = initExprent.get(0);
@@ -316,7 +321,6 @@ public class DoStatement extends Statement {
         }
         buf.appendIndent(indent);
         Exprent condition = conditionExprent.get(0);
-        Exprent forGuard = RoundTrip.foldedBreakGuard(condition, this, first);
         Exprent elseBreak = forGuard == null ? RoundTrip.foldedElseBreak(condition, this, first) : null;
         buf.pushNewlineGroup(indent, 1);
         buf.append("for (");

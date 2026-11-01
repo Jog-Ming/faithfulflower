@@ -623,6 +623,12 @@ public class MergeHelper {
 
     Exprent initExp = hasinit ? preData.getExprents().get(preData.getExprents().size() - 1) : null;
     Exprent condition = stat.getConditionExprent();
+    // A guard the structurer fused into the loop condition prints as the body's break: the header
+    // the source wrote is the first operand, and its line is the one a for update shares.
+    Exprent fusedGuard = condition instanceof FunctionExprent
+      ? RoundTrip.foldedBreakGuard(condition, stat, stat.getFirst()) : null;
+    Exprent headerCondition = fusedGuard != null
+      ? ((FunctionExprent) condition).getLstOperands().get(0) : condition;
 
     // A desugared enhanced for looks exactly like a header for at the class-file level — the
     // synthetic index or iterator carries the same scope and line — but the source wrote neither.
@@ -637,7 +643,7 @@ public class MergeHelper {
     // before the loop ends at the enclosing block's close. A loop with no update still has a for
     // head then; the trailing assignment the tree guessed is not the update and stays in the body.
     boolean headerScopedInit = hasinit && condition != null && RoundTrip.initHeaderScoped(stat, initExp);
-    boolean updateHeader = haslast && RoundTrip.updateInHeader(firstUpdate, condition, updateFrom);
+    boolean updateHeader = haslast && RoundTrip.updateInHeader(firstUpdate, headerCondition, updateFrom);
 
     if (headerScopedInit && !updateHeader && !backEdgeIncrement(stat)
         && initVarReadByCondition(initExp, condition)) {
@@ -665,7 +671,7 @@ public class MergeHelper {
     // A loop with no initialiser still has a for header when the target's line table puts the
     // update on the head's line: the source wrote `for (; cond; update)`, whose header javac
     // marks with one line. Without the initialiser nothing else can prove the header.
-    boolean headerUpdate = updateFrom < 0 && RoundTrip.updateOnHeaderLine(condition, lastDoExprent);
+    boolean headerUpdate = updateFrom < 0 && RoundTrip.updateOnHeaderLine(headerCondition, lastDoExprent);
 
     if (hasinit || issingle || headerUpdate) {  // FIXME: issingle sufficient?
       Set<Statement> set = stat.getNeighboursSet(StatEdge.TYPE_CONTINUE, EdgeDirection.BACKWARD);
@@ -694,8 +700,8 @@ public class MergeHelper {
       // Then filter to make sure the loop body is a basic block (Seems like it always is- but it never hurts to double check!)
       if (firstStat instanceof BasicBlockStatement) {
 
-        // Last filter to make sure the basic block only has the final third assignment. If so, break out to make a while loop instead as it will produce cleaner output.
-        if (firstStat.getExprents().size() == 1) {
+        // Last filter to make sure the basic block only has the final third assignment. If so, break out to make a while loop instead as it will produce cleaner output. A guard fused into the condition prints in the body, so that body is not empty and the for header is the source's.
+        if (firstStat.getExprents().size() == 1 && fusedGuard == null) {
           return;
         }
       }
@@ -724,7 +730,7 @@ public class MergeHelper {
       // Both forms compile to the same instructions, so only the target's table separates them.
       // A run the recorded continue proves is the update block keeps the header whatever its line,
       // and so does an update the target puts on the head's line.
-      if (updateFrom < 0 && !updateHeader && RoundTrip.updateIsBodyStatement(condition, lastExp)) {
+      if (updateFrom < 0 && !updateHeader && RoundTrip.updateIsBodyStatement(headerCondition, lastExp)) {
         return;
       }
 
@@ -773,8 +779,19 @@ public class MergeHelper {
         }
       }
 
+      // The init moves into the header when the table scopes the variable to the loop, and also
+      // when the source wrote it on the header's own line: `for (i = 0; …)` with `i` declared
+      // above. An init on a line of its own stayed at the declaration, `int i = 0;` before the
+      // loop, whatever a later statement still reads.
+      int initLine = hasinit && initExp != null ? RoundTrip.sourceLineDeep(initExp) : -1;
+      int headLine = RoundTrip.sourceLineDeep(headerCondition);
+      boolean initOnHeader = initLine >= 0 && headLine >= 0 && initLine == headLine;
+      boolean initStays = hasinit && initExp != null && !headerScopedInit && !initOnHeader;
+      if (fusedGuard != null) {
+        RoundTrip.recordLoopGuard(stat, fusedGuard);
+      }
       stat.setLooptype(DoStatement.Type.FOR);
-      if (hasinit) {
+      if (hasinit && !initStays) {
         Exprent exp = preData.getExprents().remove(preData.getExprents().size() - 1);
         if (stat.getInitExprent() != null) {
           exp.addBytecodeOffsets(stat.getInitExprent().bytecode);

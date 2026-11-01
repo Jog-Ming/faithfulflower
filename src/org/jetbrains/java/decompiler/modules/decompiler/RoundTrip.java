@@ -132,6 +132,8 @@ public final class RoundTrip {
   private static final java.util.Map<StructMethod, java.util.Map<Integer, int[]>> TRY_RETURN_STORES = new java.util.concurrent.ConcurrentHashMap<>();
   /** Switch arms that held a for-each's update: the label the source never wrote. */
   private static final java.util.Set<Statement> LOOP_UPDATE_ARMS = java.util.concurrent.ConcurrentHashMap.newKeySet();
+  /** Per loop: the guard operand its fused condition prints as the body's break. */
+  private static final java.util.Map<Statement, Exprent> LOOP_GUARDS = new java.util.concurrent.ConcurrentHashMap<>();
   /** First offsets of empty catch bodies, by offset, with the protected range's start. */
   private static final java.util.Map<StructMethod, java.util.Map<Integer, Integer>> EMPTY_CATCHES = new java.util.concurrent.ConcurrentHashMap<>();
 
@@ -11819,6 +11821,22 @@ public final class RoundTrip {
 
   public static boolean isLoopUpdateArm(Statement arm) {
     return arm != null && LOOP_UPDATE_ARMS.contains(arm);
+  }
+
+  /**
+   * Remembers the guard a loop's fused condition prints as the body's break. The merge that moves
+   * the update into the header empties the body, and the fused-guard test reads the body's first
+   * offset to tell the guard from an ordinary conjunction; once the body is gone the pair is only
+   * in this record.
+   */
+  public static void recordLoopGuard(Statement loop, Exprent guard) {
+    if (loop != null && guard != null) {
+      LOOP_GUARDS.put(loop, guard);
+    }
+  }
+
+  public static Exprent recordedLoopGuard(Statement loop) {
+    return loop == null ? null : LOOP_GUARDS.get(loop);
   }
 
   public static StructMethod currentMethod() {
