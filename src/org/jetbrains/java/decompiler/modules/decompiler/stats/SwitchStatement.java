@@ -422,6 +422,10 @@ public class SwitchStatement extends Statement {
       && !isPhantom() && caseGuards.stream().noneMatch(Objects::nonNull)
       && defaultBreakJump < 0 && defaultBody.isEmpty() && joinArm == null && updateArm == null
       && caseJoinArm == null && spilled.isEmpty();
+    // A non-empty default rule whose body holds more than one expression prints as a block; the
+    // implicit break its block ends with is the arm's own fall into the join, so the rule is only
+    // convertible at the end of the switch, where javac elides that break.
+    Set<Statement> arrowDefaultBlocks = new HashSet<>();
     if (arrowSwitch) {
       boolean witness = false;
       for (int i : order) {
@@ -452,10 +456,21 @@ public class SwitchStatement extends Statement {
           && RoundTrip.blockEnd(arm) >= 0 && RoundTrip.blockEnd(arm) == defaultTargetOffset()
           && defaultTargetOffset() != switchEnd;
         if (falls || (i < joinedReturns.length && joinedReturns[i] != null)
-            || (empty && !(defaults && armEdges.size() == 1))
-            || (!empty && defaults)) {
+            || (empty && !(defaults && armEdges.size() == 1))) {
           arrowSwitch = false;
           break;
+        }
+        if (!empty && defaults) {
+          // The default label cannot be written together with case labels in the arrow form, and
+          // its rule must stand last: every other position would make the compiler emit a break
+          // jump the target does not hold at that point.
+          if (armEdges.size() != 1 || i != lastPrinted) {
+            arrowSwitch = false;
+            break;
+          }
+          if (!arrowRuleExpression(arm)) {
+            arrowDefaultBlocks.add(arm);
+          }
         }
         if (empty) {
           continue;
@@ -475,7 +490,7 @@ public class SwitchStatement extends Statement {
               && !declaredScopePast(armRows.get(i), jump, patternSlots)) {
             witness = true;
           }
-        } else if (!singleExpressionArm(arm)) {
+        } else if (!arrowRuleExpression(arm) && !arrowDefaultBlocks.contains(arm)) {
           // An unbraced rule carries one expression; a returned value or several statements
           // need a block, whose implicit break would gain the brace's line.
           arrowSwitch = false;
@@ -530,6 +545,8 @@ public class SwitchStatement extends Statement {
 
       boolean anyLabel = false;
       boolean emptyArrowArm = arrowSwitch && RoundTrip.firstOffset(stat) < 0;
+      boolean arrowDefaultBlock = arrowSwitch && !emptyArrowArm && !braced.contains(stat)
+        && arrowDefaultBlocks.contains(stat);
       if (arrowSwitch) {
         anyLabel = true;
         boolean defaultLabel = edges.size() == 1 && edges.get(0) == defaultEdge;
@@ -548,7 +565,7 @@ public class SwitchStatement extends Statement {
         buf.append(" ->");
         if (emptyArrowArm) {
           buf.append(" {}");
-        } else if (braced.contains(stat)) {
+        } else if (braced.contains(stat) || arrowDefaultBlock) {
           buf.append(" {");
         }
         buf.appendLineSeparator();
@@ -762,7 +779,7 @@ public class SwitchStatement extends Statement {
       TextBuffer armBuf;
       try {
         armBuf = ExprProcessor.jmpWrapper(stat,
-          arrowSwitch && !braced.contains(stat) ? indent + 1 : indent + 2, false, breakMapping);
+          arrowSwitch && !braced.contains(stat) && !arrowDefaultBlock ? indent + 1 : indent + 2, false, breakMapping);
       } finally {
         if (returnSuppressed) {
           stat.getExprents().add(joinedReturn);
@@ -776,6 +793,16 @@ public class SwitchStatement extends Statement {
         if (suppressArmJump) {
           RoundTrip.restoreJump(previousJump);
         }
+      }
+      if (arrowDefaultBlock) {
+        // The default rule's block closes on the line of the body's last statement: its implicit
+        // break falls into the join, so no instruction stands on a closing-brace line.
+        String separator = DecompilerContext.getNewLineSeparator();
+        if (armBuf.length() >= separator.length()
+            && armBuf.convertToStringAndAllowDataDiscard().endsWith(separator)) {
+          armBuf.setLength(armBuf.length() - separator.length());
+        }
+        armBuf.append(" }").appendLineSeparator();
       }
       buf.append(armBuf);
       if (arrowSwitch) {
@@ -987,6 +1014,19 @@ public class SwitchStatement extends Statement {
     }
     List<Exprent> exprents = stat.getExprents();
     return exprents != null && exprents.size() == 1;
+  }
+
+  /**
+   * True when the arm holds one statement an unbraced arrow rule may carry: an expression or a
+   * throw, the two single statements the rule grammar allows. A return or a jump needs a block,
+   * since {@code case X -> return y;} is not a rule.
+   */
+  private static boolean arrowRuleExpression(Statement stat) {
+    if (!singleExpressionArm(stat)) {
+      return false;
+    }
+    Exprent only = stat.getExprents().get(0);
+    return !(only instanceof ExitExprent exit) || exit.getExitType() == ExitExprent.Type.THROW;
   }
 
   /**
