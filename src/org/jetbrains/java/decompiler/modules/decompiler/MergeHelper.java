@@ -643,7 +643,13 @@ public class MergeHelper {
     // before the loop ends at the enclosing block's close. A loop with no update still has a for
     // head then; the trailing assignment the tree guessed is not the update and stays in the body.
     boolean headerScopedInit = hasinit && condition != null && RoundTrip.initHeaderScoped(stat, initExp);
-    boolean updateHeader = haslast && RoundTrip.updateInHeader(firstUpdate, headerCondition, updateFrom);
+    // A call or other expression at the back edge is the header's update when the target's line
+    // table puts it on the head's own line: a while body's trailing statement carries its own
+    // line, and only the header form shares the test's.
+    boolean lineHeaderUpdate = !haslast && updateFrom < 0 && !(firstUpdate instanceof ExitExprent)
+      && RoundTrip.updateInHeader(firstUpdate, headerCondition, updateFrom);
+    boolean updateHeader = lineHeaderUpdate
+      || haslast && RoundTrip.updateInHeader(firstUpdate, headerCondition, updateFrom);
 
     if (headerScopedInit && !updateHeader && !backEdgeIncrement(stat)
         && initVarReadByCondition(initExp, condition)) {
@@ -664,7 +670,7 @@ public class MergeHelper {
       return;
     }
 
-    if (!haslast) {
+    if (!haslast && !lineHeaderUpdate) {
       return;
     }
 
@@ -673,7 +679,7 @@ public class MergeHelper {
     // marks with one line. Without the initialiser nothing else can prove the header.
     boolean headerUpdate = updateFrom < 0 && RoundTrip.updateOnHeaderLine(headerCondition, lastDoExprent);
 
-    if (hasinit || issingle || headerUpdate) {  // FIXME: issingle sufficient?
+    if (hasinit || issingle || headerUpdate || lineHeaderUpdate) {  // FIXME: issingle sufficient?
       Set<Statement> set = stat.getNeighboursSet(StatEdge.TYPE_CONTINUE, EdgeDirection.BACKWARD);
       set.remove(updateData);
 
