@@ -436,8 +436,12 @@ public final class InitializerProcessor {
       return;
     }
 
-    // A synthesized constructor's return carries the last initializer's declaration line, which
-    // is the line of one of the assignments below; a written one's carries its closing brace.
+    // A synthesized constructor's return carries the declaration line of the class's last
+    // initialized field, which need not be one of the assignments below: javac records the line
+    // current when it emits the implicit return, and that is the last field declaration it
+    // compiled, static included. A written constructor's return carries its closing brace.
+    int lastInitializerLine = lastInitializerDeclarationLine(wrapper, cl, lstFirst, lstMethodWrappers, isAnonymous);
+
     List<Set<Integer>> leadingLines = new ArrayList<>();
     for (int i = 0; i < lstFirst.size(); i++) {
       Set<Integer> lines = new HashSet<>();
@@ -487,7 +491,7 @@ public final class InitializerProcessor {
               String fieldKey = InterpreterUtil.makeUniqueKey(fExpr.getName(), fExpr.getDescriptor().descriptorString);
               int fidx = cl.getFields().getIndexByKey(fieldKey);
               if (prev_fidx <= fidx && isExprentIndependent(fExpr, assignExpr.getRight(), lstMethodWrappers.get(i), cl, whitelist, new ArrayList<>() /* TODO */, new ArrayList<>(),  fidx, false)
-                && declaredBeforeConstructor(cl, lstMethodWrappers.get(i).methodStruct, exprent, isAnonymous, leadingLines.get(i))) {
+                && declaredBeforeConstructor(cl, lstMethodWrappers.get(i).methodStruct, exprent, isAnonymous, leadingLines.get(i), lastInitializerLine)) {
                 prev_fidx = fidx;
                 if (fieldWithDescr == null) {
                   fieldWithDescr = fieldKey;
@@ -541,8 +545,8 @@ public final class InitializerProcessor {
    * class cannot declare one at all, and its synthetic constructor forwards the superclass's
    * parameters, so it is never treated as written.
    */
-  private static boolean declaredBeforeConstructor(StructClass cl, StructMethod method, Exprent exprent, boolean isAnonymous, Set<Integer> leadingLines) {
-    if (isAnonymous || !writtenConstructor(method, cl, leadingLines)) {
+  private static boolean declaredBeforeConstructor(StructClass cl, StructMethod method, Exprent exprent, boolean isAnonymous, Set<Integer> leadingLines, int lastInitializerLine) {
+    if (isAnonymous || !writtenConstructor(method, cl, leadingLines, lastInitializerLine)) {
       return true;
     }
     if (exprent.bytecode == null || exprent.bytecode.isEmpty()) {
@@ -572,7 +576,7 @@ public final class InitializerProcessor {
     return offset < 0 ? -1 : RoundTrip.lineAt(method, offset);
   }
 
-  private static boolean writtenConstructor(StructMethod method, StructClass cl, Set<Integer> leadingLines) {
+  private static boolean writtenConstructor(StructMethod method, StructClass cl, Set<Integer> leadingLines, int lastInitializerLine) {
     StructMethodParametersAttribute parameters =
       method.getAttribute(StructGeneralAttribute.ATTRIBUTE_METHOD_PARAMETERS);
     if (parameters != null) {
@@ -606,6 +610,13 @@ public final class InitializerProcessor {
       int[] raw = table.getRawData();
       for (int i = 0; i + 1 < raw.length; i += 2) {
         if (raw[i] == last) {
+          // javac 25 attributes a synthesized constructor's implicit return to the class's last
+          // initialized field, static included. That is not one of the leading assignment lines
+          // when the initializer's expression starts on the next line, and never is for a static
+          // field, so the comparison comes first.
+          if (lastInitializerLine >= 0 && raw[i + 1] == lastInitializerLine) {
+            return false;
+          }
           return !leadingLines.contains(raw[i + 1]);
         }
       }
@@ -619,6 +630,89 @@ public final class InitializerProcessor {
         method.releaseResources();
       }
     }
+  }
+
+  /**
+   * The declaration line of the class's last field with an initializer, in class-file order.
+   * This is what javac 25 records on a synthesized constructor's implicit return. A static
+   * field's declaration is the first instruction of its initializer in {@code <clinit>}; an
+   * instance field's is the receiver load of its store, which the next instruction's line may
+   * differ from when the expression starts on a line of its own.
+   */
+  private static int lastInitializerDeclarationLine(ClassWrapper wrapper, StructClass cl,
+      List<List<Exprent>> lstFirst, List<MethodWrapper> lstMethodWrappers, boolean isAnonymous) {
+    int lastIndex = -1;
+    int line = -1;
+    StructMethod clinit = cl.getMethod(CodeConstants.CLINIT_NAME, "()V");
+    if (clinit != null) {
+      // Static initializers are lifted before this pass runs, so their map is complete.
+      for (int fidx = 0; fidx < cl.getFields().size(); fidx++) {
+        StructField fd = cl.getFields().get(fidx);
+        if (!fd.hasModifier(CodeConstants.ACC_STATIC)) {
+          continue;
+        }
+        Exprent initializer = wrapper.getStaticFieldInitializers().getWithKey(
+          InterpreterUtil.makeUniqueKey(fd.getName(), fd.getDescriptor()));
+        if (initializer == null || initializer.bytecode == null || initializer.bytecode.isEmpty()) {
+          continue;
+        }
+        int candidate = RoundTrip.lineAt(clinit, initializer.bytecode.nextSetBit(0));
+        StructLineNumberTableAttribute table =
+          clinit.getAttribute(StructGeneralAttribute.ATTRIBUTE_LINE_NUMBER_TABLE);
+        if (candidate >= 0 && table != null && candidate > maxLine(table)) {
+          candidate = -1;
+        }
+        if (candidate >= 0 && fidx > lastIndex) {
+          lastIndex = fidx;
+          line = candidate;
+        }
+      }
+    }
+    // Instance initializers are still in their constructors: they are the leading assignments,
+    // in strictly increasing class-file field order. The last one of that run is the class's
+    // last initialized instance field, and the run keeps its tail while its head is lifted.
+    for (int i = 0; i < lstFirst.size(); i++) {
+      StructMethod owner = lstMethodWrappers.get(i).methodStruct;
+      int prev = -1;
+      for (int j = isAnonymous ? 0 : 1; j < lstFirst.get(i).size(); j++) {
+        Exprent exprent = lstFirst.get(i).get(j);
+        if (!(exprent instanceof AssignmentExprent) || !(((AssignmentExprent) exprent).getLeft() instanceof FieldExprent)) {
+          break;
+        }
+        AssignmentExprent assign = (AssignmentExprent) exprent;
+        FieldExprent field = (FieldExprent) assign.getLeft();
+        if (field.isStatic() || !field.getClassname().equals(cl.qualifiedName)
+          || !cl.hasField(field.getName(), field.getDescriptor().descriptorString)) {
+          break;
+        }
+        int fidx = cl.getFields().getIndexByKey(
+          InterpreterUtil.makeUniqueKey(field.getName(), field.getDescriptor().descriptorString));
+        if (fidx <= prev) {
+          break;
+        }
+        prev = fidx;
+        int first = RoundTrip.exprentStart(assign.getRight());
+        if (first < 0) {
+          continue;
+        }
+        int store = RoundTrip.instructionEndingAt(owner, first);
+        int candidate = RoundTrip.lineAt(owner, store >= 0 ? store : first);
+        if (candidate >= 0 && fidx > lastIndex) {
+          lastIndex = fidx;
+          line = candidate;
+        }
+      }
+    }
+    return line;
+  }
+
+  private static int maxLine(StructLineNumberTableAttribute table) {
+    int[] raw = table.getRawData();
+    int max = -1;
+    for (int i = 1; i < raw.length; i += 2) {
+      max = Math.max(max, raw[i]);
+    }
+    return max;
   }
 
   private static Exprent processDynamicInitializer(Exprent expr) {

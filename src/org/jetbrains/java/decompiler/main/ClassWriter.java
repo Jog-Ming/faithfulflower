@@ -3327,6 +3327,7 @@ public class ClassWriter implements StatementWriter {
   }
 
   private static boolean explicitEmptyConstructor(StructMethod method, ClassWrapper wrapper) {
+    StructClass cl = wrapper.getClassStruct();
     StructLineNumberTableAttribute lines =
       method.getAttribute(StructGeneralAttribute.ATTRIBUTE_LINE_NUMBER_TABLE);
     if (lines == null) {
@@ -3365,6 +3366,27 @@ public class ClassWriter implements StatementWriter {
       int line = first < 0 ? -1 : lines.findLineNumber(first);
       if (line >= 0) {
         fieldLines.add(line);
+      }
+      // The declaration's own line is the receiver load's; the expression below it may start on
+      // the next line, and a default constructor's implicit return carries the declaration.
+      if (first >= 0) {
+        int store = RoundTrip.instructionEndingAt(wrapper.getDynamicInitializerOwner(), first);
+        if (store >= 0) {
+          int declared = lines.findLineNumber(store);
+          if (declared >= 0) {
+            fieldLines.add(declared);
+          }
+        }
+      }
+    }
+    // javac 25 also attributes the implicit return to the last initialized field even when that
+    // field is static: its declaration line is the first instruction of its <clinit> initializer.
+    for (StructField fd : cl.getFields()) {
+      if (fd.hasModifier(CodeConstants.ACC_STATIC)) {
+        int line = fieldLine(wrapper, cl, fd);
+        if (line >= 0) {
+          fieldLines.add(line);
+        }
       }
     }
     boolean explicit = !fieldLines.contains(lastLine);
