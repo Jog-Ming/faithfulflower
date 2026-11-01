@@ -891,6 +891,26 @@ public class IfStatement extends Statement {
     char armLast = buf.lastTokenChar();
 
     if (elsestat != null) {
+      // The arm ends in a jump the target's table dates on the arm's own line, before the else
+      // arm's: the source wrote `break;` there and the other arm followed the if flat. The
+      // jump already leaves for where the if's break edge goes, so printing the statement back
+      // keeps the code while giving the alignment the line the jump stands on.
+      java.util.List<StatEdge> armExits = getSuccessorEdges(Statement.STATEDGE_DIRECT_ALL);
+      int breakSite = ifstat != null && armExits.size() == 1
+          && armExits.get(0).getType() == StatEdge.TYPE_BREAK
+          && armExits.get(0).explicit && !armExits.get(0).labeled
+          && !RoundTrip.printsTerminalJump(ifstat)
+        ? RoundTrip.writtenBreakSite(ifstat, elsestat) : -1;
+      if (breakSite >= 0) {
+        TextBuffer breakLine = new TextBuffer();
+        breakLine.appendIndent(indent + 1).append("break;").appendLineSeparator();
+        breakLine.addStartBytecodeMapping(breakSite);
+        buf.append(breakLine);
+        buf.appendIndent(indent).append("}").appendLineSeparator();
+        RoundTrip.markBreakPrinted(this);
+        buf.append(ExprProcessor.jmpWrapper(elsestat, indent, false));
+        return;
+      }
       if (appendFlatElse(buf, indent, ifstat, elsestat, true)) {
         return;
       }

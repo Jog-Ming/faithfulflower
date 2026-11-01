@@ -8033,6 +8033,62 @@ public final class RoundTrip {
   }
 
   /**
+   * The goto a printed arm ends with when the source wrote {@code break;} there: the arm's last
+   * instruction is followed by a jump that lands past the else arm, and the target's table
+   * starts a line on it above the else arm's first line. The line alone does not separate a
+   * written break from a join whose then block closed on that very line, so the jump must also
+   * leave a loop whose body is being printed; a join stays inside that loop. -1 otherwise.
+   */
+  public static int writtenBreakSite(Statement arm, Statement elseArm) {
+    if (!selector("armbreak") || arm == null || elseArm == null) {
+      return -1;
+    }
+    int site = tailJumpOffset(arm);
+    if (site < 0) {
+      return -1;
+    }
+    int target = jumpTargetAt(site);
+    int elseStart = firstOffset(elseArm);
+    if (target < 0 || elseStart < 0 || target < elseStart) {
+      return -1;
+    }
+    // A break leaves the construct it stands in: the jump lands past a loop whose body is being
+    // printed. A jump that only joins the if/else inside the same block is the else's own.
+    if (!targetLeavesOpenLoop(target)) {
+      return -1;
+    }
+    StructMethod method = currentMethod();
+    if (method == null || !hasLineEntryAt(site) || !lineStartsAt(site)) {
+      return -1;
+    }
+    int breakLine = lineAt(method, site);
+    int elseLine = lineAt(method, elseStart);
+    return breakLine >= 0 && elseLine >= 0 && breakLine < elseLine ? site : -1;
+  }
+
+  /**
+   * True when the offset lies at or past the exit of a loop whose body is being printed: where a
+   * written {@code break} out of that loop lands. The empty stack (a method printed outside any
+   * loop) never answers true.
+   */
+  public static boolean targetLeavesOpenLoop(int target) {
+    if (target < 0) {
+      return false;
+    }
+    java.util.Iterator<Statement> it = OPEN_ALL_LOOPS.get().iterator();
+    while (it.hasNext()) {
+      Statement loop = it.next();
+      // Only a proven back edge says where the loop ends: without one the last body instruction
+      // is not an exit, and a join landing there is still inside the loop.
+      int end = loopRangeEnd(loop);
+      if (end >= 0 && target >= end) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
    * The target of the jump that continues the code after a statement, or null. The statement's
    * last exprent ends before any deleted instruction (a discarded call's {@code pop}), so the
    * jump is looked for in the few bytes right after its end.

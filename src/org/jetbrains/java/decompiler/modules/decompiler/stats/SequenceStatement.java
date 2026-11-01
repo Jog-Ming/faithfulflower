@@ -1024,18 +1024,21 @@ public class SequenceStatement extends Statement {
         // starts a line on that jump: the source wrote `continue;` there and closed the branch,
         // and the other arm follows the if flat instead of sitting in its else.
         int restContinue = -1;
-        if (RoundTrip.selector("continueflat") && afterIf.isEmpty() && stats.size() > i + 1) {
-          restContinue = RoundTrip.flatContinueSite(stats.get(stats.size() - 1),
-            ifStatement.getIfstat());
+        int restBreak = -1;
+        if (afterIf.isEmpty() && stats.size() > i + 1) {
+          Statement restTail = stats.get(stats.size() - 1);
+          restContinue = RoundTrip.flatContinueSite(restTail, ifStatement.getIfstat());
+          restBreak = RoundTrip.writtenBreakSite(restTail, ifStatement.getIfstat());
         }
         if (!IfStatement.printSplitIf(buf, head, splitArm, ifStatement.getIfstat(), indent, false)) {
           buf.appendIndent(indent).append(head.toJava(indent)).append(" {").appendLineSeparator();
           buf.append(ExprProcessor.jmpWrapper(splitArm, indent + 1, true));
-          if (restContinue >= 0) {
-            TextBuffer continueLine = new TextBuffer();
-            continueLine.appendIndent(indent + 1).append("continue;").appendLineSeparator();
-            continueLine.addStartBytecodeMapping(restContinue);
-            buf.append(continueLine);
+          String flatJump = restBreak >= 0 ? "break;" : restContinue >= 0 ? "continue;" : null;
+          if (flatJump != null) {
+            TextBuffer jumpLine = new TextBuffer();
+            jumpLine.appendIndent(indent + 1).append(flatJump).appendLineSeparator();
+            jumpLine.addStartBytecodeMapping(restBreak >= 0 ? restBreak : restContinue);
+            buf.append(jumpLine);
             buf.appendIndent(indent).append("}").appendLineSeparator();
             buf.append(ExprProcessor.jmpWrapper(ifStatement.getIfstat(), indent, false));
           } else {
