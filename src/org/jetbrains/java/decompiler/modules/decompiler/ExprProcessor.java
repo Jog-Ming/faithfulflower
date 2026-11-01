@@ -1498,6 +1498,56 @@ public class ExprProcessor implements CodeConstants {
     return defaultVal;
   }
 
+  /**
+   * The cast-expression type annotations the target records on this expression's own cast.
+   *
+   * <p>A cast whose type erases to the operand's own type emits no {@code checkcast}; javac still
+   * records the cast expression's type annotation with the offset of the first instruction after
+   * the operand. The expression the printer wraps in that cast ends exactly there, so an
+   * annotation whose offset equals the end of this expression's last instruction was written on
+   * this cast. Only a top-level path applies to the cast type itself.
+   */
+  private static List<org.jetbrains.java.decompiler.util.Pair<Queue<TypeAnnotation.PathValue>, AnnotationExprent>> castAnnotations(
+    Exprent exprent) {
+    if (!RoundTrip.selector("castanno")) {
+      return Collections.emptyList();
+    }
+    StructMethod method = RoundTrip.currentMethod();
+    if (method == null || exprent.bytecode == null || exprent.bytecode.isEmpty()) {
+      return Collections.emptyList();
+    }
+    // The exprent's mapping may record a point past the last instruction it emits (an argument's
+    // end, a dropped marker); the cast's offset is the end of the last real instruction.
+    int end = -1;
+    for (int bit = exprent.bytecode.nextSetBit(0); bit >= 0;
+         bit = exprent.bytecode.nextSetBit(bit + 1)) {
+      end = Math.max(end, RoundTrip.instructionEnd(method, bit));
+    }
+    if (end < 0) {
+      return Collections.emptyList();
+    }
+    List<org.jetbrains.java.decompiler.util.Pair<Queue<TypeAnnotation.PathValue>, AnnotationExprent>> list = null;
+    for (org.jetbrains.java.decompiler.util.Key<?> key : org.jetbrains.java.decompiler.main.ClassWriter.TYPE_ANNOTATION_ATTRIBUTES) {
+      org.jetbrains.java.decompiler.struct.attr.StructTypeAnnotationAttribute attribute =
+        method.getAttribute((org.jetbrains.java.decompiler.util.Key<org.jetbrains.java.decompiler.struct.attr.StructTypeAnnotationAttribute>)key);
+      if (attribute == null) {
+        continue;
+      }
+      for (TypeAnnotation annotation : attribute.getAnnotations()) {
+        if (annotation.getTargetType() != TypeAnnotation.TYPE_ARG_CAST
+          || annotation.getIndex() != end || !annotation.isTopLevel()) {
+          continue;
+        }
+        if (list == null) {
+          list = new ArrayList<>();
+        }
+        list.add(org.jetbrains.java.decompiler.util.Pair.of(annotation.asQueue(),
+          annotation.getAnnotation()));
+      }
+    }
+    return list == null ? Collections.emptyList() : list;
+  }
+
   public static boolean getCastedExprent(Exprent exprent,
                                          VarType leftType,
                                          TextBuffer buffer,
@@ -1771,7 +1821,16 @@ public class ExprProcessor implements CodeConstants {
       VarType castType = fieldBoundCast ? fieldBoundTarget
         : doubleCast ? doubleCastTarget
         : castRaw ? new VarType(leftType.type, leftType.arrayDim, leftType.value) : leftType;
-      buffer.append('(').appendCastTypeName(castType).append(')');
+      List<org.jetbrains.java.decompiler.util.Pair<Queue<TypeAnnotation.PathValue>, AnnotationExprent>> castAnnotations =
+        castAnnotations(exprent);
+      if (castAnnotations.isEmpty()) {
+        buffer.append('(').appendCastTypeName(castType).append(')');
+      }
+      else {
+        // The target records a cast expression whose operand ends at this expression: the source
+        // wrote the annotation on the cast's own type, `(@Nullable T) value`.
+        buffer.append('(').appendCastTypeName(castType, castAnnotations, Collections.emptySet()).append(')');
+      }
       if (doubleCast) {
         // The first step widens the value to the strictest type the second cast accepts: the
         // target class with its one argument as an upper bound (`Type<? extends Pair<?, ?>>`).
