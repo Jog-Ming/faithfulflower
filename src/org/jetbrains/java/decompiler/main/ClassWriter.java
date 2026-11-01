@@ -26,7 +26,9 @@ import org.jetbrains.java.decompiler.modules.decompiler.exps.*;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.FunctionExprent.FunctionType;
 import org.jetbrains.java.decompiler.modules.decompiler.stats.BasicBlockStatement;
 import org.jetbrains.java.decompiler.modules.decompiler.stats.RootStatement;
+import org.jetbrains.java.decompiler.modules.decompiler.stats.SequenceStatement;
 import org.jetbrains.java.decompiler.modules.decompiler.stats.Statement;
+import org.jetbrains.java.decompiler.modules.decompiler.stats.SwitchStatement;
 import org.jetbrains.java.decompiler.modules.decompiler.vars.VarTypeProcessor;
 import org.jetbrains.java.decompiler.modules.decompiler.vars.VarVersionPair;
 import org.jetbrains.java.decompiler.modules.renamer.PoolInterceptor;
@@ -343,8 +345,8 @@ public class ClassWriter implements StatementWriter {
             buffer.append(" ->");
   
             if (DecompilerContext.getOption(IFernflowerPreferences.INLINE_SIMPLE_LAMBDAS) && methodWrapper.decompileError == null && root != null) {
-              Statement firstStat = root.getFirst();
-              if (firstStat instanceof BasicBlockStatement && firstStat.getExprents() != null && firstStat.getExprents().size() == 1) {
+              Statement firstStat = lambdaExpressionStatement(root);
+              if (firstStat != null && firstStat.getExprents() != null && firstStat.getExprents().size() == 1) {
                 Exprent firstExpr = firstStat.getExprents().get(0);
                 boolean isVarDefinition = firstExpr instanceof AssignmentExprent &&
                   ((AssignmentExprent)firstExpr).getLeft() instanceof VarExprent &&
@@ -3835,6 +3837,53 @@ public class ClassWriter implements StatementWriter {
 
   /** Whether an expression carries a lambda argument anywhere inside it. */
   /**
+   * The statement holding a lambda's single returned expression, or null when its body prints as
+   * a block. A lowered switch expression leaves its switch statement as a phantom sibling of the
+   * successor that returns the value; the phantom prints nothing, so the successor is the body.
+   * Any other body with more than one printed statement is a block.
+   */
+  public static Statement lambdaExpressionStatement(RootStatement root) {
+    if (root == null) {
+      return null;
+    }
+    Statement stat = root.getFirst();
+    while (stat instanceof SequenceStatement sequence) {
+      Statement body = null;
+      for (Statement child : sequence.getStats()) {
+        if (child.isPhantom()) {
+          // A lowered switch expression's statement still prints its head block, which holds the
+          // statements the source wrote before the switch (`T v = ...;`): only one that prints
+          // nothing may be left out of the expression body.
+          if (child instanceof SwitchStatement headOnly && switchHeadPrintsNothing(headOnly)) {
+            continue;
+          }
+          return null;
+        }
+        if (body != null) {
+          return null;
+        }
+        body = child;
+      }
+      if (body == null || body instanceof BasicBlockStatement) {
+        return body;
+      }
+      stat = body;
+    }
+    return stat instanceof BasicBlockStatement ? stat : null;
+  }
+
+  /** Whether a phantom switch prints no text of its own: an empty head and no declarations. */
+  private static boolean switchHeadPrintsNothing(SwitchStatement stat) {
+    if (!stat.getVarDefinitions().isEmpty()) {
+      return false;
+    }
+    Statement head = stat.getFirst();
+    return head == null
+      || head.getExprents() == null || head.getExprents().isEmpty()
+        && head.getVarDefinitions().isEmpty() && head.getStats().isEmpty();
+  }
+
+  /**
    * The line a block-printed lambda's closing brace sits on, or -1 when the body prints inline.
    * A block lambda records a line entry at its implicit return: that entry is the closing brace's
    * line, and an expression lambda's return has no entry of its own.
@@ -3843,8 +3892,8 @@ public class ClassWriter implements StatementWriter {
     if (wrapper == null || wrapper.root == null) {
       return -1;
     }
-    Statement firstStat = wrapper.root.getFirst();
-    if (!(firstStat instanceof BasicBlockStatement) || firstStat.getExprents() == null
+    Statement firstStat = lambdaExpressionStatement(wrapper.root);
+    if (firstStat == null || firstStat.getExprents() == null
         || firstStat.getExprents().size() != 1) {
       return -1;
     }

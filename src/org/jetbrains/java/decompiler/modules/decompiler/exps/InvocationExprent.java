@@ -2113,8 +2113,8 @@ public class InvocationExprent extends Exprent {
       || wrapper.decompileError != null || wrapper.root == null) {
       return false;
     }
-    Statement firstStat = wrapper.root.getFirst();
-    if (!(firstStat instanceof BasicBlockStatement) || firstStat.getExprents() == null
+    Statement firstStat = ClassWriter.lambdaExpressionStatement(wrapper.root);
+    if (firstStat == null || firstStat.getExprents() == null
       || firstStat.getExprents().size() != 1) {
       return false;
     }
