@@ -24,7 +24,6 @@ import org.jetbrains.java.decompiler.struct.attr.StructSourceFileAttribute;
 import org.jetbrains.java.decompiler.util.ClasspathScanner;
 import org.jetbrains.java.decompiler.util.JrtFinder;
 import org.jetbrains.java.decompiler.util.TextBuffer;
-import org.jetbrains.java.decompiler.util.token.TextTokenDumpVisitor;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -250,12 +249,6 @@ public class Fernflower implements IDecompiledData {
         } catch (RuntimeException e) {
           // A class must not be lost because its line table could not be aligned.
         }
-      }
-
-      if (DecompilerContext.getOption(IFernflowerPreferences.DUMP_TEXT_TOKENS)) {
-        buffer.visitTokens(TextTokenVisitor.createVisitor(next -> new TextTokenDumpVisitor(next, buffer)));
-      } else {
-        buffer.visitTokens(TextTokenVisitor.createVisitor());
       }
 
       String res = buffer.convertToStringAndAllowDataDiscard();

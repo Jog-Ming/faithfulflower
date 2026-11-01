@@ -894,7 +894,6 @@ public class NewExprent extends Exprent {
         VarType elementType = lstArrayElements.get(0).getExprType();
         if (elementType.type == CodeType.OBJECT && elementType.value.equals("java/lang/Object") && elementType.arrayDim >= 1) {
           buf.prepend("(Object)");
-          buf.addClassToken(1, 6, "java/lang/Object");
         }
       }
     }

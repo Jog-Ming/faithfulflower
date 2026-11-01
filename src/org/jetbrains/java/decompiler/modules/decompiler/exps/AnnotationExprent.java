@@ -54,7 +54,7 @@ public class AnnotationExprent extends Exprent {
     TextBuffer buffer = new TextBuffer();
 
     buffer.append('@');
-    buffer.appendAllClasses(DecompilerContext.getImportCollector().getShortName(ExprProcessor.buildJavaClassName(className)), className);
+    buffer.append(DecompilerContext.getImportCollector().getShortName(ExprProcessor.buildJavaClassName(className)));
 
     Type type = getAnnotationType();
 

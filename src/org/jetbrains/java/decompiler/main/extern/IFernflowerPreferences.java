@@ -389,12 +389,6 @@ public interface IFernflowerPreferences {
   @Type(DecompilerOption.Type.BOOLEAN)
   String FORCE_JSR_INLINE = "force-jsr-inline";
 
-  @Name("Dump Text Tokens")
-  @Description("Dump Text Tokens on each class file")
-  @ShortName("dtt")
-  @Type(DecompilerOption.Type.BOOLEAN)
-  String DUMP_TEXT_TOKENS = "dump-text-tokens";
-
   @Name("Remove Imports")
   @Description("Remove import statements from the decompiled code")
   @ShortName("rim")
@@ -507,7 +501,6 @@ public interface IFernflowerPreferences {
     defaults.put(SOURCE_FILE_COMMENTS, "0");
     defaults.put(DECOMPILE_COMPLEX_CONDYS, "0");
     defaults.put(FORCE_JSR_INLINE, "0");
-    defaults.put(DUMP_TEXT_TOKENS, "0");
     defaults.put(REMOVE_IMPORTS, "0");
     defaults.put(MARK_CORRESPONDING_SYNTHETICS, "0");
     defaults.put(EXCLUDED_CLASSES, "");

@@ -1227,7 +1227,7 @@ public class InvocationExprent extends Exprent {
           || (witnessQualifier && !genericArgs.isEmpty())) {
           // An unqualified call has no place for a witness: `.m()` is not valid Java.
           qualifierTextStart = buf.length();
-          buf.appendAllClasses(DecompilerContext.getImportCollector().getShortNameInClassContext(ExprProcessor.buildJavaClassName(classname)), classname);
+          buf.append(DecompilerContext.getImportCollector().getShortNameInClassContext(ExprProcessor.buildJavaClassName(classname)));
         }
       }
     }

@@ -172,7 +172,7 @@ public class FieldExprent extends Exprent {
         return buf;
       }
       if (useQualifiedStatic()) {
-        buf.appendAllClasses(DecompilerContext.getImportCollector().getShortNameInClassContext(ExprProcessor.buildJavaClassName(classname)), classname);
+        buf.append(DecompilerContext.getImportCollector().getShortNameInClassContext(ExprProcessor.buildJavaClassName(classname)));
         buf.append(".");
       }
     }
