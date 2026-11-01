@@ -393,11 +393,15 @@ public class IfStatement extends Statement {
         buf.appendIndent(indent).append("}").appendLineSeparator();
         return buf;
       }
-      // A single guard compiles the printed `continue;` to the goto the target's table puts on the
-      // line the source wrote it on; the line alignment has to see that jump to place it.
-      int gotoOffset = groups.size() == 1 ? RoundTrip.continueGoto(ifHead) : -1;
-      for (List<Exprent> group : groups) {
-        printGuard(buf, ifHead, orOf(group), indent, gotoOffset);
+      // Each written guard compiles its printed `continue;` to the jump the target's table puts on
+      // the line the source wrote it on: an earlier group's jump sits right before the next group's
+      // test, and the last group's is the head's own trailing branch. The line alignment has to see
+      // each jump to place the statement it belongs to.
+      for (int i = 0; i < groups.size(); i++) {
+        int site = i + 1 < groups.size()
+          ? RoundTrip.continueGotoBefore(groups.get(i + 1).get(0), this)
+          : RoundTrip.continueGoto(ifHead);
+        printGuard(buf, ifHead, orOf(groups.get(i)), indent, site);
       }
       buf.append(ExprProcessor.jmpWrapper(ifstat, indent, false));
       return buf;
