@@ -1595,7 +1595,9 @@ public class InvocationExprent extends Exprent {
     int invokeOffset = RoundTrip.lastInstructionStart(bytecode);
     int argumentStart = lstParameters == null || lstParameters.isEmpty()
       ? -1 : firstPrintedLine(lstParameters.get(0));
-    return invokeOffset >= 0 && RoundTrip.lineStartsAt(invokeOffset)
+    // The invoke's line is read even when the table starts no entry there: javac drops the entry
+    // when the line it would record equals the last argument's, and the dot still began that line.
+    return invokeOffset >= 0
       && argumentStart >= 0 && RoundTrip.sourceLine(this) > argumentStart
       && !insideOwnArgumentList();
   }
@@ -1622,8 +1624,9 @@ public class InvocationExprent extends Exprent {
       return false;
     }
     int invokeOffset = RoundTrip.lastInstructionStart(bytecode);
-    return invokeOffset >= 0 && RoundTrip.lineStartsAt(invokeOffset)
-      && argumentsStartInheritedLine(firstLine);
+    // No entry starts at the invoke when the line it would record equals the last argument's:
+    // javac merges the two, and the dot still began that line.
+    return invokeOffset >= 0 && argumentsStartInheritedLine(firstLine);
   }
 
   /**
