@@ -393,11 +393,14 @@ public class NewExprent extends Exprent {
    * The enclosing call's line when this creation's `new` has no line-table entry of its own.
    * The allocation then inherits the preceding instruction's line, which says nothing about
    * where the creation's text sits; written as an argument, it sits on the enclosing call's
-   * line, which is the only line the first argument may be compared with.
+   * line, which is the only line the first argument may be compared with. An enclosing
+   * constructor is not that line: its invoke is emitted after its own arguments, so the entry
+   * it inherits names where the argument list ended, not where the enclosing call's text sits.
    */
   private int enclosingCreationLine() {
     int newOffset = bytecode == null || bytecode.isEmpty() ? -1 : bytecode.nextSetBit(0);
-    if (newOffset > 0 && !RoundTrip.lineStartsAt(newOffset) && InvocationExprent.inArgument()) {
+    if (newOffset > 0 && !RoundTrip.lineStartsAt(newOffset) && InvocationExprent.inArgument()
+        && !InvocationExprent.enclosingCallIsInit()) {
       return InvocationExprent.enclosingCallLine();
     }
     return -1;
@@ -638,9 +641,13 @@ public class NewExprent extends Exprent {
         if (methodObject != null && isMethodReference()) {
           forceRecordedReceiverType(methodObject);
         }
-        // The lambda's line is the line of the call that carries it; the invokeDynamic's own
-        // table entry can interpolate to an earlier line when the call spans lines.
-        int callLine = InvocationExprent.enclosingCallLine();
+        // The lambda's text starts where the argument printer placed this argument: the call's
+        // own line when it follows the opening parenthesis on it, or the line the previous
+        // argument ended on when it continues that line. The invokedynamic's own table entry is
+        // only inherited and can name an earlier line when the enclosing call spans lines, so it
+        // is the fallback. A body line later than this one is a break the source had.
+        int callLine = Math.max(InvocationExprent.argumentTextStartLine(),
+          InvocationExprent.enclosingCallLine());
         new ClassWriter().classLambdaToJava(child, buf, methodObject, indent,
           callLine >= 0 ? callLine : RoundTrip.sourceLine(this), methodReferenceQualifier(), getFunctionalReturnType());
         if (isMethodReference() && RoundTrip.selector("arg-head-line")) {

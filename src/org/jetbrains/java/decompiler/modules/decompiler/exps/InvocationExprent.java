@@ -1810,6 +1810,8 @@ public class InvocationExprent extends Exprent {
   }
 
   private static final ThreadLocal<int[]> CALL_LINE = ThreadLocal.withInitial(() -> new int[]{-1});
+  /** Whether the innermost call whose arguments are being printed is a creation's constructor. */
+  private static final ThreadLocal<boolean[]> CALL_IS_INIT = ThreadLocal.withInitial(() -> new boolean[]{false});
   /** The call that contained the one now printing: its line, and the method that line belongs to. */
   private static final ThreadLocal<int[]> OUTER_CALL_LINE = ThreadLocal.withInitial(() -> new int[]{-1});
   private static final ThreadLocal<StructMethod[]> OUTER_CALL_AT = ThreadLocal.withInitial(() -> new StructMethod[]{null});
@@ -1817,6 +1819,15 @@ public class InvocationExprent extends Exprent {
   /** The target line of the innermost call whose arguments are being printed, or -1. */
   public static int enclosingCallLine() {
     return CALL_LINE.get()[0];
+  }
+
+  /**
+   * Whether the innermost call whose arguments are being printed is an {@code <init>} invocation.
+   * A constructor's invoke is emitted after its arguments, so its line entry inherits the last
+   * argument's line and names where the argument list ended, not where the creation's text starts.
+   */
+  public static boolean enclosingCallIsInit() {
+    return CALL_IS_INIT.get()[0];
   }
   private static final ThreadLocal<StructMethod[]> ARGUMENT_AT =
     ThreadLocal.withInitial(() -> new StructMethod[64]);
@@ -2301,11 +2312,13 @@ public class InvocationExprent extends Exprent {
 
   public TextBuffer appendParamList(int indent) {
     int savedCallLine = CALL_LINE.get()[0];
+    boolean savedCallIsInit = CALL_IS_INIT.get()[0];
     int savedOuterLine = OUTER_CALL_LINE.get()[0];
     StructMethod savedOuterAt = OUTER_CALL_AT.get()[0];
     OUTER_CALL_LINE.get()[0] = savedCallLine;
     OUTER_CALL_AT.get()[0] = RoundTrip.currentMethod();
     CALL_LINE.get()[0] = RoundTrip.sourceLineEnd(this);
+    CALL_IS_INIT.get()[0] = functype == Type.INIT;
     int depth = ++ARGUMENT.get()[0];
     if (depth <= ARGUMENT_AT.get().length) {
       ARGUMENT_AT.get()[depth - 1] = RoundTrip.currentMethod();
@@ -2315,6 +2328,7 @@ public class InvocationExprent extends Exprent {
     } finally {
       ARGUMENT.get()[0]--;
       CALL_LINE.get()[0] = savedCallLine;
+      CALL_IS_INIT.get()[0] = savedCallIsInit;
       OUTER_CALL_LINE.get()[0] = savedOuterLine;
       OUTER_CALL_AT.get()[0] = savedOuterAt;
     }
@@ -2780,10 +2794,13 @@ public class InvocationExprent extends Exprent {
         // A constructor's invoke carries no entry of its own and inherits the last line its
         // arguments ended with, which can sit below the creation; the creation's own line is the
         // one the constructor's text is known to sit on. The line its first argument proved wins
-        // over the inherited `new` line.
-        int creationBase = callerTextLine >= 0 ? callerTextLine : callerOpeningLine;
-        if (functype == Type.INIT && creationBase >= 0
-          && (callTextLine < 0 || creationBase < callTextLine)) {
+        // over the inherited `new` line, and a creation written as an argument sits on the
+        // enclosing call's line when its own `new` has no entry of its own: the same line the
+        // creation's first argument was compared with above. The init invoke's inherited line is
+        // not the creation's text line in either direction, so the creation's line replaces it
+        // whichever side it falls on.
+        int creationBase = callerTextLine >= 0 ? callerTextLine : Math.max(callerEnclosingLine, callerOpeningLine);
+        if (functype == Type.INIT && creationBase >= 0 && creationBase != callTextLine) {
           callTextLine = creationBase;
         }
         ARGUMENT_TEXT_START.get()[0] = startsLine
