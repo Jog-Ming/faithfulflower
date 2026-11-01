@@ -2857,10 +2857,21 @@ public class InvocationExprent extends Exprent {
       // argument list on; when that line is later than the line the call's text sits on, its text
       // did not start there and the source broke the line instead. A creation with its own lambda
       // argument breaks below its start by itself, and moving the start would overshoot.
-      int anonymousLine = firstArgument instanceof NewExprent createdAnonymous
+      // The creation may sit behind a varargs array or the constructor call that builds it; the
+      // anonymous class's own constructor is what names the line its text starts on.
+      Exprent anonymousArgument = firstArgument;
+      if (anonymousArgument instanceof NewExprent arrayArgument && arrayArgument.isVarArgParam()
+          && !arrayArgument.getLstArrayElements().isEmpty()) {
+        anonymousArgument = arrayArgument.getLstArrayElements().get(0);
+      }
+      if (anonymousArgument instanceof InvocationExprent construction
+          && construction.getInstance() != null) {
+        anonymousArgument = construction.getInstance();
+      }
+      int anonymousLine = anonymousArgument instanceof NewExprent createdAnonymous
         ? createdAnonymous.anonymousConstructorLine() : -1;
       boolean anonymousStartLater = anonymousLine >= 0 && openingLine >= 0 && anonymousLine > openingLine
-        && !printsInternallyBroken(firstArgument);
+        && !printsInternallyBroken(anonymousArgument);
       breakBeforeFirst = (!lambdaArgument || lambdaStartsLater)
         && (elementStartsLater || explicitStart || constructorStartLater || lambdaStartsLater
             || anonymousStartLater);
