@@ -11561,6 +11561,59 @@ public final class RoundTrip {
     return after == null ? -1 : after;
   }
 
+  /**
+   * The goto a printed break/continue out of this statement compiles to, when the statement no
+   * longer records the deleted jump. When the destination's range is known, the jump is the
+   * unique goto between the statement's last instruction and that destination that lands
+   * exactly on it; a range with none or with several proves nothing. An empty join block covers
+   * no range of its own, but the layout still proves the jump: it is the first forward goto
+   * after the statement's last instruction, past any backward latch the loop left uncovered.
+   * Only a jump the target's table starts a line on can carry the keyword's line.
+   */
+  public static int outgoingJumpSite(Statement stat, StatEdge edge) {
+    if (stat == null || edge == null || !edge.explicit) {
+      return -1;
+    }
+    int type = edge.getType();
+    if (type != StatEdge.TYPE_BREAK && type != StatEdge.TYPE_CONTINUE) {
+      return -1;
+    }
+    StructMethod method = currentMethod();
+    java.util.Map<Integer, Integer> gotos = method == null ? null : GOTO_TARGETS.get(method);
+    int end = lastOffsetDeep(stat);
+    if (gotos == null || end < 0) {
+      return -1;
+    }
+    // The destination's statement range starts at the instruction the jump lands on; its
+    // exprents alone may start later, after the loads and tests of its own condition.
+    int dest = edge.getDestination() == null ? -1 : statementOffset(edge.getDestination());
+    if (dest > end) {
+      int site = -1;
+      for (java.util.Map.Entry<Integer, Integer> entry : gotos.entrySet()) {
+        int at = entry.getKey();
+        if (at >= end && at < dest && entry.getValue() == dest) {
+          if (site >= 0) {
+            return -1;
+          }
+          site = at;
+        }
+      }
+      if (site >= 0) {
+        return hasLineEntryAt(site) && lineStartsAt(site) ? site : -1;
+      }
+    }
+    java.util.Map<Integer, Integer> ends = INSTRUCTION_ENDS.get(method);
+    int at = ends == null ? -1 : ends.getOrDefault(end, -1);
+    for (int i = 0; i < 16 && at >= 0; i++) {
+      Integer target = gotos.get(at);
+      if (target != null && target > end) {
+        return hasLineEntryAt(at) && lineStartsAt(at) ? at : -1;
+      }
+      at = ends.getOrDefault(at, -1);
+    }
+    return -1;
+  }
+
   /** The offset of the goto that starts where this statement's last instruction ends, or -1. */
   public static int tailJumpOffset(Statement statement) {
     int end = lastInstructionEnd(statement);

@@ -1342,6 +1342,15 @@ public class ExprProcessor implements CodeConstants {
           // Only the mapping is taken from it: the keyword's kind and its line are decided by the
           // tree's own evidence, and an offset this block never had must not change them.
           buf.addBytecodeMapping(fallbackJump);
+        } else if (jumpOffset < 0) {
+          // Neither the block nor its owner records the jump: the outgoing edge itself still
+          // names it, as the unique goto between this statement's last instruction and the
+          // edge's destination that lands exactly there. Without the mapping the keyword's line
+          // is left to the aligner's guess and can land two lines off.
+          int site = RoundTrip.outgoingJumpSite(stat, edge);
+          if (site >= 0) {
+            buf.addBytecodeMapping(site);
+          }
         }
         // The target starts no line at the jump when the source ended the previous statement with
         // `break;`/`continue;` on the same line; keep it there.
