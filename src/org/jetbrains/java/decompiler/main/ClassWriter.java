@@ -4308,9 +4308,8 @@ public class ClassWriter implements StatementWriter {
 
   /**
    * The line a plain class's static block starts on: the first {@code <clinit>} line table entry
-   * whose line is not one of the static field initializers' declaration lines. The initializers
-   * are inlined at the head of {@code <clinit>}, each attributed to its own field's line; the
-   * block's first statement is the first entry left over.
+   * whose instruction belongs to no lifted static initializer. The initializers are inlined where
+   * the source wrote them, which may put the block between two of them.
    */
   private static int staticBlockOwnLine(ClassWrapper wrapper, StructClass cl) {
     StructMethod clinit = cl.getMethod(CodeConstants.CLINIT_NAME, "()V");
@@ -4319,22 +4318,31 @@ public class ClassWriter implements StatementWriter {
     if (table == null) {
       return -1;
     }
-    java.util.Set<Integer> fieldLines = new java.util.HashSet<>();
-    for (StructField fd : cl.getFields()) {
-      if (fd.hasModifier(CodeConstants.ACC_STATIC)) {
-        int fieldLine = fieldLine(wrapper, cl, fd);
-        if (fieldLine >= 0) {
-          fieldLines.add(fieldLine);
-        }
-      }
-    }
+    // The lifted initializers are attributed to their fields' declaration lines, but a
+    // multi-line initializer occupies the lines below it too, so a line no field is declared on
+    // is not yet the block. The block's statements are the ones no lifted initializer's code
+    // covers; a block may sit between two initializers, so the test is per entry, not a boundary.
     int[] raw = table.getRawData();
-    for (int i = 1; i < raw.length; i += 2) {
-      if (!fieldLines.contains(raw[i])) {
-        return raw[i];
+    for (int i = 0; i < raw.length; i += 2) {
+      if (!insideStaticInitializer(wrapper, raw[i])) {
+        return raw[i + 1];
       }
     }
     return -1;
+  }
+
+  /** Whether a lifted static initializer's code starts the instruction at this offset. */
+  private static boolean insideStaticInitializer(ClassWrapper wrapper, int offset) {
+    for (Exprent initializer : wrapper.getStaticFieldInitializers()) {
+      // The stored exprent carries only the offset of its own call; its operands and nested
+      // chains hold the rest of the expression's instructions.
+      for (Exprent part : initializer.getAllExprents(true, true)) {
+        if (part.bytecode != null && part.bytecode.get(offset)) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   /**
