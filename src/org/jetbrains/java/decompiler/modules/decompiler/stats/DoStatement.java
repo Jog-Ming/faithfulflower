@@ -292,6 +292,18 @@ public class DoStatement extends Statement {
         if (forGuard == null) {
           forGuard = RoundTrip.recordedLoopGuard(this);
         }
+        // The merge folds the guard's tests into the header behind the loop's own test; the
+        // operands the table places below the header line are the written guard, and the header
+        // keeps only the test the source put there.
+        Exprent headerCondition = null;
+        if (forGuard != null) {
+          java.util.List<Exprent> chain = RoundTrip.booleanChainOperands(conditionExprent.get(0));
+          int split = RoundTrip.foldedGuardStart(chain, forGuard, incLine);
+          if (split >= 1) {
+            headerCondition = RoundTrip.andOfOperands(chain, 0, split);
+            forGuard = RoundTrip.andOfOperands(chain, split, chain.size());
+          }
+        }
         if (incLine >= 0 && condLine >= 0 && incLine != condLine && forGuard == null) {
           TextBuffer body = ExprProcessor.jmpWrapper(first, indent + 1, false);
           if (!endsWithTransfer(body)) {
@@ -329,9 +341,14 @@ public class DoStatement extends Statement {
         } else if (headerDecl != null) {
           buf.append(headerDecl.toJava(indent));
         }
-        TextBuffer conditionText = forGuard != null || elseBreak != null
-          ? ((FunctionExprent) condition).getLstOperands().get(0).toJava(indent)
-          : condition == null ? new TextBuffer() : condition.toJava(indent);
+        TextBuffer conditionText;
+        if (headerCondition != null) {
+          conditionText = headerCondition.toJava(indent);
+        } else if (forGuard != null || elseBreak != null) {
+          conditionText = ((FunctionExprent) condition).getLstOperands().get(0).toJava(indent);
+        } else {
+          conditionText = condition == null ? new TextBuffer() : condition.toJava(indent);
+        }
         buf.append(";").appendPossibleNewline(" ")
           .append(conditionText)
           .append(";").appendPossibleNewline(" ")

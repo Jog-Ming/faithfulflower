@@ -5328,6 +5328,52 @@ public final class RoundTrip {
     return null;
   }
 
+  /** A boolean condition's operands, flattened across nested nodes of its own operator. */
+  public static java.util.List<Exprent> booleanChainOperands(Exprent condition) {
+    java.util.List<Exprent> operands = new java.util.ArrayList<>();
+    if (condition instanceof FunctionExprent function) {
+      collectSameBooleanOperands(condition, function.getFuncType(), operands);
+    }
+    return operands;
+  }
+
+  /** The operands from {@code from} to {@code to}, joined again by {@code &&}. */
+  public static Exprent andOfOperands(java.util.List<Exprent> operands, int from, int to) {
+    Exprent joined = operands.get(to - 1);
+    for (int i = to - 2; i >= from; i--) {
+      java.util.List<Exprent> pair = new java.util.ArrayList<>(2);
+      pair.add(operands.get(i));
+      pair.add(joined);
+      joined = new FunctionExprent(FunctionExprent.FunctionType.BOOLEAN_AND, pair, null);
+    }
+    return joined;
+  }
+
+  /**
+   * The index where a folded loop guard begins among a for condition's flattened operands, or -1.
+   * The guard ends at {@code guard}; the source wrote its earlier tests on the lines the loop
+   * header occupies, so every operand whose own line lies below the header's belongs to the guard.
+   * A header line the table does not record leaves the single trailing operand as the guard.
+   */
+  public static int foldedGuardStart(java.util.List<Exprent> operands, Exprent guard, int headerLine) {
+    if (operands == null || operands.size() < 2 || guard == null
+        || operands.get(operands.size() - 1) != guard) {
+      return -1;
+    }
+    int start = operands.size() - 1;
+    if (headerLine < 0) {
+      return start;
+    }
+    while (start > 1) {
+      int at = firstOffsetOf(operands.get(start - 1));
+      if (at < 0 || lineAtOffset(at) <= headerLine) {
+        break;
+      }
+      start--;
+    }
+    return start;
+  }
+
   /**
    * The last test of a loop condition the source wrote as the body's guard with a break else:
    * {@code for (A; B; i++) { if (C) { body } else break; }}. The fused `B && C` condition's last
