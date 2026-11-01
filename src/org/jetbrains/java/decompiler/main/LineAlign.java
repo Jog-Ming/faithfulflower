@@ -376,35 +376,51 @@ public final class LineAlign {
       }
     }
     java.util.TreeSet<Integer> joins = new java.util.TreeSet<>();
+    Map<Integer, Integer> joinAbove = new java.util.HashMap<>();
+    java.util.TreeSet<Integer> removedLines = new java.util.TreeSet<>();
     for (int line = 2; line <= lines.length; line++) {
-      if (owner.get(line) == null || sharedOwner.contains(line) || sharedOwner.contains(line - 1)
-          || !mergeableWithEvidence(lines, line)) {
+      if (owner.get(line) == null || sharedOwner.contains(line) || !mergeableWithEvidence(lines, line)) {
+        continue;
+      }
+      // A blank line or a label standing alone is not a line of the original: the aligner deletes
+      // it anyway. Looking through it lets a join the two texts prove still happen when the
+      // printer put one between them; the skipped lines move onto the joined line with it.
+      int aboveLine = line - 1;
+      while (aboveLine >= 1 && owner.get(aboveLine) == null && skippablePad(lines[aboveLine - 1])
+          && !insideTextBlock(lines, aboveLine - 1)) {
+        aboveLine--;
+      }
+      if (aboveLine < 1 || owner.get(aboveLine) == null || sharedOwner.contains(aboveLine)) {
         continue;
       }
       Integer here = target.get(line);
-      Integer above = target.get(line - 1);
+      Integer above = target.get(aboveLine);
       // Two lines whose instructions the original's table puts on one and the same source line
       // belong together even when the printer wrote them from two methods: an inline lambda's body
       // starts on the line the enclosing expression continues, and both tables name that line.
       boolean same = here != null && above != null && here.equals(above)
-        && !mixed.contains(line) && !mixed.contains(line - 1);
+        && !mixed.contains(line) && !mixed.contains(aboveLine);
       // A line the table gives no entry of its own is not a line of the original: every
       // instruction printed on it inherits a line of the expression above, so the printer broke
       // an expression the original kept on fewer lines. It belongs to the line above when the
       // two settle on the same line, and to this one when the line above has no entry at all.
       Integer resolved = resolvedTarget(line, targets, exact);
-      Integer aboveResolved = resolvedTarget(line - 1, targets, exact);
+      Integer aboveResolved = resolvedTarget(aboveLine, targets, exact);
       boolean inheritsAbove = !exact.containsKey(line) && resolved != null
         && resolved.equals(aboveResolved);
       // The line above may belong to this one only when both hold instructions the table places
       // on the same source lines: the merge then moves no instruction onto a line it never had.
       // Two operands the table splits across lines keep their break.
-      boolean absorbsAbove = !exact.containsKey(line - 1) && aboveResolved == null
-        && resolved != null && targets.containsKey(line - 1)
-        && targets.get(line - 1).equals(targets.get(line))
+      boolean absorbsAbove = !exact.containsKey(aboveLine) && aboveResolved == null
+        && resolved != null && targets.containsKey(aboveLine)
+        && targets.get(aboveLine).equals(targets.get(line))
         && continuesAbove(lines[line - 1]);
       if (same || inheritsAbove || absorbsAbove) {
         joins.add(line);
+        joinAbove.put(line, aboveLine);
+        for (int removed = line; removed > aboveLine; removed--) {
+          removedLines.add(removed);
+        }
       }
     }
     if (joins.isEmpty()) {
@@ -412,13 +428,20 @@ public final class LineAlign {
     }
     List<String> edited = new ArrayList<>(List.of(lines));
     for (int line : joins.descendingSet()) {
-      edited.set(line - 2, edited.get(line - 2) + " " + edited.get(line - 1).trim());
-      edited.remove(line - 1);
+      int aboveLine = joinAbove.get(line);
+      StringBuilder merged = new StringBuilder(edited.get(aboveLine - 1));
+      for (int joined = aboveLine + 1; joined <= line; joined++) {
+        merged.append(' ').append(edited.get(joined - 1).trim());
+      }
+      edited.set(aboveLine - 1, merged.toString());
+      for (int removed = line; removed > aboveLine; removed--) {
+        edited.remove(removed - 1);
+      }
     }
     for (BytecodeMappingTracer tracer : tracers.values()) {
       for (Map.Entry<Integer, Integer> entry : tracer.getMapping().entrySet()) {
         int line = entry.getValue() + 1;
-        int removed = joins.headSet(line, true).size();
+        int removed = removedLines.headSet(line, true).size();
         entry.setValue(line - removed - 1);
       }
     }
@@ -446,6 +469,26 @@ public final class LineAlign {
   private static boolean continuesAbove(String line) {
     String trimmed = line.trim();
     return !trimmed.isEmpty() && "+-*/%&|^?:)".indexOf(trimmed.charAt(0)) >= 0;
+  }
+
+  /** A line the aligner deletes on its own: blank padding, or a label standing alone. */
+  private static boolean skippablePad(String line) {
+    String trimmed = line.trim();
+    if (trimmed.isEmpty() || trimmed.equals(PADDING)) {
+      return true;
+    }
+    // `label36:` — an identifier and its colon, with no statement after it on the line.
+    int colon = trimmed.indexOf(':');
+    if (colon <= 0 || colon != trimmed.length() - 1) {
+      return false;
+    }
+    for (int i = 0; i < colon; i++) {
+      char c = trimmed.charAt(i);
+      if (i == 0 ? !Character.isJavaIdentifierStart(c) : !Character.isJavaIdentifierPart(c)) {
+        return false;
+      }
+    }
+    return true;
   }
 
   /** A line that may be joined onto the one above: no comment, no blank, not in a text block. */
