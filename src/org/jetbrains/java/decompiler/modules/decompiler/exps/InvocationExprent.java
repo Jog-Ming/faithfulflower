@@ -1677,6 +1677,33 @@ public class InvocationExprent extends Exprent {
     return next >= 0 && RoundTrip.lineAtOffset(next) == endLine + 2;
   }
 
+  /**
+   * Whether the table proves the closing parenthesis shares the last argument's line.
+   *
+   * <p>The next recorded entry after the invoke is the first source line the table names below
+   * the call. When it is the very line after the last argument's, the source spent no line on
+   * the closing parenthesis: it ended the argument's own line, and the next recorded text -- a
+   * chain link or the next statement -- starts the line below. A call whose parenthesis stands
+   * alone names the line after that instead, which {@link #closingParenStartsLine} already
+   * recognizes for a call whose value is consumed; the two comparisons must not overlap.
+   */
+  private boolean closingParenSharesLastArgumentLine(TextBuffer printed) {
+    if (!RoundTrip.selector("paren-share") || bytecode == null || bytecode.isEmpty()) {
+      return false;
+    }
+    int invoke = RoundTrip.lastInstructionStart(bytecode);
+    int callLine = RoundTrip.lineAtOffset(invoke);
+    int endLine = printedEndLine(printed);
+    if (lstParameters != null && !lstParameters.isEmpty()) {
+      endLine = Math.max(endLine, RoundTrip.sourceLineEnd(lstParameters.get(lstParameters.size() - 1)));
+    }
+    if (callLine < 0 || endLine <= callLine) {
+      return false;
+    }
+    int next = RoundTrip.entryOffsetAfter(invoke);
+    return next >= 0 && RoundTrip.lineAtOffset(next) == endLine + 1;
+  }
+
   private void appendInstCast(TextBuffer buf, VarType leftType, TextBuffer res) {
     buf.append("((").appendCastTypeName(leftType).append(")");
 
@@ -2926,6 +2953,8 @@ public class InvocationExprent extends Exprent {
       buf.popNewlineGroup();
       if (closingParenStartsLine(buf)) {
         buf.appendLineSeparator().appendIndent(indent);
+      } else if (closingParenSharesLastArgumentLine(buf)) {
+        buf.appendPossibleNewline("", true);
       } else if (previousLine >= 0 && callLine >= 0 && previousLine > callLine
           && (!RoundTrip.selector("arg-entry")
               || RoundTrip.lineStartsHere(lstParameters.get(lstParameters.size() - 1)))) {
