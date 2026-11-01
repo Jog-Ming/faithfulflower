@@ -252,6 +252,17 @@ public class SwitchStatement extends Statement {
     if (jumpEnd >= 0 && (switchEnd < 0 || jumpEnd < switchEnd)) {
       switchEnd = jumpEnd;
     }
+    // A pattern switch that ends its loop body: every rule's block closes before the compiler's
+    // implicit break, and that break lands on the loop's latch, which the plain jump rule refuses
+    // as an enclosing `continue` target. The rule's own rows separate the two: a block that closed
+    // before the jump ends its locals where the jump starts, and the jump stands on the closing
+    // brace's line.
+    if (switchEnd < 0 && isPattern()) {
+      int arrowEnd = patternArrowJoin(armRows);
+      if (arrowEnd >= 0) {
+        switchEnd = arrowEnd;
+      }
+    }
 
     // A local the arm declares whose target row ends at a jump out of the arm: the source braced
     // the arm, so the block closed before that jump and the row ends where the jump starts
@@ -421,6 +432,15 @@ public class SwitchStatement extends Statement {
           arrowSwitch = false;
           break;
         }
+        if (RoundTrip.synthesizedMatchThrow(arm)) {
+          // The compiler's own rethrow for an unmatched pattern is not a source rule; a switch
+          // expression's rules must cover every input, so its arm still prints and vetoes.
+          if (skipMatch) {
+            continue;
+          }
+          arrowSwitch = false;
+          break;
+        }
         List<StatEdge> armEdges = caseEdges.get(i);
         int jump = armBreakJump(arm, armEdges, switchEnd);
         boolean empty = RoundTrip.firstOffset(arm) < 0;
@@ -432,7 +452,6 @@ public class SwitchStatement extends Statement {
           && RoundTrip.blockEnd(arm) >= 0 && RoundTrip.blockEnd(arm) == defaultTargetOffset()
           && defaultTargetOffset() != switchEnd;
         if (falls || (i < joinedReturns.length && joinedReturns[i] != null)
-            || RoundTrip.synthesizedMatchThrow(arm)
             || (empty && !(defaults && armEdges.size() == 1))
             || (!empty && defaults)) {
           arrowSwitch = false;
@@ -447,6 +466,14 @@ public class SwitchStatement extends Statement {
           if (jump >= 0 && !RoundTrip.lineStartsAt(jump)) {
             arrowSwitch = false;
             break;
+          }
+          // The rule's block closed before the compiler's own break: its declared rows end where
+          // the jump starts, where a written jump inside the braces would have carried them past.
+          java.util.Set<Integer> patternSlots = i < caseValues.size()
+            ? RoundTrip.patternVariableSlots(caseValues.get(i)) : java.util.Set.of();
+          if (jump >= 0 && rowEndsAt(armRows.get(i), jump)
+              && !declaredScopePast(armRows.get(i), jump, patternSlots)) {
+            witness = true;
           }
         } else if (!singleExpressionArm(arm)) {
           // An unbraced rule carries one expression; a returned value or several statements
@@ -1178,6 +1205,44 @@ public class SwitchStatement extends Statement {
       }
     }
     return -1;
+  }
+
+  /**
+   * The join of a pattern switch whose rules end their enclosing loop body, or -1. Every rule's
+   * block closes before the compiler's implicit break, so the block's locals end exactly where
+   * the tail jump starts and the jump is recorded on the closing brace's line; the plain jump
+   * rule refuses a landing an enclosing `continue` also uses, and this is what separates them.
+   */
+  private int patternArrowJoin(List<List<int[]>> armRows) {
+    if (!RoundTrip.selector("patternarrow") || RoundTrip.switchYields(caseStatements)) {
+      return -1;
+    }
+    int join = -1;
+    boolean proven = false;
+    for (int i = 0; i < caseStatements.size(); i++) {
+      Statement arm = caseStatements.get(i);
+      if (arm == null || RoundTrip.synthesizedMatchThrow(arm)) {
+        continue;
+      }
+      int jump = RoundTrip.tailJumpOffset(arm);
+      int target = jump < 0 ? -1 : RoundTrip.jumpTargetAt(jump);
+      int end = RoundTrip.blockEnd(arm);
+      if (target < 0 || end < 0 || target <= end) {
+        return -1;
+      }
+      if (join < 0) {
+        join = target;
+      } else if (join != target) {
+        return -1;
+      }
+      java.util.Set<Integer> patternSlots = i < caseValues.size()
+        ? RoundTrip.patternVariableSlots(caseValues.get(i)) : java.util.Set.of();
+      if (RoundTrip.lineStartsAt(jump) && rowEndsAt(armRows.get(i), jump)
+          && !declaredScopePast(armRows.get(i), jump, patternSlots)) {
+        proven = true;
+      }
+    }
+    return proven ? join : -1;
   }
 
   /**
