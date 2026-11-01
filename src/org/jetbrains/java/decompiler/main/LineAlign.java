@@ -142,7 +142,7 @@ public final class LineAlign {
     // class declaration's line. Without this constraint the declaration never moves, and every
     // class with a default constructor stays shifted by however far the original header was.
     addImplicitConstructorConstraints(tracers, lines, shifts, conflicted, entryLines, root);
-    resolveCandidates(candidates, shifts, conflicted, unmergeable, inherited);
+    resolveCandidates(candidates, shifts, conflicted, unmergeable, inherited, entryLines);
 
     if (System.getenv("NEUROFLOWER_ML_BREAKS") != null) {
       logModelAgreement(tracers);
@@ -1203,7 +1203,17 @@ public final class LineAlign {
    */
   private static void resolveCandidates(Map<Integer, List<int[]>> candidates,
       TreeMap<Integer, Integer> shifts, Set<Integer> conflicted, Set<Integer> unmergeable,
-      Set<Integer> inherited) {
+      Set<Integer> inherited, Set<Integer> entryLines) {
+    if (debug && System.getenv("NEUROFLOWER_LINEALIGN_CAND") != null) {
+      for (Map.Entry<Integer, List<int[]>> e : candidates.entrySet()) {
+        StringBuilder sb = new StringBuilder("cand L" + e.getKey() + " :");
+        for (int[] c : e.getValue()) {
+          sb.append(" {shift=").append(c[0]).append(", exact=").append(c[1]).append(", off=").append(c[2]).append('}');
+        }
+        System.err.println(sb);
+      }
+    }
+    Integer previousExactTarget = null;
     for (Map.Entry<Integer, List<int[]>> line : candidates.entrySet()) {
       Set<Integer> all = new java.util.TreeSet<>();
       Set<Integer> exact = new java.util.TreeSet<>();
@@ -1215,10 +1225,26 @@ public final class LineAlign {
       }
       if (all.size() == 1) {
         if (exact.isEmpty()) {
-          // The line carries no entry of its own: every offset on it inherits an earlier line.
-          inherited.add(line.getKey());
+          // The line carries no entry of its own: every offset on it inherits an earlier line,
+          // which describes the expression the printer broke rather than this text. Text is
+          // printed in source order, so an inherited target behind the last exact line's target
+          // cannot be where this line sits: the record is stale and the line must neither anchor
+          // the walk nor veto a join, or it drags the continuation back and blocks the merge the
+          // text itself proves. A target at or after that line is consistent with the printed
+          // order -- the gap is exactly the padding the table demands -- and stays an anchor.
+          int shift = all.iterator().next();
+          if (previousExactTarget == null || line.getKey() + shift >= previousExactTarget) {
+            add(shifts, conflicted, line.getKey(), shift);
+          }
+          else {
+            inherited.add(line.getKey());
+            entryLines.remove(line.getKey());
+          }
         }
-        add(shifts, conflicted, line.getKey(), all.iterator().next());
+        else {
+          previousExactTarget = line.getKey() + all.iterator().next();
+          add(shifts, conflicted, line.getKey(), all.iterator().next());
+        }
       }
       else if (!exact.isEmpty()) {
         // The line's first token is the statement's start, and the instructions printed before
@@ -1243,6 +1269,7 @@ public final class LineAlign {
             }
           }
         }
+        previousExactTarget = line.getKey() + exact.iterator().next();
         add(shifts, conflicted, line.getKey(), exact.iterator().next());
       }
       else {
