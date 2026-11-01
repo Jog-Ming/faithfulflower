@@ -1320,7 +1320,14 @@ public class ExprProcessor implements CodeConstants {
         jump.append(ifstat.getFirst().toJava(indent));
         RoundTrip.consumeHead(stat);
       }
-      jump.appendIndent(indent).append("break;").appendLineSeparator();
+      jump.appendIndent(indent);
+      // The keyword is the jump the source wrote to reach the block. Without the mapping the
+      // aligner has no line for it and pays the gap in front of the block after the loop.
+      int site = RoundTrip.deferredExitJumpSite(stat);
+      if (site >= 0) {
+        jump.addBytecodeMapping(site);
+      }
+      jump.append("break;").appendLineSeparator();
       return jump;
     }
     TextBuffer buf = stat.toJava(indent);

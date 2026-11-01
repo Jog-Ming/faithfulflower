@@ -485,7 +485,12 @@ public class IfStatement extends Statement {
       IfExprent guard = (IfExprent) ifHead.copy();
       guard.setCondition(source);
       buf.appendIndent(indent).append(guard.toJava(indent)).append(" {").appendLineSeparator();
-      buf.appendIndent(indent + 1).append("break;").appendLineSeparator();
+      buf.appendIndent(indent + 1);
+      int guardJump = RoundTrip.breakGuardJumpSite(ifHead, breakSuccs.get(0));
+      if (guardJump >= 0) {
+        buf.addBytecodeMapping(guardJump);
+      }
+      buf.append("break;").appendLineSeparator();
       buf.appendIndent(indent).append("}").appendLineSeparator();
       buf.append(ExprProcessor.jmpWrapper(ifstat, indent, false));
       RoundTrip.markBreakPrinted(this);
@@ -1010,7 +1015,12 @@ public class IfStatement extends Statement {
     IfExprent guard = (IfExprent) ifHead.copy();
     guard.setCondition(source);
     buf.appendIndent(indent).append(guard.toJava(indent)).append(" {").appendLineSeparator();
-    buf.appendIndent(indent + 1).append("break;").appendLineSeparator();
+    buf.appendIndent(indent + 1);
+    int guardJump = RoundTrip.breakGuardJumpSite(ifHead, successors.get(0));
+    if (guardJump >= 0) {
+      buf.addBytecodeMapping(guardJump);
+    }
+    buf.append("break;").appendLineSeparator();
     buf.appendIndent(indent).append("}").appendLineSeparator();
     return true;
   }

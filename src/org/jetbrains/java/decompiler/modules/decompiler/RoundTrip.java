@@ -11614,6 +11614,57 @@ public final class RoundTrip {
     return -1;
   }
 
+  /**
+   * The goto a printed break guard compiles to, or -1. javac branches past the guard's test and
+   * falls into an unconditional jump that lands on the guard's destination, so that jump starts
+   * exactly where the condition's last instruction ends. A goto anywhere else, or a jump the
+   * target's table does not start a line on, proves nothing.
+   */
+  public static int breakGuardJumpSite(Exprent head, StatEdge edge) {
+    if (head == null || edge == null || !edge.explicit || edge.getType() != StatEdge.TYPE_BREAK
+        || head.bytecode == null || head.bytecode.isEmpty()) {
+      return -1;
+    }
+    StructMethod method = currentMethod();
+    java.util.Map<Integer, Integer> gotos = method == null ? null : GOTO_TARGETS.get(method);
+    int dest = edge.getDestination() == null ? -1 : statementOffset(edge.getDestination());
+    if (gotos == null || dest < 0) {
+      return -1;
+    }
+    int site = head.bytecode.length();
+    Integer target = gotos.get(site);
+    if (target == null || target != dest) {
+      return -1;
+    }
+    return hasLineEntryAt(site) && lineStartsAt(site) ? site : -1;
+  }
+
+  /**
+   * The goto a deferred exit block's printed {@code break;} compiles to: the jump out of the loop
+   * that lands on the block's first instruction. The block was laid out past the loop's back edge,
+   * so any goto reaching it is a break to it; only a single one proves which instruction the
+   * printed keyword stands for. -1 when several jumps reach the block, or when the target's table
+   * does not start a line on the jump.
+   */
+  public static int deferredExitJumpSite(Statement stat) {
+    StructMethod method = currentMethod();
+    java.util.Map<Integer, Integer> gotos = method == null ? null : GOTO_TARGETS.get(method);
+    int dest = stat == null ? -1 : firstOffset(stat);
+    if (gotos == null || dest < 0) {
+      return -1;
+    }
+    int site = -1;
+    for (java.util.Map.Entry<Integer, Integer> entry : gotos.entrySet()) {
+      if (entry.getValue() == dest) {
+        if (site >= 0) {
+          return -1;
+        }
+        site = entry.getKey();
+      }
+    }
+    return site >= 0 && hasLineEntryAt(site) && lineStartsAt(site) ? site : -1;
+  }
+
   /** The offset of the goto that starts where this statement's last instruction ends, or -1. */
   public static int tailJumpOffset(Statement statement) {
     int end = lastInstructionEnd(statement);
