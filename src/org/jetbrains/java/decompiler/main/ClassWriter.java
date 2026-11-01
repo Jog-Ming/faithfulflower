@@ -331,6 +331,13 @@ public class ClassWriter implements StatementWriter {
                   parameterName = clashingName;
                 }
                 parameterName = methodWrapper.methodStruct.getVariableNamer().renameParameter(mt.getAccessFlags(), type, parameterName, index);
+                // A parameter the source wrote as an unnamed variable has no name in the class file:
+                // Java 22's `_` is the only declaration that leaves no local variable entry, and a
+                // named-but-unused parameter keeps one. The synthetic name would be written into
+                // the recompiled class's local table.
+                if (isUnnamedLambdaParameter(cl, mt, index)) {
+                  parameterName = "_";
+                }
                 buffer.appendVariable(parameterName, true, true, node.lambdaInformation.content_class_name, node.lambdaInformation.content_method_name, md_content, index, parameterName);
   
                 firstParameter = false;
@@ -2761,6 +2768,52 @@ public class ClassWriter implements StatementWriter {
     }
     for (int slot = used; slot < maxLocals; slot++) {
       buffer.appendIndent(indent).append(typeName).append(" var").append(slot).append(";").appendLineSeparator();
+    }
+  }
+
+  /**
+   * True when a lambda's parameter slot is an unnamed variable. Java 22's {@code _} declares no
+   * name at all, so the class file is the only evidence: the class is version 66 or later, the
+   * parameter has no local variable entry covering the method's first bytecode offset, and no
+   * instruction reads or writes the slot. A parameter the source named but never used keeps its
+   * entry, and a parameter the body reads keeps its name; only {@code _} leaves the slot unnamed.
+   * The covered-at-zero test is what separates the two: a later variable reusing the slot starts
+   * after offset 0 and does not name the parameter.
+   */
+  private static boolean isUnnamedLambdaParameter(StructClass cl, StructMethod mt, int slot) {
+    if (cl.getVersion().major < 66) {
+      return false;
+    }
+    StructLocalVariableTableAttribute lvt = mt.getLocalVariableAttr();
+    if (lvt != null && lvt.getName(slot, 0) != null) {
+      return false;
+    }
+    // Printing happens after the method's code was released; a sequence expanded here must be
+    // released again, or the print-time rules that test whether it is present change their path.
+    FullInstructionSequence seq = mt.getInstructionSequence();
+    boolean expanded = seq == null;
+    try {
+      if (seq == null) {
+        mt.expandData(cl);
+        seq = mt.getInstructionSequence();
+      }
+      if (seq == null) {
+        return false;
+      }
+      for (int i = 0; i < seq.length(); i++) {
+        if (variableSlot(seq.getInstr(i)) == slot) {
+          return false;
+        }
+      }
+      return true;
+    }
+    catch (IOException e) {
+      return false;
+    }
+    finally {
+      if (expanded) {
+        mt.releaseResources();
+      }
     }
   }
 
