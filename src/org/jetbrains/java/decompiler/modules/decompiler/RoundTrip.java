@@ -3425,7 +3425,67 @@ public final class RoundTrip {
     if (end < 0) {
       end = sourceLineEnd(before);
     }
-    return (end >= 0 && start > end) || startsAfterPatternTest(before, after, start);
+    // The operand's own first instruction may inherit a line the left operand already reached:
+    // the target recorded no line change at the operand's boundary, so its text continued the
+    // left operand's line, and the chain's own invokes carry the breaks. Only a chain that does
+    // break inside it says this; a call chain on one line still begins a line of its own.
+    int chainStart = operandChainStartLine(after);
+    boolean continuesLeft = chainStart >= 0 && end >= 0 && chainStart <= end
+      && chainBreaksInside(after);
+    boolean result = (end >= 0 && start > end && !continuesLeft)
+      || startsAfterPatternTest(before, after, start);
+    return result;
+  }
+
+  /**
+   * The line the operand's receiver chain begins on: its leftmost load inherits the line the
+   * chain's text was written on, while the invoke at the chain's end carries its own. -1 when
+   * the chain starts at a class name or no part of it records an instruction.
+   */
+  private static int operandChainStartLine(Exprent exprent) {
+    Exprent current = exprent;
+    for (int step = 0; step < 32 && current != null; step++) {
+      if (current instanceof InvocationExprent call) {
+        current = call.getInstance();
+      } else if (current instanceof FieldExprent field) {
+        current = field.getInstance();
+      } else if (current instanceof FunctionExprent function && !function.getLstOperands().isEmpty()) {
+        current = function.getLstOperands().get(0);
+      } else {
+        break;
+      }
+    }
+    if (current == null || current.bytecode == null || current.bytecode.isEmpty()) {
+      return -1;
+    }
+    return lineAtOffset(current.bytecode.nextSetBit(0));
+  }
+
+  /**
+   * Whether the operand's text occupies several source lines of its own: at least two line-table
+   * entries start inside it past the line its first load inherited. Only then does the chain
+   * break internally and the operand-level break become redundant.
+   */
+  private static boolean chainBreaksInside(Exprent exprent) {
+    int startLine = operandChainStartLine(exprent);
+    if (startLine < 0) {
+      return false;
+    }
+    java.util.Set<Integer> lines = new java.util.TreeSet<>();
+    for (Exprent part : exprent.getAllExprents(true, true)) {
+      if (part.bytecode == null) {
+        continue;
+      }
+      for (int offset = part.bytecode.nextSetBit(0); offset >= 0; offset = part.bytecode.nextSetBit(offset + 1)) {
+        if (lineStartsAt(offset)) {
+          int line = lineAtOffset(offset);
+          if (line > startLine) {
+            lines.add(line);
+          }
+        }
+      }
+    }
+    return lines.size() >= 2;
   }
 
   /**
