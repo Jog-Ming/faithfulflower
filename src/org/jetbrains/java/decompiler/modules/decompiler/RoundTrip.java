@@ -137,6 +137,8 @@ public final class RoundTrip {
   private static final java.util.Map<Statement, Exprent> LOOP_GUARDS = new java.util.concurrent.ConcurrentHashMap<>();
   /** First offsets of empty catch bodies, by offset, with the protected range's start. */
   private static final java.util.Map<StructMethod, java.util.Map<Integer, Integer>> EMPTY_CATCHES = new java.util.concurrent.ConcurrentHashMap<>();
+  /** Exception-handler body offset to the store that opens it, from the exception table. */
+  private static final java.util.Map<StructMethod, java.util.Map<Integer, Integer>> HANDLER_STORES = new java.util.concurrent.ConcurrentHashMap<>();
 
   private RoundTrip() {}
 
@@ -460,6 +462,23 @@ public final class RoundTrip {
       }
     }
     EMPTY_CATCHES.put(method, emptyCatches);
+    // The handler store carries the catch clause's own line. The decompiler may move or drop the
+    // store while building the IR, so record where each handler begins from the exception table:
+    // an empty or relocated block no longer names its own first instruction.
+    java.util.Map<Integer, Integer> handlerStores = new java.util.HashMap<>();
+    if (table != null) {
+      for (org.jetbrains.java.decompiler.code.ExceptionHandler handler : table.getHandlers()) {
+        int handlerIndex = handler.handler();
+        if (handlerIndex < 0 || handlerIndex >= seq.length()) {
+          continue;
+        }
+        Instruction store = seq.getInstr(handlerIndex);
+        if (store.opcode == CodeConstants.opc_astore) {
+          handlerStores.put(store.startOffset + store.length, store.startOffset);
+        }
+      }
+    }
+    HANDLER_STORES.put(method, handlerStores);
     // A try body that ends `store S; goto M` with `M: load S; ret` keeps the value in a variable the
     // source declared outside the block: the target's table has two ranges for the slot, one ending
     // where the handler starts and one covering the load and the return. A single range is the
@@ -12145,6 +12164,21 @@ public final class RoundTrip {
     }
     out.sort(java.util.Comparator.comparingInt(a -> a[0]));
     return out;
+  }
+
+  /**
+   * The exception store that opens the handler whose body starts at this offset, or -1. The store
+   * is that of the catch clause, so its line-table entry is the clause's own line: the aligner
+   * needs it even when the IR moved or dropped the instruction and the block no longer names it.
+   */
+  public static int handlerStoreBefore(int bodyStart) {
+    StructMethod method = currentMethod();
+    java.util.Map<Integer, Integer> stores = method == null ? null : HANDLER_STORES.get(method);
+    if (stores == null || bodyStart < 0) {
+      return -1;
+    }
+    Integer store = stores.get(bodyStart);
+    return store == null ? -1 : store;
   }
 
   /**

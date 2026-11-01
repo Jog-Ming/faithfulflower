@@ -244,6 +244,18 @@ public class CatchStatement extends Statement {
       if (!block.getSeq().isEmpty() && block.getInstruction(0).opcode == CodeConstants.opc_astore) {
         handlerOffset = block.getOldOffset(0);
       }
+      else {
+        // The IR may have moved or dropped the handler's store, leaving the block starting at the
+        // instruction after it. The exception table still names the store, and its line-table
+        // entry is the catch clause's line: map it, or the clause has no line of its own.
+        int body = block.getOldOffset(0);
+        if (body >= 0) {
+          int store = RoundTrip.handlerStoreBefore(body);
+          if (store >= 0) {
+            handlerOffset = store;
+          }
+        }
+      }
 
       // javac gives a try-with-resources' synthetic close the closing brace's line, so the
       // target's table says whether the original put the brace on a line without the catch.
