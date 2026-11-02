@@ -3699,7 +3699,7 @@ public final class RoundTrip {
   }
 
   /** The smallest instruction offset any part of the expression owns, or -1. */
-  private static int firstOffsetOf(Exprent exprent) {
+  public static int firstOffsetOf(Exprent exprent) {
     int first = -1;
     for (Exprent part : exprent.getAllExprents(true, true)) {
       if (part.bytecode == null || part.bytecode.isEmpty()) {
@@ -11936,6 +11936,32 @@ public final class RoundTrip {
     StructMethod method = currentMethod();
     BitSet entries = method == null ? null : MATCH_CATCH_ENTRIES.get(method);
     return entries != null && offset >= 0 && entries.get(offset);
+  }
+
+  /**
+   * The source line javac records for the synthetic record-pattern {@code MatchException}
+   * handler, or -1 when the method has none or its handlers stand on different lines. The
+   * handler is emitted after the body's scopes close, so its entry carries the line of the last
+   * pattern test compiled: an if chain that continues past that test was one statement.
+   */
+  public static int matchCatchEntryLine() {
+    StructMethod method = currentMethod();
+    BitSet entries = method == null ? null : MATCH_CATCH_ENTRIES.get(method);
+    if (entries == null) {
+      return -1;
+    }
+    int line = -1;
+    for (int at = entries.nextSetBit(0); at >= 0; at = entries.nextSetBit(at + 1)) {
+      int found = lineAtOffset(at);
+      if (found < 0) {
+        continue;
+      }
+      if (line >= 0 && line != found) {
+        return -1;
+      }
+      line = found;
+    }
+    return line;
   }
 
   /**

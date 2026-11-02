@@ -1186,6 +1186,24 @@ public class IfStatement extends Statement {
         !arm.isLabeled() &&
         (arm.getSuccessorEdges(STATEDGE_DIRECT_ALL).isEmpty()
          || !arm.getSuccessorEdges(STATEDGE_DIRECT_ALL).get(0).explicit)) { // else if
+      if (first != null && startsPatternChainAfterMatchCatch((IfStatement) arm)) {
+        // The target's synthetic MatchException handler is emitted after the body's scopes
+        // close, so its entry line is the line of the last pattern test compiled. An arm whose
+        // test stands on that line began a statement of its own: the source closed the chain
+        // before it, and printing it as `else if` would give the handler the chain's first line.
+        char armLast = buf.lastTokenChar();
+        int exit = armExitSite(buf, first, arm);
+        if (armLast == '}') {
+          mapArmExit(buf, exit, first, armLast);
+        }
+        buf.appendIndent(indent).append("}");
+        if (armLast != '}') {
+          mapArmExit(buf, exit, first, armLast);
+        }
+        buf.appendLineSeparator();
+        buf.append(ExprProcessor.jmpWrapper(arm, indent, false));
+        return true;
+      }
       appendElseKeyword(buf, indent, first, arm);
 
       TextBuffer content = printElseIfArmContent(arm, indent);
@@ -1720,6 +1738,26 @@ public class IfStatement extends Statement {
       }
     }
     return false;
+  }
+
+  /**
+   * True when this arm's pattern test begins a statement of its own in the target: its first
+   * instruction stands on the line javac gave the synthetic record-pattern MatchException
+   * handler. The handler is written after the body's scopes close, so its line is the last
+   * pattern test compiled; an `else if` would have kept the chain's first line there instead.
+   */
+  private static boolean startsPatternChainAfterMatchCatch(IfStatement arm) {
+    if (arm.headexprent.isEmpty() || !(arm.headexprent.get(0) instanceof IfExprent head)
+        || head.getCondition() == null || !declaresPattern(head.getCondition())) {
+      return false;
+    }
+    int entryLine = RoundTrip.matchCatchEntryLine();
+    if (entryLine < 0) {
+      return false;
+    }
+    // The head block holds no exprent of its own: the test lives in the head's condition.
+    int first = RoundTrip.firstOffsetOf(head.getCondition());
+    return first >= 0 && RoundTrip.lineAtOffset(first) == entryLine;
   }
 
   /**
