@@ -226,6 +226,30 @@ public class NewExprent extends Exprent {
                     }
                   }
                 }
+                // A no-bound instance reference (`Type::method`) has no receiver expression: the
+                // SAM's first parameter is the receiver. Projecting that recorded parameter onto
+                // the referenced class solves the class's own variables, so the method's return
+                // type is instantiated instead of leaking the class's T into the call's scope.
+                // Only a projection onto the referenced class with a complete binding is used.
+                if (!node.lambdaInformation.is_content_method_static && first != null && methodCls.getSignature() != null) {
+                  VarType receiver = stripReferenceWildcard(first.remap(genericsMap));
+                  GenericType methodType = methodCls.getSignature().genericType;
+                  if (receiver != null && receiver.type == CodeType.OBJECT && receiver.value != null
+                    && methodType != null && methodType.value != null) {
+                    VarType view = receiver.value.equals(methodType.value)
+                      ? receiver : GenericType.getGenericSuperType(receiver, methodType);
+                    if (view instanceof GenericType viewType && viewType.value != null
+                      && viewType.value.equals(methodType.value)) {
+                      Map<VarType, VarType> binding = new HashMap<>();
+                      methodType.mapGenVarsTo(viewType, binding);
+                      binding.forEach((from, to) -> {
+                        if (to != null && !GenericType.DUMMY_VAR.equals(to)) {
+                          instanceMap.put(from, to);
+                        }
+                      });
+                    }
+                  }
+                }
               }
             }
 
@@ -1268,7 +1292,11 @@ public class NewExprent extends Exprent {
           VarType curType = md_content.ret;
           VarType infType = desc.getSignature().returnType.remap(tempMap);
 
-          if (infType != null && !infType.equals(VarType.VARTYPE_VOID)) {
+          // A method reference's content method is the referenced source method itself, not a
+          // synthetic lambda body: its return type is what its own signature declares. Rewriting
+          // it with the caller's type variable would print that variable inside a scope that
+          // cannot name it.
+          if (!isMethodReference() && infType != null && !infType.equals(VarType.VARTYPE_VOID)) {
             if (!curType.equals(infType) || (infType.isGeneric() && !((GenericType)infType).equalsExact(curType))) {
               GenericMethodDescriptor genDesc = new GenericMethodDescriptor(Collections.emptyList(), Collections.emptyList(), Collections.emptyList(), infType, Collections.emptyList());
               DummyExitStatement dummyExit = methodWrapper.root.getDummyExit();
@@ -1645,6 +1673,18 @@ public class NewExprent extends Exprent {
       types.add(!inferenceVariable && resolved != null && nameableLambdaParameterType(resolved) ? resolved : null);
     }
     return types;
+  }
+
+  /**
+   * The receiver a no-bound instance reference's first SAM parameter stands for: the parameter
+   * type is often the wildcard form the functional interface declares ({@code ? super X}), and
+   * the value the reference accepts there is the bound itself.
+   */
+  private static VarType stripReferenceWildcard(VarType type) {
+    if (type instanceof GenericType generic && generic.getWildcard() != GenericType.WILDCARD_NO) {
+      return GenericType.withWildcard(generic, GenericType.WILDCARD_NO);
+    }
+    return type;
   }
 
   /**

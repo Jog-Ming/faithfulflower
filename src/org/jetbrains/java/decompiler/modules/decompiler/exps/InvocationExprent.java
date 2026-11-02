@@ -1236,6 +1236,28 @@ public class InvocationExprent extends Exprent {
     return ret;
   }
 
+  /**
+   * Whether every type variable inside {@code type} is one of the given names. The called
+   * method's own type parameters match: they are declared in the callee's signature and are
+   * never nameable at the call site, where a variable of the same letter is a different one.
+   */
+  private static boolean namesOnlyCalleeTypeParameters(VarType type, List<String> names) {
+    if (type == null) {
+      return false;
+    }
+    if (type.type == CodeType.GENVAR) {
+      return type.value != null && names.contains(type.value);
+    }
+    if (type instanceof GenericType generic) {
+      for (VarType argument : generic.getArguments()) {
+        if (argument != null && !namesOnlyCalleeTypeParameters(argument, names)) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+
   /** Whether one of the named type variables occurs anywhere in the type. */
   private static boolean mentionsTypeVariable(VarType type, List<String> names) {
     if (type == null) {
@@ -2869,7 +2891,16 @@ public class InvocationExprent extends Exprent {
           if (!unbound.isEmpty()) {
             unboundArguments.put(x, unbound);
           }
-          if (type != null && !(type.isGeneric() && ((GenericType)type).hasUnknownGenericType(namedGens))) {
+          // A lambda argument is typed from its functional target, and the call's recorded
+          // parameter type is that target. A target that still names only the called method's
+          // own type parameters has no spelling at the call site: those variables belong to the
+          // callee's signature, and a caller variable of the same letter is a different one.
+          // The lambda's own printer types a parameter only where the type is nameable, so
+          // keeping such a target cannot print an erased or captured form.
+          boolean lambdaTarget = type != null && lstParameters.get(x) instanceof NewExprent argument
+            && argument.isLambda() && namesOnlyCalleeTypeParameters(type, desc.getSignature().typeParameters);
+          if (type != null && (lambdaTarget
+              || !(type.isGeneric() && ((GenericType)type).hasUnknownGenericType(namedGens)))) {
             types[x] = type;
           }
         }
