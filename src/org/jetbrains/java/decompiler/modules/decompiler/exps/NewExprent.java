@@ -899,6 +899,10 @@ public class NewExprent extends Exprent {
     }
     else {
       buf.append("new ");
+      // The creation's own instruction sits where `new` is printed, exactly as for an object
+      // allocation; without this mapping the aligner cannot see the line the array creation is
+      // on and the size's iconst is left to the statement's other anchors.
+      buf.addBytecodeMapping(bytecode);
       appendNewExpressionTypeAnnotations(buf);
       buf.appendTypeName(newType);
 
