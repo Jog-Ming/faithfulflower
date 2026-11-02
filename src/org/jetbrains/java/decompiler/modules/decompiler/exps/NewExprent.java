@@ -1665,21 +1665,16 @@ public class NewExprent extends Exprent {
     return true;
   }
 
-  /** Whether a type variable of this name is in scope at the print site. */
+  /**
+   * Whether a type variable of this name is in scope at the print site. The full scope rules
+   * hold here too: a lambda's synthetic method is static, but its source text sits in the
+   * enclosing method, whose type parameters are exactly the ones the body can name.
+   */
   private static boolean nameableTypeVariable(String name) {
     if (name == null || name.isEmpty()) {
       return false;
     }
-    MethodWrapper method = DecompilerContext.getContextProperty(DecompilerContext.CURRENT_METHOD_WRAPPER);
-    if (method == null) {
-      return false;
-    }
-    GenericMethodDescriptor methodSignature = method.methodStruct.getSignature();
-    if (methodSignature != null && methodSignature.typeParameters.contains(name)) {
-      return true;
-    }
-    GenericClassDescriptor classSignature = method.classStruct.getSignature();
-    return classSignature != null && classSignature.fparameters.contains(name);
+    return isInScopeTypeVariable(GenericType.parse("T" + name + ";"), contextNamedGenerics());
   }
 
   /**

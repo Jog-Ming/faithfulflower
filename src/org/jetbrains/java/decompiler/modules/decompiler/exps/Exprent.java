@@ -365,6 +365,15 @@ public abstract class Exprent implements IMatchable {
   }
 
   public Map<VarType, List<VarType>> getNamedGenerics() {
+    return contextNamedGenerics();
+  }
+
+  /**
+   * The type variables a value printed at this point can name, with their declared bounds. Only
+   * the context properties are read, so a caller without an exprent of its own — a lambda
+   * parameter's type witness — asks the same question.
+   */
+  public static Map<VarType, List<VarType>> contextNamedGenerics() {
     Map<VarType, List<VarType>> ret = new HashMap<>();
     ClassNode class_ = (ClassNode)DecompilerContext.getContextProperty(DecompilerContext.CURRENT_CLASS_NODE);
     MethodWrapper method = (MethodWrapper)DecompilerContext.getContextProperty(DecompilerContext.CURRENT_METHOD_WRAPPER);
