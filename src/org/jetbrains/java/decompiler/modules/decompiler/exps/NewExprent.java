@@ -116,6 +116,16 @@ public class NewExprent extends Exprent {
       StructClass node = DecompilerContext.getStructContext().getClass(newType.value);
 
       if (node != null && node.getSignature() != null) {
+        if (newType.arrayDim > 0) {
+          // The array's component class is generic and the class file records it erased, but
+          // every element's own recorded instantiation agrees: a varargs array of
+          // `Pair.of(...)` calls is exactly `Pair<Item, ResourceKey<Pattern>>[]`, and the call
+          // and the lambda that receives it are typed from it.
+          VarType inferred = genericArrayComponent();
+          if (inferred != null) {
+            return inferred.resizeArrayDim(newType.arrayDim);
+          }
+        }
         if (anonymous) {
           if (VarType.VARTYPE_OBJECT.equals(node.getSignature().superclass) && !node.getSignature().superinterfaces.isEmpty()) {
             return node.getSignature().superinterfaces.get(0);
@@ -1631,6 +1641,54 @@ public class NewExprent extends Exprent {
       types.add(!inferenceVariable && resolved != null && nameableLambdaParameterType(resolved) ? resolved : null);
     }
     return types;
+  }
+
+  /**
+   * The component type of an array whose elements all record the same parameterized instance of
+   * the component class, or null when they do not agree or the instantiation cannot be named.
+   */
+  private VarType genericArrayComponent() {
+    if (lstArrayElements.isEmpty()) {
+      return null;
+    }
+    VarType first = lstArrayElements.get(0).getInferredExprType(null);
+    if (first == null || first.type != CodeType.OBJECT || first.arrayDim != 0 || !first.isGeneric()
+      || first.value == null || !first.value.equals(newType.value) || !nameableArrayElement(first)) {
+      return null;
+    }
+    for (int i = 1; i < lstArrayElements.size(); ++i) {
+      if (!FunctionExprent.sameType(lstArrayElements.get(i).getInferredExprType(null), first)) {
+        return null;
+      }
+    }
+    return first;
+  }
+
+  /** A recorded type a source could name: no wildcard, raw argument or out-of-scope variable. */
+  private boolean nameableArrayElement(VarType type) {
+    if (type == null) {
+      return false;
+    }
+    if (type.type == CodeType.GENVAR) {
+      return Exprent.isTypeVariableNameable(type.resizeArrayDim(0), getNamedGenerics());
+    }
+    if (type instanceof GenericType generic) {
+      if (generic.getWildcard() != GenericType.WILDCARD_NO) {
+        return false;
+      }
+      if (generic.getArguments().isEmpty() && generic.value != null) {
+        StructClass cls = DecompilerContext.getStructContext().getClass(generic.value);
+        if (cls != null && cls.getSignature() != null && !cls.getSignature().fparameters.isEmpty()) {
+          return false;
+        }
+      }
+      for (VarType argument : generic.getArguments()) {
+        if (argument == null || !nameableArrayElement(argument)) {
+          return false;
+        }
+      }
+    }
+    return true;
   }
 
   private static boolean nameableLambdaParameterType(VarType type) {
