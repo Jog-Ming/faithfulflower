@@ -297,6 +297,10 @@ public class FunctionExprent extends Exprent {
         }
       }
 
+      // JLS 10.7: an array's clone() has the receiver's array type, and javac's checkcast names
+      // that type's erasure. The cast is the compiler's adaptation, not a source cast.
+      boolean cloneCast = cast.size() == 1 && arrayCloneCast(cast.get(0), lstOperands.get(0), this.getNamedGenerics());
+
       if (upperBound != null && (upperBound.isGeneric() || right.isGeneric())) {
         Map<VarType, List<VarType>> names = this.getNamedGenerics();
         int arrayDim = 0;
@@ -328,8 +332,9 @@ public class FunctionExprent extends Exprent {
 
           // The recorded checkcast names exactly the value's own source type: no conversion
           // happens, and javac emits no instruction for a redundant source cast, so this one is
-          // the erasure boundary's and must not be restored by the bytecode-range force.
-          if (this.recordedCheckcast && cast.size() == 1 && sameType(cast.get(0), right)) {
+          // the erasure boundary's and must not be restored by the bytecode-range force. An
+          // array clone's cast is the same adaptation whatever the source wrote.
+          if (cloneCast || (this.recordedCheckcast && cast.size() == 1 && sameType(cast.get(0), right))) {
             this.compilerCast = true;
           }
 
@@ -370,7 +375,7 @@ public class FunctionExprent extends Exprent {
       // JLS 10.7: an array's clone() has the array's own type, whatever the descriptor erases it
       // to. The recorded checkcast is javac's adaptation of that special typing, and the source
       // wrote no cast: printing one would be a redundant cast over a value javac already types.
-      if (cast.size() == 1 && arrayCloneCast(cast.get(0), lstOperands.get(0))) {
+      if (cloneCast) {
         this.needsCast = false;
         this.compilerCast = true;
       }
@@ -461,10 +466,10 @@ public class FunctionExprent extends Exprent {
 
   /**
    * A recorded checkcast around an array's {@code clone()}: JLS 10.7 gives the invocation the
-   * receiver's array type, so the cast is javac's erasure adaptation. The receiver's recorded
-   * type must be the array the cast names — any other array conversion is the source's.
+   * receiver's array type, and the checkcast javac writes names that type's erasure. Any other
+   * array conversion is the source's.
    */
-  private static boolean arrayCloneCast(VarType target, Exprent operand) {
+  private static boolean arrayCloneCast(VarType target, Exprent operand, Map<VarType, List<VarType>> named) {
     if (target == null || target.arrayDim == 0 || !(operand instanceof InvocationExprent call)
       || call.getInstance() == null || call.isStatic() || !"clone".equals(call.getName())
       || call.getDescriptor() == null || call.getDescriptor().params.length != 0
@@ -472,7 +477,21 @@ public class FunctionExprent extends Exprent {
       return false;
     }
     VarType receiver = call.getInstance().getExprType();
-    return receiver != null && receiver.arrayDim == target.arrayDim && sameType(receiver, target);
+    if (receiver == null || receiver.arrayDim == 0) {
+      return false;
+    }
+    VarType erased;
+    if (receiver.type == CodeType.GENVAR) {
+      List<VarType> bounds = named.get(receiver.resizeArrayDim(0));
+      VarType bound = bounds == null || bounds.isEmpty() || bounds.get(0) == null
+        ? VarType.VARTYPE_OBJECT : bounds.get(0);
+      erased = bound.resizeArrayDim(bound.arrayDim + receiver.arrayDim);
+    } else if (receiver instanceof GenericType generic) {
+      erased = new VarType(generic.type, generic.arrayDim, generic.value);
+    } else {
+      erased = receiver;
+    }
+    return sameType(erased, target);
   }
 
   /** Exact type equality, including generic arguments and wildcards. */

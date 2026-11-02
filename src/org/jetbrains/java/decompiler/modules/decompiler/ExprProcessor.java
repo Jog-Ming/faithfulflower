@@ -1688,13 +1688,17 @@ public class ExprProcessor implements CodeConstants {
 
     // A cast around a context-independent value whose recorded type is exactly the context
     // target converts nothing: javac sees the operand at the target type and reports the cast
-    // redundant. Poly expressions are excluded — the target is what types them, so the cast can
-    // be the source's inference hint — as is an overload-choice cast. Constants are excluded
-    // too: their inferred type is the context's, and a narrowing constant cast is what makes a
-    // byte/short argument or constructor compile.
-    boolean exactRecordedType = !castAlways && !InvocationExprent.inArgument() && rightType != null
-      && (exprent instanceof VarExprent || exprent instanceof FieldExprent)
-      && sameType(rightType, leftType);
+    // redundant. A local's own table row is the type its declaration gives it, so that equality
+    // holds in an argument list too; a field's inferred type can echo an inference variable the
+    // printer solved from the value itself, so its equality counts only elsewhere. Poly
+    // expressions are excluded — the target is what types them — and so is an overload-choice
+    // cast. Constants are excluded too: their inferred type is the context's, and a narrowing
+    // constant cast is what makes a byte/short argument or constructor compile.
+    boolean exactRecordedType = !castAlways && rightType != null
+      && ((exprent instanceof VarExprent recordedVar && sameType(recordedVarType(recordedVar), leftType))
+          || (!InvocationExprent.inArgument()
+              && (exprent instanceof VarExprent || exprent instanceof FieldExprent)
+              && sameType(rightType, leftType)));
 
     boolean doCast = (!leftType.higherEqualInLatticeThan(rightType) && (rightType.equals(VarType.VARTYPE_OBJECT) || leftType.type != CodeType.OBJECT));
     // A switch expression is poly: with a type variable as the target, javac infers the switch's

@@ -414,7 +414,8 @@ public class InvocationExprent extends Exprent {
     // Object, and the source's use of the value is typed by the receiver, not by the erasure.
     if (instance != null && !isStatic && "clone".equals(name) && lstParameters.isEmpty()
       && descriptor.params.length == 0 && descriptor.ret.arrayDim == 0) {
-      VarType receiver = instance.getExprType();
+      VarType receiver = instance instanceof VarExprent || instance instanceof FieldExprent
+        ? instance.getInferredExprType(null) : instance.getExprType();
       if (receiver != null && receiver.arrayDim > 0) {
         return receiver;
       }
