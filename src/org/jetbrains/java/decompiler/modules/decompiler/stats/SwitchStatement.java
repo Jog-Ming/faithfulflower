@@ -1040,6 +1040,15 @@ public class SwitchStatement extends Statement {
           // where a fall-through would go.
           loopJoin = true;
           loopJoinJump = RoundTrip.tailJumpOffset(stat);
+          if (loopJoinJump < 0 && RoundTrip.firstOffset(stat) < 0) {
+            // The arm holds no instruction, so the block the tree kept has no tail jump to read:
+            // the table's target for its label is the goto the printed `break;` compiles to, and
+            // without its mapping the aligner cannot see the line the table puts the break on.
+            int entry = entryOffset(i);
+            if (entry >= 0 && RoundTrip.jumpTargetAt(entry) >= 0) {
+              loopJoinJump = entry;
+            }
+          }
         }
       }
       if (loopJoin) {
