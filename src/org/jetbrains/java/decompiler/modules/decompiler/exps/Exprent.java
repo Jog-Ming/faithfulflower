@@ -432,11 +432,15 @@ public abstract class Exprent implements IMatchable {
     if (method == null) {
       return true;
     }
+    // The method whose text encloses this point declares the variable: it is in scope and
+    // shadows any class variable of the same name.
+    if (method.getSignature() != null && method.getSignature().typeParameters.contains(type.value)) {
+      return true;
+    }
     if (method.hasModifier(CodeConstants.ACC_STATIC)) {
       // In a static context only the method's own type parameters can be named; the class's and
-      // its enclosers' are out of reach. A method parameter shadows a class parameter of the same
-      // name, and then that name is the one in scope.
-      return method.getSignature() != null && method.getSignature().typeParameters.contains(type.value);
+      // its enclosers' are out of reach.
+      return false;
     }
     // A type variable of an enclosing class is nameable only where the class has the enclosing
     // instance it belongs to. The class file records that as the first parameter of the inner
@@ -445,6 +449,12 @@ public abstract class Exprent implements IMatchable {
     // static field's anonymous class has a no-argument constructor). A lambda is compiled into
     // its host class and kept as it was.
     if (current == null || current.type == ClassNode.Type.LAMBDA) {
+      return true;
+    }
+    // A local or anonymous class is written inside the body of the method that creates it, so
+    // that method's type parameters are in scope there (and shadow a class variable of the same
+    // name, whatever the class's enclosing-instance capture says).
+    if (declaredByEnclosingMethod(current, type.value)) {
       return true;
     }
     ClassNode declaring = declaringClass(current, type.value);
@@ -457,6 +467,21 @@ public abstract class Exprent implements IMatchable {
       }
     }
     return true;
+  }
+
+  /** Whether a method enclosing this class node in the source declares the variable. */
+  private static boolean declaredByEnclosingMethod(ClassNode start, String name) {
+    for (ClassNode node = start; node != null && node.parent != null; node = node.parent) {
+      if (node.enclosingMethod == null || node.parent.getWrapper() == null) {
+        continue;
+      }
+      MethodWrapper host = node.parent.getWrapper().getMethods().getWithKey(node.enclosingMethod);
+      if (host != null && host.methodStruct != null && host.methodStruct.getSignature() != null
+        && host.methodStruct.getSignature().typeParameters.contains(name)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private static ClassNode declaringClass(ClassNode start, String name) {
