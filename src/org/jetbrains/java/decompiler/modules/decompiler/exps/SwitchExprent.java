@@ -2,6 +2,7 @@ package org.jetbrains.java.decompiler.modules.decompiler.exps;
 
 import org.jetbrains.java.decompiler.code.CodeConstants;
 import org.jetbrains.java.decompiler.main.DecompilerContext;
+import org.jetbrains.java.decompiler.modules.decompiler.ExprProcessor;
 import org.jetbrains.java.decompiler.modules.decompiler.RoundTrip;
 import org.jetbrains.java.decompiler.modules.decompiler.StatEdge;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.FunctionExprent.FunctionType;
@@ -309,17 +310,33 @@ public class SwitchExprent extends Exprent {
    * field or constant is typed by the class file; when it is neither the target nor a subtype
    * of it, javac rejects a bare switch, so the outer cast is the source's and must stay. Block
    * arms and poly values are left to their own printing.
+   *
+   * <p>A switch with a {@code case null} label was always printed through an outer cast, since
+   * the null does not by itself decide the merge's type. The target still types every arm, so
+   * the cast is unnecessary when each simple arm provably fits it; that is what a bare print
+   * needs, and a stricter judgement is used there: a conditional of values the class file types
+   * without context counts as one value, a call is inferred against the target, and a concrete
+   * class never converts to a type variable.
    */
   public boolean simpleArmsFitTarget(VarType target) {
     if (target == null) {
       return false;
     }
+    boolean nullCase = hasNullCase();
     for (Statement stat : backing.getCaseStatements()) {
       List<Exprent> exprents = stat.getExprents();
       if (exprents == null || exprents.size() != 1 || !(exprents.get(0) instanceof YieldExprent yield)) {
         continue;
       }
       Exprent content = yield.getContent();
+      if (nullCase) {
+        // An arm cast to the switch's own erasure is javac's coercion for a bare switch; the
+        // printer strips it, so the arm is judged by the value it prints.
+        if (!armFitsTarget(bareArmValue(content, target), target)) {
+          return false;
+        }
+        continue;
+      }
       if (!(content instanceof VarExprent || content instanceof FieldExprent || content instanceof ConstExprent)) {
         continue;
       }
@@ -341,6 +358,101 @@ public class SwitchExprent extends Exprent {
         || target.value == null || type.arrayDim != target.arrayDim
         || !DecompilerContext.getStructContext().instanceOf(type.value, target.value)) {
         return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Whether one simple arm of a switch with a {@code case null} label converts to the target
+   * without a written cast. A lambda or method reference has no type of its own and is typed by
+   * the target. A value already of the target type, and the null constant, fit. Against a type
+   * variable only a call whose recorded arguments bind the variable to exactly that variable
+   * fits: a concrete class never converts to a type variable. Against a class, a call is poly
+   * and is inferred against the target, and a conditional of values the class file types
+   * without context is judged by its own type.
+   */
+  private static boolean armFitsTarget(Exprent content, VarType target) {
+    if (content instanceof NewExprent creation && creation.isLambda()) {
+      return true;
+    }
+    VarType type = content.getExprType();
+    if (FunctionExprent.sameType(type, target)) {
+      return true;
+    }
+    if (type != null && type.type == CodeType.NULL) {
+      return true;
+    }
+    if (content instanceof FunctionExprent cast && cast.getFuncType() == FunctionType.CAST) {
+      // The source's own cast pins the arm's type; it fits only when it is the target.
+      return false;
+    }
+    if (target.type == CodeType.GENVAR) {
+      if (content instanceof InvocationExprent) {
+        return FunctionExprent.sameType(content.getInferredExprType(null), target);
+      }
+      return false;
+    }
+    if (content instanceof InvocationExprent || !ExprProcessor.contextIndependentValue(content)) {
+      return true;
+    }
+    if (type == null) {
+      return false;
+    }
+    return type.type == CodeType.OBJECT && target.type == CodeType.OBJECT && type.value != null
+      && target.value != null && type.arrayDim == target.arrayDim
+      && DecompilerContext.getStructContext().instanceOf(type.value, target.value);
+  }
+
+  /**
+   * The type every simple arm's value records, when the arms are values the class file types
+   * without context and all agree. A switch over map fields is itself a map, and the class
+   * file records each field's instantiation; that is the receiver type a call on the switch
+   * was declared against. A block arm, a poly value or disagreeing arms give no recorded type.
+   */
+  public VarType recordedArmType() {
+    VarType found = null;
+    for (Statement stat : backing.getCaseStatements()) {
+      // javac rebuilds an exhaustive switch's MatchException arm from the case list; it is not
+      // a source arm and does not take part in the merge's type.
+      if (RoundTrip.synthesizedMatchThrow(stat)) {
+        continue;
+      }
+      if (stat.getExprents() == null || stat.getExprents().size() != 1
+        || !(stat.getExprents().get(0) instanceof YieldExprent yield)) {
+        return null;
+      }
+      VarType type = recordedValueType(yield.getContent());
+      if (type == null || (found != null && !FunctionExprent.sameType(found, type))) {
+        return null;
+      }
+      found = type;
+    }
+    return found;
+  }
+
+  private static VarType recordedValueType(Exprent content) {
+    if (!ExprProcessor.contextIndependentValue(content)) {
+      return null;
+    }
+    VarType type = content.getInferredExprType(null);
+    if (type == null || type.type != CodeType.OBJECT || type.value == null || type.arrayDim != 0
+      || !nameableRecordedType(type)) {
+      return null;
+    }
+    return type;
+  }
+
+  /** A recorded type a source could name: no wildcard, raw argument or free variable. */
+  private static boolean nameableRecordedType(VarType type) {
+    if (type instanceof GenericType generic) {
+      if (generic.getWildcard() != GenericType.WILDCARD_NO) {
+        return false;
+      }
+      for (VarType argument : generic.getArguments()) {
+        if (argument == null || argument.type == CodeType.GENVAR || !nameableRecordedType(argument)) {
+          return false;
+        }
       }
     }
     return true;

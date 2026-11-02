@@ -160,7 +160,7 @@ public class ExitExprent extends Exprent {
         }
 
         if (value instanceof SwitchExprent switchValue && RoundTrip.selector("switchpoly")
-            && !switchValue.hasNullCase() && switchValue.simpleArmsFitTarget(ret)) {
+            && switchValue.simpleArmsFitTarget(ret)) {
           // A switch expression in a return is target-typed: javac checks every yield against
           // the return type and emits no cast after the merge. The switch's own type is the
           // common supertype of the yields, which the printer would turn into a cast (and,
@@ -168,8 +168,8 @@ public class ExitExprent extends Exprent {
           // A type-variable target works the same way: the source's switch was inferred
           // against it, and the implicit return of a bare switch sits on the last arm's line,
           // so the body prints bare and the arms keep only the casts the target forces. A
-          // `case null` label does not determine the merge's type, so it keeps the outer cast
-          // and prints through the casted path.
+          // `case null` label does not decide the merge's type by itself, but when every arm
+          // provably fits the target the merge is the target and the source wrote it bare.
           switchValue.setPrintTarget(ret);
           buf.append(switchValue.toJava(indent));
         } else {

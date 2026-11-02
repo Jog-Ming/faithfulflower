@@ -1155,14 +1155,15 @@ public class InvocationExprent extends Exprent {
   /**
    * The declared return type instantiated from the receiver's own type, when that instantiation
    * is exactly the context target. The receiver is a value the class file fixes without
-   * inference (a local, field or constant); a call chain is left to the normal inference, whose
-   * recursive pass cannot be repeated here. Method variables the receiver cannot fix are not
-   * part of what the source's target sees.
+   * inference (a local, field, constant, or a switch whose arms all record the same type); a
+   * call chain is left to the normal inference, whose recursive pass cannot be repeated here.
+   * Method variables the receiver cannot fix are not part of what the source's target sees.
    */
   private @Nullable VarType receiverRecordedReturn(VarType upperBound) {
     if (upperBound == null || instance == null || isStatic || functype == Type.INIT
       || desc == null || desc.getSignature() == null
-      || !(instance instanceof VarExprent || instance instanceof FieldExprent || instance instanceof ConstExprent)) {
+      || !(instance instanceof VarExprent || instance instanceof FieldExprent || instance instanceof ConstExprent
+           || instance instanceof SwitchExprent)) {
       return null;
     }
     VarType declared = getDeclaredGenericReturnType();
@@ -1170,7 +1171,9 @@ public class InvocationExprent extends Exprent {
       return null;
     }
     String owner = desc.getClassQualifiedName();
-    VarType receiver = instance.getInferredExprType(null);
+    VarType receiver = instance instanceof SwitchExprent switchReceiver
+      ? switchReceiver.recordedArmType()
+      : instance.getInferredExprType(null);
     if (receiver == null || receiver.type != CodeType.OBJECT || receiver.value == null) {
       return null;
     }
@@ -2035,6 +2038,18 @@ public class InvocationExprent extends Exprent {
     return ARGUMENT.get()[0] > 0;
   }
 
+  private static final ThreadLocal<boolean[]> ARGUMENT_MAY_INFER = ThreadLocal.withInitial(() -> new boolean[1]);
+
+  /**
+   * Whether the target type of the argument being printed still contains a type variable of the
+   * called method that this argument itself will instantiate. A cast there does not merely
+   * convert the value: it picks the variable's value, so an argument whose recorded type equals
+   * the printed target is not redundant.
+   */
+  public static boolean argumentTargetMayInfer() {
+    return ARGUMENT_MAY_INFER.get()[0];
+  }
+
   /**
    * The target line of the argument's first printed token. A fluent chain prints its first link
    * first, and the outermost invoke sits on the last one; the receiver before that link is only a
@@ -2750,6 +2765,10 @@ public class InvocationExprent extends Exprent {
       }
     }
     Map<Integer, Set<VarType>> unboundArguments = new HashMap<>();
+    // An argument whose printed target has no free variable of the called method converts
+    // without influencing the call's inference. Unknown positions stay conservative.
+    boolean[] targetMayInfer = new boolean[types.length];
+    Arrays.fill(targetMayInfer, true);
     if (desc != null && desc.getSignature() != null) {
       Map<VarType, VarType> hierarchyMap = new HashMap<>();
       if (!classname.equals(desc.getClassQualifiedName())) {
@@ -2771,6 +2790,7 @@ public class InvocationExprent extends Exprent {
           }
 
           VarType rawType = desc.getSignature().parameterTypes.get(y++);
+          targetMayInfer[x] = mentionsTypeVariable(rawType, desc.getSignature().typeParameters);
           VarType type = rawType.remap(hierarchyMap).remap(genericsMap);
           // A name that is in scope at the call site may be the caller's own variable of the same
           // name (the callee's signature and the caller often share letters); the source may have
@@ -3108,9 +3128,12 @@ public class InvocationExprent extends Exprent {
         ARGUMENT_TEXT_START.get()[0] = startsLine
           ? (i == start ? firstLine : line)
           : i == start ? callTextLine : Math.max(previous, callTextLine);
+        boolean savedMayInfer = ARGUMENT_MAY_INFER.get()[0];
+        ARGUMENT_MAY_INFER.get()[0] = i < targetMayInfer.length ? targetMayInfer[i] : true;
         try {
           ExprProcessor.getCastedExprent(lstParameters.get(i), argumentType, buff, indent, ambiguous ? ExprProcessor.NullCastType.CAST : ExprProcessor.NullCastType.DONT_CAST_AT_ALL, ambiguous, true, true);
         } finally {
+          ARGUMENT_MAY_INFER.get()[0] = savedMayInfer;
           ARG_AT_LINE_START.set(savedAtLineStart);
           ARGUMENT_TEXT_START.get()[0] = savedTextStart;
           if (unbound != null) {

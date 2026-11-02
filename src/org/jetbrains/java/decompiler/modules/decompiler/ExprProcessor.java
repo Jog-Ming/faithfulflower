@@ -1708,7 +1708,15 @@ public class ExprProcessor implements CodeConstants {
           || wildcardParameter
           || (!InvocationExprent.inArgument()
               && (exprent instanceof VarExprent || exprent instanceof FieldExprent)
-              && sameType(rightType, leftType)));
+              && sameType(rightType, leftType))
+          // A field whose recorded Signature is exactly the context target converts nothing,
+          // whatever the context: the source's cast was redundant and javac reports it. The
+          // qualifier must itself be context-independent, since a call chain's type can take
+          // its arguments from the target and change what the field access means.
+          || (exprent instanceof FieldExprent recordedField
+              && contextIndependentQualifier(recordedField)
+              && !(InvocationExprent.inArgument() && InvocationExprent.argumentTargetMayInfer())
+              && sameType(recordedField.getInferredExprType(null), leftType)));
 
     boolean doCast = (!leftType.higherEqualInLatticeThan(rightType) && (rightType.equals(VarType.VARTYPE_OBJECT) || leftType.type != CodeType.OBJECT));
     // A switch expression is poly: with a type variable as the target, javac infers the switch's
@@ -1930,10 +1938,10 @@ public class ExprProcessor implements CodeConstants {
 
     // A switch expression is poly: javac types every arm from the context target and emits no
     // cast after the merge, so an outer cast is the printer's. The target was handed to the
-    // switch above. A `case null` cannot determine the merge's type, so that switch keeps the
-    // context's spelled-out cast.
-    if (exprent instanceof SwitchExprent switchCast && !switchCast.hasNullCase()
-        && switchCast.simpleArmsFitTarget(leftType)) {
+    // switch above. A `case null` does not on its own decide the merge's type, but the target
+    // still types every arm: when each simple arm provably fits it, the merge is the target and
+    // the source needed no cast.
+    if (exprent instanceof SwitchExprent switchCast && switchCast.simpleArmsFitTarget(leftType)) {
       cast = false;
     }
 
@@ -2587,7 +2595,7 @@ public class ExprProcessor implements CodeConstants {
    * type the printer already sees. Only a variable, field, constant, or a conditional of them
    * is fixed by the class file alone.
    */
-  private static boolean contextIndependentValue(Exprent exprent) {
+  public static boolean contextIndependentValue(Exprent exprent) {
     if (exprent instanceof VarExprent || exprent instanceof FieldExprent || exprent instanceof ConstExprent) {
       return true;
     }
@@ -2596,6 +2604,12 @@ public class ExprProcessor implements CodeConstants {
       return operands.size() == 3 && contextIndependentValue(operands.get(1)) && contextIndependentValue(operands.get(2));
     }
     return false;
+  }
+
+  /** A field qualifier the class file types without inference: this, a local, a field or a constant. */
+  private static boolean contextIndependentQualifier(FieldExprent field) {
+    Exprent qualifier = field.getInstance();
+    return qualifier == null || contextIndependentValue(qualifier);
   }
 
   /**
