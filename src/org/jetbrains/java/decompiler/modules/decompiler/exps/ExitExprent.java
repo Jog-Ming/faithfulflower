@@ -7,6 +7,7 @@ import org.jetbrains.java.decompiler.main.rels.MethodWrapper;
 import org.jetbrains.java.decompiler.modules.decompiler.ExprProcessor;
 import org.jetbrains.java.decompiler.modules.decompiler.RoundTrip;
 import org.jetbrains.java.decompiler.modules.decompiler.ValidationHelper;
+import org.jetbrains.java.decompiler.modules.decompiler.exps.FunctionExprent.FunctionType;
 import org.jetbrains.java.decompiler.modules.decompiler.vars.CheckTypesResult;
 import org.jetbrains.java.decompiler.struct.attr.StructExceptionsAttribute;
 import org.jetbrains.java.decompiler.struct.attr.StructGeneralAttribute;
@@ -136,16 +137,23 @@ public class ExitExprent extends Exprent {
           ret = methodDescriptor.genericInfo.returnType;
         }
         VarType lambdaReturn = LAMBDA_RETURN_TARGET.get();
-        if (lambdaReturn != null && value instanceof InvocationExprent) {
+        if (lambdaReturn != null && (value instanceof InvocationExprent
+            || value instanceof FunctionExprent cast && cast.getFuncType() == FunctionType.CAST)) {
           // A call returned from a lambda body is checked against the functional method's
-          // return type; the synthetic method's own signature is erased. Other values keep
-          // their own cast decisions, which the target would wrongly relax.
+          // return type; the synthetic method's own signature is erased. A cast in that
+          // position is poly the same way: its operand must be inferred against the target the
+          // source's cast was checked against. Other values keep their own cast decisions,
+          // which the target would wrongly relax.
           ret = lambdaReturn;
-          InvocationExprent.enterLambdaBody(value);
-          try {
+          if (value instanceof InvocationExprent) {
+            InvocationExprent.enterLambdaBody(value);
+            try {
+              value.getInferredExprType(lambdaReturn);
+            } finally {
+              InvocationExprent.exitLambdaBody();
+            }
+          } else {
             value.getInferredExprType(lambdaReturn);
-          } finally {
-            InvocationExprent.exitLambdaBody();
           }
         }
         // The return instruction carries the line of the `return` keyword; the value's first

@@ -10,6 +10,8 @@ import org.jetbrains.java.decompiler.modules.decompiler.exps.ExitExprent;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.Exprent;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.FunctionExprent;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.FunctionExprent.FunctionType;
+import org.jetbrains.java.decompiler.modules.decompiler.exps.InvocationExprent;
+import org.jetbrains.java.decompiler.modules.decompiler.exps.NewExprent;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.Pattern;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.VarExprent;
 import org.jetbrains.java.decompiler.struct.StructClass;
@@ -588,7 +590,18 @@ public class DoStatement extends Statement {
     // iterable's own source type already is exactly that form. javac calls a cast redundant when
     // the operand's type is the same type as the cast's, so a source whose iterable already has
     // the narrowed type wrote no cast: the recorded checkcast is the erasure boundary's.
-    VarType operandType = cast.getLstOperands().get(0).getInferredExprType(null);
+    // A call with a lambda argument has no independently inferred type: the lambda is poly and
+    // only the target types it, so javac could not have inferred the iterable's element type
+    // here. The source's own witness (a method type argument or a lambda's target) is what fixed
+    // it, and this recorded cast stands in for that witness; keep it. A call whose arguments fix
+    // its type (a collector) is inferred the same way with or without the target.
+    Exprent iterableValue = cast.getLstOperands().get(0);
+    boolean targetDependent = iterableValue instanceof InvocationExprent invocation
+      && invocation.getLstParameters().stream()
+        .anyMatch(parameter -> parameter instanceof NewExprent created && created.isLambda());
+    VarType operandType = targetDependent
+      ? iterableValue.getInferredExprType(null)
+      : iterableValue.getInferredExprType(narrowed);
     if (isNameableForEachType(narrowed) && FunctionExprent.sameType(operandType, narrowed)) {
       cast.setNeedsCast(false);
       cast.setCompilerCast(true);

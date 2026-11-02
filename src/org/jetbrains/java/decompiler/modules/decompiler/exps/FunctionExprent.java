@@ -288,9 +288,19 @@ public class FunctionExprent extends Exprent {
       if (suspendLambdaType) {
         Exprent.suspendLambdaParameterTypes();
       }
+      // A cast is not a poly context: javac infers the operand on its own. When the operand is
+      // a call whose independent inference our printer cannot replay (a chain whose result is
+      // fixed by the collector or the mapper), the recorded checkcast names the type the
+      // operand does have, and that is the target it is inferred against here.
+      VarType operandBound = upperBound;
+      if (operandBound == null && this.recordedCheckcast && cast.size() == 1
+        && cast.get(0) != null && cast.get(0).type == CodeType.OBJECT && cast.get(0).value != null
+        && cast.get(0).arrayDim == 0 && nameableCastType(cast.get(0))) {
+        operandBound = cast.get(0);
+      }
       VarType right;
       try {
-        right = operand.getInferredExprType(upperBound);
+        right = operand.getInferredExprType(operandBound);
       } finally {
         if (suspendLambdaType) {
           Exprent.resumeLambdaParameterTypes();
@@ -334,7 +344,8 @@ public class FunctionExprent extends Exprent {
           // happens, and javac emits no instruction for a redundant source cast, so this one is
           // the erasure boundary's and must not be restored by the bytecode-range force. An
           // array clone's cast is the same adaptation whatever the source wrote.
-          if (cloneCast || (this.recordedCheckcast && cast.size() == 1 && sameType(cast.get(0), right))) {
+          if (cloneCast || (this.recordedCheckcast && cast.size() == 1 && sameType(cast.get(0), right))
+            || erasedGenericCheckcast(cast.get(0), right, upperBound, lstOperands.get(0))) {
             this.compilerCast = true;
           }
 
@@ -368,8 +379,7 @@ public class FunctionExprent extends Exprent {
       // not carry exactly (a raw or capture form) is the source's unchecked cast and stays.
       if (cast.size() == 1 && nameableCastType(cast.get(0))
         && (erasedCheckcast(cast.get(0), right, lstOperands.get(0))
-            || (upperBound == null || sameType(upperBound, right))
-               && erasedGenericCheckcast(cast.get(0), right, lstOperands.get(0)))) {
+            || erasedGenericCheckcast(cast.get(0), right, upperBound, lstOperands.get(0)))) {
         this.needsCast = false;
         this.compilerCast = true;
       }
@@ -475,7 +485,8 @@ public class FunctionExprent extends Exprent {
    * value whose own declared type already is the raw class, so it fails the proper-supertype
    * test and stays.
    */
-  private static boolean erasedGenericCheckcast(VarType target, VarType operandType, Exprent operand) {
+  private static boolean erasedGenericCheckcast(VarType target, VarType operandType, VarType upperBound,
+                                                Exprent operand) {
     if (target == null || target.type != CodeType.OBJECT || target.value == null || target.arrayDim != 0
       || (target instanceof GenericType generic && (generic.getWildcard() != GenericType.WILDCARD_NO
           || !generic.getArguments().isEmpty()))) {
@@ -497,7 +508,9 @@ public class FunctionExprent extends Exprent {
     // The value's own recorded source type must be exactly the parameterization the context
     // sees. When it is a different instantiation (`EntityRenderer<?>` against the cast's
     // `EntityRenderer<? super T, ?>`), the checked cast is the source's unchecked conversion,
-    // not the erasure boundary's, and dropping it changes what the context infers.
+    // not the erasure boundary's, and dropping it changes what the context infers. A chain
+    // whose own type needs the target to be solved has no independently recorded form; there
+    // the context target itself must be the value's type.
     VarType recorded;
     if (operand instanceof InvocationExprent invocation) {
       recorded = invocation.recordedReturnType();
@@ -506,7 +519,13 @@ public class FunctionExprent extends Exprent {
     } else {
       recorded = null;
     }
-    return recorded != null && sameType(recorded, operandType);
+    if (upperBound != null && !sameType(upperBound, operandType)) {
+      return false;
+    }
+    if (recorded != null) {
+      return sameType(recorded, operandType);
+    }
+    return upperBound != null;
   }
 
   /**
