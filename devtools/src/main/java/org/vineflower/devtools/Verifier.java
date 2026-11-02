@@ -52,9 +52,9 @@ public final class Verifier {
 
   /**
    * Source-quality counters of one file or tree. Raw types, redundant single casts and unchecked
-   * operations come from javac's lint. A redundant double cast is a double cast that still compiles
-   * with its inner cast, its outer cast or both deleted; javac has no warning for either shape, so
-   * both are measured by the text matcher plus trial compiles.
+   * operations come from javac's lint. A redundant double cast is a double cast that still verifies
+   * fully identical with its inner cast, its outer cast or both deleted; javac has no warning for
+   * either shape, so both are measured by the text matcher plus trial compiles.
    */
   public record Metrics(int raw, int redundantCasts, int unchecked, int redundantDoubleCasts) {
     public static final Metrics ZERO = new Metrics(0, 0, 0, 0);
@@ -101,6 +101,7 @@ public final class Verifier {
    */
   public Measured measure(String version, Path target, int threads) throws Exception {
     Path client = minecraft.clientJar(version, false);
+    Path originalClasses = minecraft.extractedClasses(version, false);
     List<Path> classpath = minecraft.classpath(version, false);
     int release = releaseOf(client);
     List<Path> sources;
@@ -122,7 +123,7 @@ public final class Verifier {
         String text = Files.readString(sources.get(i));
         totals = totals.plus(new Metrics(compiled.metrics().raw(),
           compiled.metrics().redundantCasts(), compiled.metrics().unchecked(),
-          redundantDoubleCasts(sources.get(i), text, classpath, release)));
+          redundantDoubleCasts(sources.get(i), text, originalClasses, classpath, release)));
         if (!compiled.ok()) {
           failed++;
         }
@@ -236,7 +237,7 @@ public final class Verifier {
       String text = Files.readString(source);
       if (!SourceMetrics.doubleCasts(text).isEmpty()) {
         redundantDouble.put(source.toString(),
-          redundantDoubleCasts(source, text, classpath, release));
+          redundantDoubleCasts(source, text, originalClasses, classpath, release));
       }
     }
     report(version, target, results, elapsed, json, totalClasses, redundantDouble);
@@ -581,11 +582,12 @@ public final class Verifier {
   }
 
   /**
-   * A double cast is redundant when the file still compiles with its inner cast, its outer cast or
-   * both deleted. Each site is judged on its own; the variants go through the same compile cache.
+   * A double cast is redundant when deleting its inner cast, its outer cast or both still verifies
+   * fully identical (every attribute, bytes included) against the original classes. Each site is
+   * judged on its own; the variants go through the same compile cache.
    */
-  private static int redundantDoubleCasts(Path source, String text, List<Path> classpath, int release)
-      throws IOException {
+  private static int redundantDoubleCasts(Path source, String text, Path originalClasses,
+                                          List<Path> classpath, int release) throws IOException {
     List<SourceMetrics.DoubleCast> sites = SourceMetrics.doubleCasts(text);
     if (sites.isEmpty()) {
       return 0;
@@ -599,7 +601,8 @@ public final class Verifier {
             site.withoutBoth(text))) {
           Path file = dir.resolve(name);
           Files.writeString(file, variant);
-          if (compile(file, classpath, release).ok()) {
+          Compiled compiled = compile(file, classpath, release);
+          if (compiled.ok() && fullyIdentical(compiled, originalClasses)) {
             redundant++;
             break;
           }
@@ -609,6 +612,23 @@ public final class Verifier {
       deleteTree(dir);
     }
     return redundant;
+  }
+
+  private static boolean fullyIdentical(Compiled compiled, Path originalClasses) throws IOException {
+    if (compiled.outputs().isEmpty()) {
+      return false;
+    }
+    for (Map.Entry<String, byte[]> output : compiled.outputs().entrySet()) {
+      Path original = originalClasses.resolve(output.getKey().replace('.', '/') + ".class");
+      if (!Files.exists(original)) {
+        return false;
+      }
+      ClassDiff diff = ClassDiff.compare(Files.readAllBytes(original), output.getValue());
+      if (!diff.all()) {
+        return false;
+      }
+    }
+    return true;
   }
 
   private static void deleteTree(Path root) throws IOException {
