@@ -9017,6 +9017,67 @@ public final class RoundTrip {
   }
 
   /**
+   * The goto a then arm ends on when the printer took that arm from the statements after the if
+   * (the target's branch swapped the source's arms), and the source wrote a {@code continue;} at
+   * its end. {@link #flatContinueSite} names the same jump for a source that closed the branch
+   * flat; here the other arm stays in an else, so the continue prints inside the braces. The
+   * target's table proves the statement: javac writes no row for the join it emits over an else
+   * and such a join would inherit the arm's last line, while a written continue starts a row of
+   * its own at the jump on a different line. A classic {@code for}'s increment is where that
+   * join lands, so the target alone cannot tell them apart and the row is the evidence.
+   */
+  public static int swappedArmContinueSite(Statement arm, Statement elseArm) {
+    if (!selector("continuearm") || arm == null || elseArm == null) {
+      return -1;
+    }
+    java.util.List<StatEdge> edges = arm.getSuccessorEdges(Statement.STATEDGE_DIRECT_ALL);
+    if (edges.size() != 1) {
+      return -1;
+    }
+    StatEdge edge = edges.get(0);
+    if (edge.getType() != StatEdge.TYPE_CONTINUE || edge.getDestination() != edge.closure
+        || !(edge.getDestination() instanceof org.jetbrains.java.decompiler.modules.decompiler.stats.DoStatement loop)) {
+      return -1;
+    }
+    StructMethod method = currentMethod();
+    if (method == null) {
+      return -1;
+    }
+    StructLineNumberTableAttribute table =
+      method.getAttribute(StructGeneralAttribute.ATTRIBUTE_LINE_NUMBER_TABLE);
+    if (table == null) {
+      return -1;
+    }
+    java.util.Map<Integer, Integer> gotos = GOTO_TARGETS.get(method);
+    int end = lastEnd(arm);
+    int limit = firstOffset(elseArm);
+    if (gotos == null || end < 0 || limit <= end) {
+      return -1;
+    }
+    int site = -1;
+    for (java.util.Map.Entry<Integer, Integer> entry : gotos.entrySet()) {
+      int at = entry.getKey();
+      if (at >= end && at < limit && (site < 0 || at < site)) {
+        site = at;
+      }
+    }
+    if (site < 0) {
+      return -1;
+    }
+    int target = gotos.get(site);
+    boolean cont = isLoopHeadTarget(loop, target) || isContinueTarget(loop, target);
+    int jumpLine = table.findLineNumber(site);
+    int armLine = table.findLineNumber(end - 1);
+    if (!cont || !startsLine(table, site)) {
+      return -1;
+    }
+    if (jumpLine < 0 || jumpLine == armLine) {
+      return -1;
+    }
+    return site;
+  }
+
+  /**
    * The goto a hoisted arm ended with when the source wrote {@code continue;} at its end and
    * closed the branch, so the other arm prints flat after the if instead of in an else. The
    * same shape as {@link #armContinueSite}, but a for-each loop's update sits after the body

@@ -1562,6 +1562,17 @@ public class SequenceStatement extends Statement {
             && shellTail.isEmpty() && restCopy == null && !restStats.isEmpty()) {
           restContinue = RoundTrip.flatContinueSite(restStats.get(restStats.size() - 1), elseArm);
         }
+        // The target's local table can prove the source wrote this arm flat, as statements the
+        // enclosing block ran after the then arm, and never as an else block: its declarations
+        // then live in the enclosing block, and a brace here would move their scope.
+        boolean flatArm = restContinue >= 0 || RoundTrip.armWasFlat(elseArm);
+        // The same jump with the source's other arm kept in an else: only the continue line is
+        // missing from the arm, and the target's table proves it the same way.
+        int armContinue = -1;
+        if (!flatArm && straddle == null && afterIf.isEmpty()
+            && shellTail.isEmpty() && restCopy == null && !restStats.isEmpty()) {
+          armContinue = RoundTrip.swappedArmContinueSite(restStats.get(restStats.size() - 1), elseArm);
+        }
         RoundTrip.markAfterIf(afterIf);
         buf.appendIndent(indent).append(head.toJava(indent)).append(" {").appendLineSeparator();
         List<Exprent> savedExprents = straddle == null ? null : straddle.getExprents();
@@ -1583,10 +1594,12 @@ public class SequenceStatement extends Statement {
           continueLine.addStartBytecodeMapping(restContinue);
           buf.append(continueLine);
         }
-        // The target's local table can prove the source wrote this arm flat, as statements the
-        // enclosing block ran after the then arm, and never as an else block: its declarations
-        // then live in the enclosing block, and a brace here would move their scope.
-        boolean flatArm = restContinue >= 0 || RoundTrip.armWasFlat(elseArm);
+        if (armContinue >= 0) {
+          TextBuffer continueLine = new TextBuffer();
+          continueLine.appendIndent(indent + 1).append("continue;").appendLineSeparator();
+          continueLine.addStartBytecodeMapping(armContinue);
+          buf.append(continueLine);
+        }
         buf.appendIndent(indent).append(flatArm ? "}" : "} else {").appendLineSeparator();
         if (elseCopy != null && joinAfterArms && RoundTrip.isTailReturnCopy(elseCopy)) {
           ((SequenceStatement) elseArm).getStats().removeWithKey(elseCopy.id);
