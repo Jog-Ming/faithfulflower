@@ -367,7 +367,9 @@ public class FunctionExprent extends Exprent {
       // the same checkcast at the erasure boundary. A target the operand's recorded type does
       // not carry exactly (a raw or capture form) is the source's unchecked cast and stays.
       if (cast.size() == 1 && nameableCastType(cast.get(0))
-        && erasedCheckcast(cast.get(0), right, lstOperands.get(0))) {
+        && (erasedCheckcast(cast.get(0), right, lstOperands.get(0))
+            || (upperBound == null || sameType(upperBound, right))
+               && erasedGenericCheckcast(cast.get(0), right, lstOperands.get(0)))) {
         this.needsCast = false;
         this.compilerCast = true;
       }
@@ -462,6 +464,49 @@ public class FunctionExprent extends Exprent {
         && DecompilerContext.getStructContext().instanceOf(target.value, erased.value);
     }
     return false;
+  }
+
+  /**
+   * Whether this recorded checkcast merely restores a parameterized type the compiled form
+   * erased to its raw class. The value's own source type is a recorded instantiation whose
+   * erasure is the cast type, and the bytecode value's declared type is a proper supertype of
+   * that class: a generic call's descriptor returns Object, a generic accessor's returns Object,
+   * and the source wrote the value bare. A source-written raw cast ({@code (List)list}) has a
+   * value whose own declared type already is the raw class, so it fails the proper-supertype
+   * test and stays.
+   */
+  private static boolean erasedGenericCheckcast(VarType target, VarType operandType, Exprent operand) {
+    if (target == null || target.type != CodeType.OBJECT || target.value == null || target.arrayDim != 0
+      || (target instanceof GenericType generic && (generic.getWildcard() != GenericType.WILDCARD_NO
+          || !generic.getArguments().isEmpty()))) {
+      return false;
+    }
+    if (operandType == null || !operandType.isGeneric() || operandType.type != CodeType.OBJECT
+      || operandType.arrayDim != 0 || operandType.value == null
+      || !target.value.equals(operandType.value)) {
+      return false;
+    }
+    VarType erased = operand.getExprType();
+    if (erased == null || erased.type != CodeType.OBJECT || erased.value == null || erased.arrayDim != 0
+      || erased.isGeneric() || erased.value.equals(target.value)) {
+      return false;
+    }
+    if (!DecompilerContext.getStructContext().instanceOf(target.value, erased.value)) {
+      return false;
+    }
+    // The value's own recorded source type must be exactly the parameterization the context
+    // sees. When it is a different instantiation (`EntityRenderer<?>` against the cast's
+    // `EntityRenderer<? super T, ?>`), the checked cast is the source's unchecked conversion,
+    // not the erasure boundary's, and dropping it changes what the context infers.
+    VarType recorded;
+    if (operand instanceof InvocationExprent invocation) {
+      recorded = invocation.recordedReturnType();
+    } else if (operand instanceof FieldExprent field) {
+      recorded = field.getInferredExprType(null);
+    } else {
+      recorded = null;
+    }
+    return recorded != null && sameType(recorded, operandType);
   }
 
   /**
