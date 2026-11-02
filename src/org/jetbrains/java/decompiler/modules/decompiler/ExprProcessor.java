@@ -1565,6 +1565,25 @@ public class ExprProcessor implements CodeConstants {
     return getCastedExprent(exprent, leftType, buffer, indent, castNull ? NullCastType.CAST : NullCastType.DONT_CAST, false, false, false);
   }
 
+  private static boolean isPrimitive(VarType type) {
+    if (type == null) {
+      return false;
+    }
+    return switch (type.type) {
+      case BOOLEAN, BYTE, CHAR, SHORT, INT, LONG, FLOAT, DOUBLE -> true;
+      default -> false;
+    };
+  }
+
+  /** Whether the table records this variable's own type at {@code type}. */
+  private static boolean recordedPrimitiveMatches(Exprent exprent, VarType type) {
+    if (!(exprent instanceof VarExprent var) || var.getLVT() == null) {
+      return false;
+    }
+    VarType recorded = var.getLVT().getVarType();
+    return recorded != null && isPrimitive(recorded) && recorded.equals(type);
+  }
+
   public static boolean getCastedExprent(Exprent exprent,
                                          VarType leftType,
                                          TextBuffer buffer,
@@ -1811,13 +1830,21 @@ public class ExprProcessor implements CodeConstants {
     // A ternary of in-range int constants narrowed to a byte, short or char target: the source's
     // arms were constants of the target type (a constant cast folds to the same immediate), and
     // the class file holds no i2b/i2c for the assignment. Printing the outer cast would add one.
+    boolean narrowTernaryCast = false;
     if (doCast && exprent instanceof FunctionExprent narrowTernary
       && narrowTernary.narrowConstantArms(leftType)) {
       doCast = false;
+      narrowTernaryCast = true;
     }
 
-    boolean cast = castAlways || doCast || doCastNull || doCastNarrowing || doCastGenerics || doubleCast
-      || fieldBoundCast;
+    // An overload-choice cast on a variable the table records at the parameter's own primitive
+    // type selects nothing: no reference overload is a candidate, and no numeric conversion is
+    // performed. The printer's inference alone is not enough — it may have widened away the
+    // recorded type that the cast was re-narrowing.
+    boolean samePrimitive = castAlways && leftType.equals(rightType) && isPrimitive(leftType)
+      && recordedPrimitiveMatches(exprent, leftType);
+    boolean cast = (castAlways && !narrowTernaryCast && !samePrimitive) || doCast || doCastNull
+      || doCastNarrowing || doCastGenerics || doubleCast || fieldBoundCast;
 
     if (castNull == NullCastType.DONT_CAST_AT_ALL && rightType.type == CodeType.NULL) {
       cast = castAlways;

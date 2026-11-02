@@ -3731,6 +3731,11 @@ public class InvocationExprent extends Exprent {
         VarType type = exp.getExprType();
 
         MethodDescriptor pmd = p.methodDescriptor();
+        // The argument's type already is the recorded parameter type: no cast on it can change
+        // which overload javac selects, so a rival candidate does not make the site ambiguous.
+        if (type.equals(md.params[i])) {
+          continue;
+        }
         // Only consider non-equivalent types
         if (!md.params[i].equals(pmd.params[i])) {
           // If our desired method is higher in the lattice than
