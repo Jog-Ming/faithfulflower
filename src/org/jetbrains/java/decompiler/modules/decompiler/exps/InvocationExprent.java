@@ -1143,7 +1143,71 @@ public class InvocationExprent extends Exprent {
       }
     }
 
+    VarType recordedReturn = receiverRecordedReturn(upperBound);
+    if (recordedReturn != null) {
+      return recordedReturn;
+    }
+
     return getExprType();
+  }
+
+  /**
+   * The declared return type instantiated from the receiver's own type, when that instantiation
+   * is exactly the context target. The receiver is a value the class file fixes without
+   * inference (a local, field or constant); a call chain is left to the normal inference, whose
+   * recursive pass cannot be repeated here. Method variables the receiver cannot fix are not
+   * part of what the source's target sees.
+   */
+  private @Nullable VarType receiverRecordedReturn(VarType upperBound) {
+    if (upperBound == null || instance == null || isStatic || functype == Type.INIT
+      || desc == null || desc.getSignature() == null
+      || !(instance instanceof VarExprent || instance instanceof FieldExprent || instance instanceof ConstExprent)) {
+      return null;
+    }
+    VarType declared = getDeclaredGenericReturnType();
+    if (declared == null || (!declared.isGeneric() && declared.type != CodeType.GENVAR)) {
+      return null;
+    }
+    String owner = desc.getClassQualifiedName();
+    VarType receiver = instance.getInferredExprType(null);
+    if (receiver == null || receiver.type != CodeType.OBJECT || receiver.value == null) {
+      return null;
+    }
+    VarType view = receiver.value.equals(owner) ? receiver
+      : GenericType.getGenericSuperType(receiver, new VarType(CodeType.OBJECT, 0, owner));
+    if (!(view instanceof GenericType viewType) || viewType.value == null || !viewType.value.equals(owner)) {
+      return null;
+    }
+    StructClass cls = DecompilerContext.getStructContext().getClass(owner);
+    if (cls == null || cls.getSignature() == null) {
+      return null;
+    }
+    Map<VarType, VarType> map = new HashMap<>();
+    cls.getSignature().genericType.mapGenVarsTo(viewType, map);
+    VarType ret = declared.remap(map);
+    if (ret == null || !FunctionExprent.sameType(ret, upperBound)
+      || mentionsTypeVariable(ret, desc.getSignature().typeParameters)) {
+      return null;
+    }
+    return upperBound;
+  }
+
+  /** Whether one of the named type variables occurs anywhere in the type. */
+  private static boolean mentionsTypeVariable(VarType type, List<String> names) {
+    if (type == null) {
+      return false;
+    }
+    if (type.type == CodeType.GENVAR && type.value != null && names.contains(type.value)) {
+      return true;
+    }
+    if (type instanceof GenericType generic) {
+      for (VarType argument : generic.getArguments()) {
+        if (mentionsTypeVariable(argument, names)) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
 
