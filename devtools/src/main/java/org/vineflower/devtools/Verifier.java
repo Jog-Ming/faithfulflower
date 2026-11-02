@@ -133,6 +133,53 @@ public final class Verifier {
   }
 
   /**
+   * The source positions javac reports a lint code at across a whole tree. The compile cache keeps
+   * counters, not diagnostics, so this compiles afresh; it is the listing a family survey starts
+   * from.
+   */
+  public List<String> lintSites(String version, Path target, int threads, String code) throws Exception {
+    Path client = minecraft.clientJar(version, false);
+    List<Path> classpath = minecraft.classpath(version, false);
+    int release = releaseOf(client);
+    List<Path> sources;
+    try (var walk = Files.walk(target)) {
+      sources = walk.filter(p -> p.toString().endsWith(".java") && Files.isRegularFile(p))
+        .collect(java.util.stream.Collectors.toList());
+    }
+    ExecutorService pool = Executors.newFixedThreadPool(Math.max(1, threads));
+    List<Callable<List<String>>> tasks = new ArrayList<>();
+    for (Path source : sources) {
+      tasks.add(() -> {
+        DiagnosticCollector<JavaFileObject> diagnostics = new DiagnosticCollector<>();
+        JavaCompiler compiler = COMPILER.get();
+        StandardJavaFileManager files = FILES.get();
+        MemoryOutput memory = new MemoryOutput(files);
+        compiler.getTask(null, memory, diagnostics, options(classpath, release), null,
+          files.getJavaFileObjects(source)).call();
+        List<String> sites = new ArrayList<>();
+        for (Diagnostic<? extends JavaFileObject> diagnostic : diagnostics.getDiagnostics()) {
+          if (diagnostic.getCode().startsWith(code)) {
+            sites.add(target.relativize(source).toString().replace('\\', '/')
+              + ":" + diagnostic.getLineNumber() + " "
+              + diagnostic.getMessage(Locale.ROOT).split("\n")[0]);
+          }
+        }
+        return sites;
+      });
+    }
+    List<String> all = new ArrayList<>();
+    try {
+      for (Future<List<String>> future : pool.invokeAll(tasks)) {
+        all.addAll(future.get());
+      }
+    } finally {
+      pool.shutdown();
+    }
+    Collections.sort(all);
+    return all;
+  }
+
+  /**
    * Scores a tree, and when {@code since} is given also lists which files changed relative to that
    * earlier tree — the attribution half of an A/B, which the attribute counts cannot show.
    */

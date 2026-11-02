@@ -184,6 +184,13 @@ public final class Main {
           measured.sources(), measured.failed(), measured.metrics().raw(),
           measured.metrics().redundantCasts(), measured.metrics().doubleCasts(),
           measured.metrics().unchecked(), elapsed);
+        if (rest.contains("--casts")) {
+          for (String site : new Verifier(workspace, minecraft)
+            .lintSites(positional.get(0), Path.of(positional.get(1)), threads,
+              "compiler.warn.redundant.cast")) {
+            System.out.println(site);
+          }
+        }
       }
       case "reports" -> reports(workspace, rest);
       case "clean" -> clean(workspace, rest);
@@ -869,7 +876,7 @@ public final class Main {
                                              --tree verifies a scratch copy of a tree
         compile   <version> <Class>            compile that one class with the verifier's javac
                                              settings and print its errors
-        metrics   <version> <dir> [--threads N]  compile every source under a tree with the
+        metrics   <version> <dir> [--threads N] [--casts]  compile every source under a tree with the
                                              verifier's javac and sum its quality counters
         clean     [--trees] [--compile] [--downloads] [--all]
         reports   [--version V] [--limit N]   list past scores

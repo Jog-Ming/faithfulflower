@@ -135,7 +135,7 @@ devtools/cli diff      <version> <Class> [<Class>...] [--full] [--dump] [--dump-
                                              rows, --dump-bytes writes the compiled classes under
                                              .dev/tmp/compiled
 devtools/cli compile   <version> <Class>             compile that one class like the verifier does
-devtools/cli metrics   <version> <dir> [--threads N] compile a whole source tree with the verifier's
+devtools/cli metrics   <version> <dir> [--threads N] [--casts] compile a whole source tree with the verifier'
                                              javac and print the quality counters (raw, redundant
                                              casts, double casts, unchecked) without comparing
 devtools/cli reports   [--version V] [--limit N]      list past scores
