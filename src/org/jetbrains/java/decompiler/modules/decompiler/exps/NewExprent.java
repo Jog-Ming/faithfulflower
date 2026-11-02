@@ -1575,7 +1575,7 @@ public class NewExprent extends Exprent {
    * for; the type the source could name is its bound.
    */
   public List<VarType> getFunctionalParameterTypes() {
-    if (!lambda || inferredLambdaType == null || !inferredLambdaType.isGeneric()) {
+    if (!lambda || inferredLambdaType == null) {
       return null;
     }
     ClassNode node = DecompilerContext.getClassProcessor().getMapRootClasses().get(newType.value);
@@ -1583,18 +1583,30 @@ public class NewExprent extends Exprent {
       return null;
     }
     StructClass iface = DecompilerContext.getStructContext().getClass(node.anonymousClassType.value);
-    if (iface == null || iface.getSignature() == null) {
+    if (iface == null) {
       return null;
     }
     StructMethod sam = iface.getMethod(getLambdaMethodKey());
-    if (sam == null || sam.getSignature() == null) {
+    if (sam == null) {
       return null;
     }
-    Map<VarType, VarType> map = new HashMap<>();
-    iface.getSignature().genericType.mapGenVarsTo((GenericType) inferredLambdaType, map);
+    List<VarType> parameters;
+    if (sam.getSignature() != null) {
+      parameters = sam.getSignature().parameterTypes;
+    } else {
+      parameters = Arrays.asList(MethodDescriptor.parseDescriptor(sam.getDescriptor()).params);
+    }
+    Map<VarType, VarType> map = null;
+    if (inferredLambdaType.isGeneric()) {
+      if (iface.getSignature() == null) {
+        return null;
+      }
+      map = new HashMap<>();
+      iface.getSignature().genericType.mapGenVarsTo((GenericType) inferredLambdaType, map);
+    }
     List<VarType> types = new ArrayList<>();
-    for (VarType parameter : sam.getSignature().parameterTypes) {
-      VarType resolved = parameter.remap(map);
+    for (VarType parameter : parameters) {
+      VarType resolved = map == null ? parameter : parameter.remap(map);
       if (resolved instanceof GenericType generic && generic.getWildcard() != GenericType.WILDCARD_NO) {
         resolved = GenericType.withWildcard(generic, GenericType.WILDCARD_NO);
       }
