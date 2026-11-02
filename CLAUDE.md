@@ -137,7 +137,10 @@ devtools/cli diff      <version> <Class> [<Class>...] [--full] [--dump] [--dump-
 devtools/cli compile   <version> <Class>             compile that one class like the verifier does
 devtools/cli metrics   <version> <dir> [--threads N] [--casts] compile a whole source tree with the verifier'
                                              javac and print the quality counters (raw, redundant
-                                             casts, double casts, unchecked) without comparing
+                                             casts, redundant double casts, unchecked) without
+                                             comparing; a double cast is redundant when the file
+                                             still compiles with its inner, outer or both casts
+                                             deleted
 devtools/cli reports   [--version V] [--limit N]      list past scores
 devtools/cli clean     [--trees] [--compile] [--downloads] [--all]
 devtools/cli cache     [--measure]                    show cache usage; --measure sizes old trees once

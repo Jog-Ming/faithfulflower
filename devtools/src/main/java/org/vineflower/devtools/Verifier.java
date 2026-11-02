@@ -52,15 +52,16 @@ public final class Verifier {
 
   /**
    * Source-quality counters of one file or tree. Raw types, redundant single casts and unchecked
-   * operations come from javac's lint; double casts come from the text matcher, since javac has no
-   * warning for them.
+   * operations come from javac's lint. A redundant double cast is a double cast that still compiles
+   * with its inner cast, its outer cast or both deleted; javac has no warning for either shape, so
+   * both are measured by the text matcher plus trial compiles.
    */
-  public record Metrics(int raw, int redundantCasts, int unchecked, int doubleCasts) {
+  public record Metrics(int raw, int redundantCasts, int unchecked, int redundantDoubleCasts) {
     public static final Metrics ZERO = new Metrics(0, 0, 0, 0);
 
     public Metrics plus(Metrics other) {
       return new Metrics(raw + other.raw, redundantCasts + other.redundantCasts,
-        unchecked + other.unchecked, doubleCasts + other.doubleCasts);
+        unchecked + other.unchecked, redundantDoubleCasts + other.redundantDoubleCasts);
     }
   }
 
@@ -118,10 +119,10 @@ public final class Verifier {
       List<Future<Compiled>> futures = pool.invokeAll(tasks);
       for (int i = 0; i < futures.size(); i++) {
         Compiled compiled = futures.get(i).get();
-        byte[] bytes = Files.readAllBytes(sources.get(i));
-        SourceMetrics.Counts counts = SourceMetrics.casts(new String(bytes, StandardCharsets.UTF_8));
+        String text = Files.readString(sources.get(i));
         totals = totals.plus(new Metrics(compiled.metrics().raw(),
-          compiled.metrics().redundantCasts(), compiled.metrics().unchecked(), counts.doubleCasts()));
+          compiled.metrics().redundantCasts(), compiled.metrics().unchecked(),
+          redundantDoubleCasts(sources.get(i), text, classpath, release)));
         if (!compiled.ok()) {
           failed++;
         }
@@ -228,7 +229,17 @@ public final class Verifier {
 
     long totalClasses = Files.isDirectory(target) && only == null
       ? countClasses(originalClasses) : 0;
-    report(version, target, results, elapsed, json, totalClasses);
+    // Computed from the source text on every run, not read from the per-file compile cache: the
+    // cache predates this counter and its entries must stay valid.
+    Map<String, Integer> redundantDouble = new LinkedHashMap<>();
+    for (Path source : sources) {
+      String text = Files.readString(source);
+      if (!SourceMetrics.doubleCasts(text).isEmpty()) {
+        redundantDouble.put(source.toString(),
+          redundantDoubleCasts(source, text, classpath, release));
+      }
+    }
+    report(version, target, results, elapsed, json, totalClasses, redundantDouble);
     if (since != null) {
       System.out.print(treeSince(target, since));
     }
@@ -386,9 +397,9 @@ public final class Verifier {
     }
 
     Compiled compiled = compile(source, classpath, release);
-    SourceMetrics.Counts sourceCounts = SourceMetrics.casts(new String(bytes, StandardCharsets.UTF_8));
+    // The redundant-double counter is computed per tree in report(), outside this cache.
     Metrics metrics = new Metrics(compiled.metrics().raw(), compiled.metrics().redundantCasts(),
-      compiled.metrics().unchecked(), sourceCounts.doubleCasts());
+      compiled.metrics().unchecked(), 0);
 
     List<ClassResult> classes = new ArrayList<>();
     List<String> errors = new ArrayList<>();
@@ -569,6 +580,45 @@ public final class Verifier {
     return new Compiled(ok, ok ? memory.outputs : Map.of(), errors, metrics);
   }
 
+  /**
+   * A double cast is redundant when the file still compiles with its inner cast, its outer cast or
+   * both deleted. Each site is judged on its own; the variants go through the same compile cache.
+   */
+  private static int redundantDoubleCasts(Path source, String text, List<Path> classpath, int release)
+      throws IOException {
+    List<SourceMetrics.DoubleCast> sites = SourceMetrics.doubleCasts(text);
+    if (sites.isEmpty()) {
+      return 0;
+    }
+    Path dir = Files.createTempDirectory("neuroflower-double-cast");
+    int redundant = 0;
+    try {
+      String name = source.getFileName().toString();
+      for (SourceMetrics.DoubleCast site : sites) {
+        for (String variant : List.of(site.withoutInner(text), site.withoutOuter(text),
+            site.withoutBoth(text))) {
+          Path file = dir.resolve(name);
+          Files.writeString(file, variant);
+          if (compile(file, classpath, release).ok()) {
+            redundant++;
+            break;
+          }
+        }
+      }
+    } finally {
+      deleteTree(dir);
+    }
+    return redundant;
+  }
+
+  private static void deleteTree(Path root) throws IOException {
+    try (var walk = Files.walk(root)) {
+      for (Path path : walk.sorted(java.util.Comparator.reverseOrder()).toList()) {
+        Files.deleteIfExists(path);
+      }
+    }
+  }
+
   private static byte[] serialize(Map<String, byte[]> outputs, Metrics metrics) throws IOException {
     ByteArrayOutputStream bytes = new ByteArrayOutputStream();
     try (DataOutputStream data = new DataOutputStream(bytes)) {
@@ -647,7 +697,7 @@ public final class Verifier {
   }
 
   private void report(String version, Path target, List<FileResult> results, long elapsed, boolean json,
-                      long totalClasses) throws IOException {
+                      long totalClasses, Map<String, Integer> redundantDouble) throws IOException {
     int files = results.size();
     int cached = (int) results.stream().filter(FileResult::cached).count();
     int classes = 0;
@@ -663,7 +713,9 @@ public final class Verifier {
     Metrics totals = Metrics.ZERO;
     List<String> worst = new ArrayList<>();
     for (FileResult result : results) {
-      totals = totals.plus(result.metrics());
+      Metrics metrics = result.metrics();
+      totals = totals.plus(new Metrics(metrics.raw(), metrics.redundantCasts(),
+        metrics.unchecked(), redundantDouble.getOrDefault(result.source(), 0)));
       if (!result.errors().isEmpty()) {
         failingFiles++;
       }
@@ -731,8 +783,8 @@ public final class Verifier {
 
     System.out.printf(Locale.ROOT, "non-lnt identical %d/%d (%.1f%%)%n",
       nonLnt, classes, classes == 0 ? 0.0 : 100.0 * nonLnt / classes);
-    System.out.printf(Locale.ROOT, "metrics raw %d  cast %d  double %d  unchecked %d%n",
-      totals.raw(), totals.redundantCasts(), totals.doubleCasts(), totals.unchecked());
+    System.out.printf(Locale.ROOT, "metrics raw %d  cast %d  redundant-double %d  unchecked %d%n",
+      totals.raw(), totals.redundantCasts(), totals.redundantDoubleCasts(), totals.unchecked());
     if (failingFiles > 0) {
       System.out.println("files that did not compile: " + failingFiles);
     }
@@ -765,7 +817,7 @@ public final class Verifier {
       JsonObject metricsJson = new JsonObject();
       metricsJson.addProperty("raw", totals.raw());
       metricsJson.addProperty("redundantCasts", totals.redundantCasts());
-      metricsJson.addProperty("doubleCasts", totals.doubleCasts());
+      metricsJson.addProperty("redundantDoubleCasts", totals.redundantDoubleCasts());
       metricsJson.addProperty("unchecked", totals.unchecked());
       report.add("metrics", metricsJson);
       JsonArray fileArray = new JsonArray();
@@ -775,7 +827,8 @@ public final class Verifier {
         JsonObject fileMetrics = new JsonObject();
         fileMetrics.addProperty("raw", result.metrics().raw());
         fileMetrics.addProperty("redundantCasts", result.metrics().redundantCasts());
-        fileMetrics.addProperty("doubleCasts", result.metrics().doubleCasts());
+        fileMetrics.addProperty("redundantDoubleCasts",
+          redundantDouble.getOrDefault(result.source(), 0));
         fileMetrics.addProperty("unchecked", result.metrics().unchecked());
         fileJson.add("metrics", fileMetrics);
         if (!result.errors().isEmpty()) {
@@ -822,7 +875,7 @@ public final class Verifier {
       for (String attribute : ClassDiff.ATTRIBUTES) {
         line.append('\t').append(attribute);
       }
-      line.append("\ttree\traw\tcast\tdouble\tunchecked\n");
+      line.append("\ttree\traw\tcast\trdouble\tunchecked\n");
     }
     line.append(System.currentTimeMillis()).append('\t').append(version).append('\t')
       .append(classes).append('\t').append(compiled).append('\t').append(fully).append('\t')
@@ -833,7 +886,7 @@ public final class Verifier {
     line.append('\t').append(target)
       .append('\t').append(totals.raw())
       .append('\t').append(totals.redundantCasts())
-      .append('\t').append(totals.doubleCasts())
+      .append('\t').append(totals.redundantDoubleCasts())
       .append('\t').append(totals.unchecked())
       .append('\n');
     Files.createDirectories(index.getParent());
@@ -951,7 +1004,7 @@ public final class Verifier {
     if (json.has("metrics")) {
       JsonObject object = json.getAsJsonObject("metrics");
       metrics = new Metrics(intOf(object, "raw"), intOf(object, "redundantCasts"),
-        intOf(object, "unchecked"), intOf(object, "doubleCasts"));
+        intOf(object, "unchecked"), intOf(object, "redundantDoubleCasts"));
     }
     return new FileResult(source.toString(), classes, errors, true, metrics);
   }
@@ -984,7 +1037,7 @@ public final class Verifier {
     metrics.addProperty("raw", result.metrics().raw());
     metrics.addProperty("redundantCasts", result.metrics().redundantCasts());
     metrics.addProperty("unchecked", result.metrics().unchecked());
-    metrics.addProperty("doubleCasts", result.metrics().doubleCasts());
+    metrics.addProperty("redundantDoubleCasts", result.metrics().redundantDoubleCasts());
     json.add("metrics", metrics);
     Workspace.writeJson(cached, json);
   }

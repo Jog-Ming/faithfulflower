@@ -1,7 +1,10 @@
 package org.vineflower.devtools;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /**
- * Counts double casts in printed source: a parenthesised type whose operand is another cast.
+ * Finds double casts in printed source: a parenthesised type whose operand is another cast.
  *
  * <p>javac reports redundant single casts through {@code -Xlint:cast} but has no warning for a
  * double cast, so this shape needs its own text matcher. The scan skips comments and literals and
@@ -9,19 +12,34 @@ package org.vineflower.devtools;
  * measurement, not a parse: it is used to compare trees, never to decide a rewrite.
  */
 public final class SourceMetrics {
-  public record Counts(int doubleCasts) {
-    public static final Counts ZERO = new Counts(0);
+  /** A cast's parenthesis, from {@code '('} through the matching {@code ')'}. */
+  public record Cast(int start, int end) {
+    public String without(String text) {
+      return text.substring(0, start) + text.substring(end);
+    }
+  }
 
-    public Counts plus(Counts other) {
-      return new Counts(doubleCasts + other.doubleCasts);
+  /** The outer cast and the cast that opens its operand. */
+  public record DoubleCast(Cast outer, Cast inner) {
+    public String withoutInner(String text) {
+      return text.substring(0, inner.start()) + text.substring(inner.end());
+    }
+
+    public String withoutOuter(String text) {
+      return text.substring(0, outer.start()) + text.substring(outer.end());
+    }
+
+    public String withoutBoth(String text) {
+      return text.substring(0, outer.start()) + text.substring(outer.end(), inner.start())
+        + text.substring(inner.end());
     }
   }
 
   private SourceMetrics() {
   }
 
-  public static Counts casts(String text) {
-    int doubleCasts = 0;
+  public static List<DoubleCast> doubleCasts(String text) {
+    List<DoubleCast> sites = new ArrayList<>();
     int n = text.length();
     int previous = -1;
     int i = 0;
@@ -66,7 +84,8 @@ public final class SourceMetrics {
                 if (innerClose > operand && looksLikeType(text, operand + 1, innerClose)) {
                   int innerOperand = skipSpace(text, innerClose + 1);
                   if (innerOperand < n && startsOperand(text.charAt(innerOperand))) {
-                    doubleCasts++;
+                    sites.add(new DoubleCast(new Cast(i, close + 1),
+                      new Cast(operand, innerClose + 1)));
                   }
                 }
               }
@@ -87,7 +106,7 @@ public final class SourceMetrics {
       }
       i++;
     }
-    return new Counts(doubleCasts);
+    return sites;
   }
 
   private static int quotedEnd(String text, int start, char quote) {
