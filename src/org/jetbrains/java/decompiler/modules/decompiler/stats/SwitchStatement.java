@@ -799,6 +799,15 @@ public class SwitchStatement extends Statement {
       if (breakMapping < 0 && i + 1 < caseStatements.size()) {
         breakMapping = RoundTrip.armExitGoto(stat, caseStatements.get(i + 1));
       }
+      if (breakMapping < 0 && RoundTrip.firstOffset(stat) < 0) {
+        // The arm holds no instruction to read a jump from, and the tree kept none on its edge:
+        // the table's target for the label is the goto the printed `break;` compiles to, and
+        // without the mapping the aligner cannot see the line the table puts it on.
+        int entry = entryOffset(i);
+        if (entry >= 0 && RoundTrip.jumpTargetAt(entry) >= 0) {
+          breakMapping = entry;
+        }
+      }
       // The arm's tail jump lands on the switch's join, and that join is the enclosing loop's own
       // latch: the source's `break;` here compiles to no instruction, since the loop's back-edge
       // goto already starts at the join. javac anchors that goto on the line of the loop's closing
