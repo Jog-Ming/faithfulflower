@@ -3714,6 +3714,34 @@ public final class RoundTrip {
   }
 
   /**
+   * The offset of the load the operand's text begins with, or -1 when the expression owns no
+   * instruction or its first instruction is fed by no load. The walk is {@link #operandStartLine}'s:
+   * the loads that feed the operand's first instruction are contiguous, so walking back over them
+   * reaches the leaf the printer emits first without a bit of its own.
+   */
+  public static int operandStartOffset(Exprent exprent) {
+    int first = firstOffsetOf(exprent);
+    if (first < 0) {
+      return -1;
+    }
+    if (lineStartsAt(first)) {
+      return first;
+    }
+    StructMethod method = currentMethod();
+    int start = first;
+    int leaf = -1;
+    for (int step = 0; step < 32; step++) {
+      int previous = instructionEndingAt(method, start);
+      if (previous < 0 || !loadStartsAt(method, previous)) {
+        break;
+      }
+      leaf = previous;
+      start = previous;
+    }
+    return leaf;
+  }
+
+  /**
    * The target's line at which the operand's text begins, or -1 when its table has no entry of
    * its own. Only an entry at the operand's own first instruction proves the source broke before
    * it; an entry found anywhere else belongs to a sub-expression that changed line inside it.

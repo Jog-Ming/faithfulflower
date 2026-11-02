@@ -1455,6 +1455,15 @@ public class ExprProcessor implements CodeConstants {
       TextBuffer content = expr.toJava(indent);
 
       if (content.length() > 0) {
+        // The statement's text begins with the loads feeding its first instruction, and the
+        // expression maps only the instruction it owns: without a mapping at the leaf the aligner
+        // cannot see the line the table puts the statement's start on. The leaf is the walked-back
+        // load, not necessarily the exprent's first own offset, because an align-only mapping
+        // there would overwrite a plain one.
+        int leaf = RoundTrip.operandStartOffset(expr);
+        if (leaf >= 0 && RoundTrip.lineStartsAt(leaf)) {
+          content.addStartBytecodeMapping(leaf);
+        }
         if (!(expr instanceof VarExprent) || !((VarExprent)expr).isClassDef()) {
           buf.appendIndent(indent);
         }
