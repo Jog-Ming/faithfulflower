@@ -1738,7 +1738,10 @@ public class ExprProcessor implements CodeConstants {
     // accepts no captured argument: javac cannot prove the value's capture is a supertype of S,
     // whatever the value's own class is. The source cast the value to the declared target, and
     // javac elides that checkcast when the erasures already match.
-    if (!doCastGenerics && !doCast && exprent instanceof InvocationExprent
+    // A poly call is the exception: its own type parameters are what the target instantiates,
+    // and javac infers them from that target again, so the source let the context solve it.
+    if (!doCastGenerics && !doCast && exprent instanceof InvocationExprent invocation
+        && !invocation.isPolyCall()
         && lowerBoundedWildcardTarget(leftType) && castableToErasure(exprent, leftType)) {
       doCastGenerics = true;
     }

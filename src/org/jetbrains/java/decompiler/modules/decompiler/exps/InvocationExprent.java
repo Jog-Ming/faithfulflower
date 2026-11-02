@@ -351,6 +351,22 @@ public class InvocationExprent extends Exprent {
     return descriptor.ret;
   }
 
+  /**
+   * Whether the call's declared return type names the method's own type parameters. Such a call
+   * is poly: javac solves those variables from the context target again, so a cast that pins a
+   * wildcard target on it is the printer's own inference and the source let the context solve
+   * the call.
+   */
+  public boolean isPolyCall() {
+    StructMethod method = getDesc();
+    if (method == null || method.getSignature() == null) {
+      return false;
+    }
+    GenericMethodDescriptor signature = method.getSignature();
+    return !signature.typeParameters.isEmpty()
+      && mentionsTypeVariable(signature.returnType, signature.typeParameters);
+  }
+
 
   /** Whether the type mentions a type variable, i.e. something no target has fixed yet. */
   private static boolean hasUnboundVariable(VarType type) {
@@ -929,6 +945,19 @@ public class InvocationExprent extends Exprent {
           }
         });
 
+        // A method reference among the arguments fixes the call's type variables from the
+        // recorded signatures: an instance call or a shared argument list is no obstacle, and
+        // the reference does not have to be the receiver. The solved values are the printer's
+        // own inference, so no explicit type argument is written for them.
+        Map<VarType, VarType> argumentInference = null;
+        if (RoundTrip.selector("rt-demand-witness") && !fparams.isEmpty()) {
+          argumentInference = BuilderInference.solveArgumentReference(this, fparams, genericsMap);
+          if (argumentInference != null) {
+            argumentInference.forEach(genericsMap::putIfAbsent);
+          }
+        }
+        boolean argumentSolved = argumentInference != null && !argumentInference.isEmpty();
+
         if (!genericsMap.isEmpty()) {
           VarType newRet = ret.remap(hierarchyMap);
 
@@ -959,7 +988,7 @@ public class InvocationExprent extends Exprent {
               }
             }
 
-            boolean suppress = (!missing || !isInvocationInstance) && newRet != null &&
+            boolean suppress = (argumentSolved || !missing || !isInvocationInstance) && newRet != null &&
             (upperBound == null || !newRet.isGeneric() || DecompilerContext.getStructContext().instanceOf(newRet.value, upperBound.value));
 
             if (this.forceGenericQualfication) {

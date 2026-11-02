@@ -524,11 +524,341 @@ public final class BuilderInference {
   }
 
   /**
+   * Solves a call's type arguments from a method reference among its arguments. Unlike a
+   * receiver-only reference, the reference may share the argument list with other values and the
+   * call may be an instance call: the functional interface's instantiated arguments, the
+   * referenced method's declared signature (static, bound or no-bound) and the MethodHandle's
+   * recorded descriptor together determine the variables. Only variables whose solved value is
+   * nameable at the call site are written.
+   */
+  public static @Nullable Map<VarType, VarType> solveArgumentReference(InvocationExprent call, List<String> fparams,
+                                                                       Map<VarType, VarType> known) {
+    if (SOLVING.get()) {
+      return null;
+    }
+    SOLVING.set(Boolean.TRUE);
+    try {
+      return solveArgumentReferenceInner(call, fparams, known);
+    }
+    catch (RuntimeException e) {
+      return null;
+    }
+    finally {
+      SOLVING.set(Boolean.FALSE);
+    }
+  }
+
+  private static @Nullable Map<VarType, VarType> solveArgumentReferenceInner(InvocationExprent call, List<String> fparams,
+                                                                             Map<VarType, VarType> known) {
+    if (call.getFunctype() == InvocationExprent.Type.INIT || fparams.isEmpty()
+      || !call.isRecordedCallSite() || call.getLstParameters().isEmpty()
+      || !call.isReceiverPosition()) {
+      return null;
+    }
+    StructMethod callee = call.getDesc();
+    if (callee == null || callee.getSignature() == null) {
+      return null;
+    }
+    List<VarType> declaredParams = callee.getSignature().parameterTypes;
+    if (declaredParams.size() != call.getLstParameters().size()) {
+      return null;
+    }
+    Map<VarType, List<VarType>> named = call.getNamedGenerics();
+    boolean hasReference = false;
+    for (int index = 0; index < declaredParams.size(); index++) {
+      if (declaredParams.get(index) instanceof GenericType && call.getLstParameters().get(index) instanceof NewExprent reference
+        && reference.isMethodReference()) {
+        hasReference = true;
+        break;
+      }
+    }
+    if (!hasReference) {
+      return null;
+    }
+
+    // The arguments' own inferred values already carry what the reference solved, sometimes
+    // under the wildcard form the parameter declared (`? extends V`, `? super U`). The call's
+    // variables take those values once the wildcard is read as its bound; a value that still
+    // names a variable the call site cannot name is not written.
+    Map<VarType, VarType> fromKnown = new HashMap<>();
+    for (String name : fparams) {
+      VarType variable = GenericType.parse("T" + name + ";");
+      VarType value = stripWildcards(knownValue(variable, known));
+      if (value == null || value.type == CodeType.GENVAR || GenericType.DUMMY_VAR.equals(value)
+        || containsTaggedVariable(value) || !isNameable(value, named)) {
+        continue;
+      }
+      fromKnown.put(variable, value);
+    }
+    if (!fromKnown.isEmpty()) {
+      return fromKnown;
+    }
+
+    for (int index = 0; index < declaredParams.size(); index++) {
+      if (!(declaredParams.get(index) instanceof GenericType samType)) {
+        continue;
+      }
+      Exprent argument = call.getLstParameters().get(index);
+      if (!(argument instanceof NewExprent reference) || !reference.isMethodReference()) {
+        continue;
+      }
+      Map<VarType, VarType> solved = solveArgumentReference(reference, samType, fparams, known, named);
+      if (solved != null && !solved.isEmpty()) {
+        return solved;
+      }
+    }
+    return null;
+  }
+
+  /** The value the call's own inference recorded for a variable, also under its wildcard keys. */
+  private static @Nullable VarType knownValue(VarType variable, Map<VarType, VarType> known) {
+    if (variable == null || variable.type != CodeType.GENVAR) {
+      return null;
+    }
+    VarType value = known.get(variable);
+    if (value != null) {
+      return value;
+    }
+    for (int wildcard : new int[]{GenericType.WILDCARD_EXTENDS, GenericType.WILDCARD_SUPER,
+                                  GenericType.WILDCARD_UNBOUND}) {
+      value = known.get(GenericType.withWildcard(variable, wildcard));
+      if (value != null) {
+        return value;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * The nameable form of a recorded type: {@code ? super X} and {@code ? extends X} stand for
+   * their bound X, while an unbounded wildcard has no source spelling.
+   */
+  private static @Nullable VarType stripWildcards(VarType type) {
+    if (type == null) {
+      return null;
+    }
+    if (type instanceof GenericType generic) {
+      if (generic.getWildcard() != GenericType.WILDCARD_NO) {
+        if (generic.value == null) {
+          return null;
+        }
+        return stripWildcards(GenericType.withWildcard(generic, GenericType.WILDCARD_NO));
+      }
+      if (generic.getArguments().isEmpty()) {
+        return type;
+      }
+      List<VarType> arguments = new ArrayList<>(generic.getArguments().size());
+      boolean changed = false;
+      for (VarType argument : generic.getArguments()) {
+        if (argument == null) {
+          return null;
+        }
+        VarType value = stripWildcards(argument);
+        if (value == null) {
+          return null;
+        }
+        changed |= value != argument;
+        arguments.add(value);
+      }
+      return changed ? new GenericType(type.type, type.arrayDim, type.value, generic.getParent(),
+        Collections.unmodifiableList(arguments), generic.getWildcard()) : type;
+    }
+    return type;
+  }
+
+  private static @Nullable Map<VarType, VarType> solveArgumentReference(NewExprent reference, GenericType samType,
+                                                                        List<String> fparams, Map<VarType, VarType> known,
+                                                                        Map<VarType, List<VarType>> named) {
+    ClassNode referenceNode = DecompilerContext.getClassProcessor().getMapRootClasses().get(reference.getNewType().value);
+    if (referenceNode == null || referenceNode.lambdaInformation == null
+      || !referenceNode.lambdaInformation.is_method_reference) {
+      return null;
+    }
+    StructClass samClass = DecompilerContext.getStructContext().getClass(samType.value);
+    if (samClass == null || samClass.getSignature() == null) {
+      return null;
+    }
+    List<String> interfaceParams = samClass.getSignature().fparameters;
+    List<VarType> interfaceArgs = samType.getArguments();
+    if (interfaceParams.isEmpty() || interfaceParams.size() != interfaceArgs.size()) {
+      return null;
+    }
+    // The arguments the call's target and the other arguments have already solved. A reference
+    // whose interface arguments stay open cannot fix anything here.
+    Map<VarType, VarType> interfaceMap = new HashMap<>();
+    for (int i = 0; i < interfaceParams.size(); i++) {
+      VarType argument = interfaceArgs.get(i);
+      if (argument == null) {
+        return null;
+      }
+      VarType value = argument.remap(known);
+      if (value == null) {
+        return null;
+      }
+      interfaceMap.put(GenericType.parse("T" + interfaceParams.get(i) + ";"), value);
+    }
+
+    int samArity = MethodDescriptor.parseDescriptor(referenceNode.lambdaInformation.method_descriptor).params.length;
+    StructMethod samMethod = null;
+    for (StructMethod candidate : samClass.getMethods()) {
+      if (!referenceNode.lambdaInformation.method_name.equals(candidate.getName())
+        || candidate.hasModifier(CodeConstants.ACC_STATIC)
+        || !candidate.hasModifier(CodeConstants.ACC_ABSTRACT)
+        || MethodDescriptor.parseDescriptor(candidate.getDescriptor()).params.length != samArity) {
+        continue;
+      }
+      if (samMethod != null) {
+        return null;
+      }
+      samMethod = candidate;
+    }
+    if (samMethod == null || samMethod.getSignature() == null
+      || !samMethod.getSignature().typeParameters.isEmpty()) {
+      return null;
+    }
+
+    StructClass content = DecompilerContext.getStructContext().getClass(referenceNode.lambdaInformation.content_class_name);
+    if (content == null) {
+      return null;
+    }
+    StructMethod implementation = content.getMethodRecursive(referenceNode.lambdaInformation.content_method_name,
+      referenceNode.lambdaInformation.content_method_descriptor);
+    if (implementation == null || implementation.getSignature() == null) {
+      return null;
+    }
+    boolean staticImpl = implementation.hasModifier(CodeConstants.ACC_STATIC);
+    boolean bound = reference.getConstructor() != null && reference.getConstructor().getInstance() != null;
+
+    GenericMethodDescriptor samSignature = samMethod.getSignature();
+    List<VarType> samParams = new ArrayList<>(samSignature.parameterTypes.size());
+    for (VarType parameter : samSignature.parameterTypes) {
+      VarType instantiated = parameter.remap(interfaceMap);
+      if (instantiated == null) {
+        return null;
+      }
+      samParams.add(instantiated);
+    }
+    VarType samReturn = samSignature.returnType.remap(interfaceMap);
+    if (samReturn == null) {
+      return null;
+    }
+
+    // Alpha-rename the implementation's own variables against the call side.
+    Map<VarType, VarType> rename = renameTypeVariables(implementation.getSignature().typeParameters);
+    Map<VarType, VarType> classBinding = new HashMap<>();
+    int offset;
+    if (staticImpl) {
+      offset = 0;
+    }
+    else if (bound) {
+      offset = 0;
+    }
+    else {
+      // A no-bound instance reference takes its receiver from the SAM's first parameter; the
+      // projection onto the referenced class solves the class's own variables.
+      offset = 1;
+      if (samParams.isEmpty() || content.getSignature() == null) {
+        return null;
+      }
+      VarType receiver = strip(samParams.get(0));
+      if (receiver == null || receiver.type != CodeType.OBJECT || receiver.value == null
+        || content.getSignature().genericType == null
+        || content.getSignature().genericType.value == null) {
+        return null;
+      }
+      VarType view = receiver.value.equals(content.getSignature().genericType.value)
+        ? receiver : GenericType.getGenericSuperType(receiver, content.getSignature().genericType);
+      if (!(view instanceof GenericType viewType) || viewType.value == null
+        || !viewType.value.equals(content.getSignature().genericType.value)) {
+        return null;
+      }
+      content.getSignature().genericType.mapGenVarsTo(viewType, classBinding);
+      classBinding.values().removeIf(value -> value == null || GenericType.DUMMY_VAR.equals(value));
+    }
+    List<VarType> implParams = new ArrayList<>(implementation.getSignature().parameterTypes.size());
+    for (VarType parameter : implementation.getSignature().parameterTypes) {
+      implParams.add(parameter.remap(rename).remap(classBinding));
+    }
+    VarType implReturn = implementation.getSignature().returnType.remap(rename).remap(classBinding);
+
+    if (samParams.size() - offset != implParams.size()) {
+      return null;
+    }
+    Unifier unifier = new Unifier();
+    for (int i = 0; i < implParams.size(); i++) {
+      if (!unifier.unify(samParams.get(offset + i), implParams.get(i))) {
+        return null;
+      }
+    }
+    // The implementation's return may be a subtype of what the interface declares
+    // (CompletableFuture<T> for CompletionStage<U>); the projection names the common shape.
+    VarType expectedReturn = strip(samReturn);
+    VarType actualReturn = implReturn;
+    if (expectedReturn != null && expectedReturn.type == CodeType.OBJECT && actualReturn != null
+      && actualReturn.type == CodeType.OBJECT && actualReturn.value != null
+      && !actualReturn.value.equals(expectedReturn.value)
+      && DecompilerContext.getStructContext().instanceOf(actualReturn.value, expectedReturn.value)) {
+      VarType projected = GenericType.getGenericSuperType(actualReturn, expectedReturn);
+      if (projected instanceof GenericType projectedType && expectedReturn.value.equals(projectedType.value)) {
+        actualReturn = projected;
+      }
+    }
+    if (!unifier.unify(expectedReturn, actualReturn)) {
+      return null;
+    }
+
+    // The solved functional shape must convert to the method the MethodHandle records: a
+    // parameter may be a subtype of the implementation's erased parameter, and the
+    // implementation's return a subtype of the interface's.
+    MethodDescriptor recorded = MethodDescriptor.parseDescriptor(referenceNode.lambdaInformation.content_method_descriptor);
+    if (recorded.params.length != implParams.size()) {
+      return null;
+    }
+    for (int i = 0; i < implParams.size(); i++) {
+      VarType erased = eraseSolved(samParams.get(offset + i), unifier);
+      if (erased == null || !assignableTo(erased, recorded.params[i])) {
+        return null;
+      }
+    }
+    VarType erasedReturn = eraseSolved(samReturn, unifier);
+    if (erasedReturn == null || !assignableTo(recorded.ret, erasedReturn)) {
+      return null;
+    }
+
+    Map<VarType, VarType> solved = new HashMap<>();
+    for (String name : fparams) {
+      VarType variable = GenericType.parse("T" + name + ";");
+      VarType value = stripWildcards(unifier.substitute(variable));
+      if (value == null || value.type == CodeType.GENVAR || GenericType.DUMMY_VAR.equals(value)
+        || containsTaggedVariable(value) || !isNameable(value, named)) {
+        continue;
+      }
+      solved.put(variable, value);
+    }
+    return solved.isEmpty() ? null : solved;
+  }
+
+  /** Whether {@code from} converts to {@code to}: the same type or a subtype of it. */
+  private static boolean assignableTo(VarType from, VarType to) {
+    if (from == null || to == null) {
+      return false;
+    }
+    if (from.equals(to)) {
+      return true;
+    }
+    if (from.type != CodeType.OBJECT || to.type != CodeType.OBJECT
+      || from.arrayDim != to.arrayDim || from.value == null || to.value == null) {
+      return false;
+    }
+    return DecompilerContext.getStructContext().instanceOf(from.value, to.value);
+  }
+
+  /**
    * The erasure of a substituted signature type: a type variable that remains unsolved has no
    * bound the call could have written, and any type argument is dropped as the descriptor does.
    */
   private static @Nullable VarType eraseSolved(VarType type, Unifier unifier) {
-    VarType resolved = unifier.resolve(type);
+    VarType resolved = unifier.resolve(strip(type));
     if (resolved == null) {
       return null;
     }
