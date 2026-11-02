@@ -89,6 +89,49 @@ public final class Verifier {
     return score(version, target, only, threads, json, null);
   }
 
+  /** One arbitrary source tree's counters, compiled the way the verifier compiles. */
+  public record Measured(long sources, long failed, Metrics metrics) {
+  }
+
+  /**
+   * Compiles every source under a tree and sums the source-quality counters, without comparing
+   * anything: the measurement a ground-truth or rewritten tree needs, on the verifier's own javac
+   * and options.
+   */
+  public Measured measure(String version, Path target, int threads) throws Exception {
+    Path client = minecraft.clientJar(version, false);
+    List<Path> classpath = minecraft.classpath(version, false);
+    int release = releaseOf(client);
+    List<Path> sources;
+    try (var walk = Files.walk(target)) {
+      sources = walk.filter(p -> p.toString().endsWith(".java") && Files.isRegularFile(p))
+        .collect(java.util.stream.Collectors.toList());
+    }
+    ExecutorService pool = Executors.newFixedThreadPool(Math.max(1, threads));
+    List<Callable<Compiled>> tasks = new ArrayList<>();
+    for (Path source : sources) {
+      tasks.add(() -> compile(source, classpath, release));
+    }
+    Metrics totals = Metrics.ZERO;
+    long failed = 0;
+    try {
+      List<Future<Compiled>> futures = pool.invokeAll(tasks);
+      for (int i = 0; i < futures.size(); i++) {
+        Compiled compiled = futures.get(i).get();
+        byte[] bytes = Files.readAllBytes(sources.get(i));
+        SourceMetrics.Counts counts = SourceMetrics.casts(new String(bytes, StandardCharsets.UTF_8));
+        totals = totals.plus(new Metrics(compiled.metrics().raw(),
+          compiled.metrics().redundantCasts(), compiled.metrics().unchecked(), counts.doubleCasts()));
+        if (!compiled.ok()) {
+          failed++;
+        }
+      }
+    } finally {
+      pool.shutdown();
+    }
+    return new Measured(sources.size(), failed, totals);
+  }
+
   /**
    * Scores a tree, and when {@code since} is given also lists which files changed relative to that
    * earlier tree — the attribution half of an A/B, which the attribute counts cannot show.

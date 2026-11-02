@@ -169,6 +169,22 @@ public final class Main {
           System.exit(1);
         }
       }
+      case "metrics" -> {
+        List<String> positional = positionals(rest);
+        if (positional.size() < 2) {
+          throw new IllegalArgumentException("usage: metrics <version> <dir> [--threads N]");
+        }
+        int threads = intFlag(rest, "--threads", threadsDefault());
+        long started = System.nanoTime();
+        Verifier.Measured measured = new Verifier(workspace, minecraft)
+          .measure(positional.get(0), Path.of(positional.get(1)), threads);
+        long elapsed = (System.nanoTime() - started) / 1_000_000;
+        System.out.printf(Locale.ROOT,
+          "sources %d  failed %d  raw %d  redundant-casts %d  double-casts %d  unchecked %d  in %dms%n",
+          measured.sources(), measured.failed(), measured.metrics().raw(),
+          measured.metrics().redundantCasts(), measured.metrics().doubleCasts(),
+          measured.metrics().unchecked(), elapsed);
+      }
       case "reports" -> reports(workspace, rest);
       case "clean" -> clean(workspace, rest);
       case "cache" -> cache(workspace, rest);
@@ -556,7 +572,7 @@ public final class Main {
 
   private static boolean needsTargetJdk(String command) {
     return switch (command) {
-      case "score", "compile", "diff" -> true;
+      case "score", "compile", "diff", "metrics" -> true;
       default -> false;
     };
   }
@@ -853,6 +869,8 @@ public final class Main {
                                              --tree verifies a scratch copy of a tree
         compile   <version> <Class>            compile that one class with the verifier's javac
                                              settings and print its errors
+        metrics   <version> <dir> [--threads N]  compile every source under a tree with the
+                                             verifier's javac and sum its quality counters
         clean     [--trees] [--compile] [--downloads] [--all]
         reports   [--version V] [--limit N]   list past scores
         cache                                 show cache usage (file counts and sizes)
