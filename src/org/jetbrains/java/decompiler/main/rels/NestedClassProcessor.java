@@ -1281,12 +1281,26 @@ public class NestedClassProcessor {
   /**
    * The source line a local class is declared on, or minus one when the class file does not
    * name it. A local record's canonical constructor is generated from the declaration and is
-   * attributed to its first line; a class with no such member leaves the printed order alone.
+   * attributed to its first line. A plain local class has no member javac generates from the
+   * declaration: its own methods are attributed to the lines of the body, and the earliest of
+   * them is the first member line, which places the declaration in front of the first statement
+   * the source wrote after the class body. A class whose members name no line leaves the
+   * printed order alone.
    */
   private static int localClassDeclarationLine(ClassNode node) {
     StructClass cls = node.classStruct;
-    if (cls == null || cls.getRecordComponents() == null) {
+    if (cls == null) {
       return -1;
+    }
+    if (cls.getRecordComponents() == null) {
+      int line = -1;
+      for (StructMethod method : cls.getMethods()) {
+        int candidate = tableLine(method);
+        if (candidate >= 0 && (line < 0 || candidate < line)) {
+          line = candidate;
+        }
+      }
+      return line;
     }
     StringBuilder descriptor = new StringBuilder("(");
     for (StructRecordComponent component : cls.getRecordComponents()) {
