@@ -418,7 +418,9 @@ public class CatchStatement extends Statement {
               site = RoundTrip.rangeEndLineSite(rangeEnd, handlerOffset);
             }
           }
-          if (site >= 0) {
+          // The break printed inside the try already maps this jump, and its line is the one the
+          // table records for it: the brace must not claim an offset a statement owns.
+          if (site >= 0 && !buf.hasBytecodeMapping(site)) {
             buf.addBytecodeMapping(site);
           }
         }
