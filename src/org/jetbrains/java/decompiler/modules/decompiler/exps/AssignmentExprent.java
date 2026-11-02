@@ -261,6 +261,14 @@ public class AssignmentExprent extends Exprent {
     if (didReset) {
       // Reset cast state
       func.getInferredExprType(null);
+      // The cast now names the assignment's own type. A value the context already types exactly
+      // as that target needs no conversion, and javac emits no instruction for the redundant
+      // source cast; the recorded checkcast is the erasure boundary's, so let it print bare.
+      VarType valueType = func.getLstOperands().get(0).getInferredExprType(leftType);
+      if (FunctionExprent.sameType(valueType, leftType)) {
+        func.setNeedsCast(false);
+        func.setCompilerCast(true);
+      }
     }
   }
 

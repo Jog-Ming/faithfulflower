@@ -1591,6 +1591,19 @@ public class ExprProcessor implements CodeConstants {
     if (lvt == null && var.getProcessor() != null) {
       lvt = var.getProcessor().getVarLVT(var.getVarVersionPair());
     }
+    if (lvt == null && var.getProcessor() != null && var.getProcessor().hasLVT()) {
+      // The version-keyed map does not hold every slot: a parameter's row starts at pc 0, and
+      // the use's own VarExprent is a different version pair. The table's range query answers
+      // for the value's instruction, and the innermost row is the variable visible there.
+      Integer slot = var.getProcessor().getVarOriginalIndex(var.getIndex());
+      int offset = var.bytecode == null || var.bytecode.isEmpty() ? -1 : var.bytecode.nextSetBit(0);
+      if (slot != null && offset >= 0) {
+        lvt = var.getProcessor().getMethod().getLocalVariableAttr()
+          .matchingVars(slot, offset)
+          .max(Comparator.comparingInt(LocalVariable::getStartPC))
+          .orElse(null);
+      }
+    }
     if (lvt == null) {
       return null;
     }
@@ -1672,6 +1685,16 @@ public class ExprProcessor implements CodeConstants {
       switchExprent.setPrintTarget(leftType);
     }
     exprent = narrowGenericCastType(exprent, leftType);
+
+    // A cast around a context-independent value whose recorded type is exactly the context
+    // target converts nothing: javac sees the operand at the target type and reports the cast
+    // redundant. Poly expressions are excluded — the target is what types them, so the cast can
+    // be the source's inference hint — as is an overload-choice cast. Constants are excluded
+    // too: their inferred type is the context's, and a narrowing constant cast is what makes a
+    // byte/short argument or constructor compile.
+    boolean exactRecordedType = !castAlways && !InvocationExprent.inArgument() && rightType != null
+      && (exprent instanceof VarExprent || exprent instanceof FieldExprent)
+      && sameType(rightType, leftType);
 
     boolean doCast = (!leftType.higherEqualInLatticeThan(rightType) && (rightType.equals(VarType.VARTYPE_OBJECT) || leftType.type != CodeType.OBJECT));
     // A switch expression is poly: with a type variable as the target, javac infers the switch's
@@ -1888,8 +1911,8 @@ public class ExprProcessor implements CodeConstants {
     // recorded type that the cast was re-narrowing.
     boolean samePrimitive = castAlways && leftType.equals(rightType) && isPrimitive(leftType)
       && recordedPrimitiveMatches(exprent, leftType);
-    boolean cast = (castAlways && !narrowTernaryCast && !samePrimitive) || doCast || doCastNull
-      || doCastNarrowing || doCastGenerics || doubleCast || fieldBoundCast;
+    boolean cast = ((castAlways && !narrowTernaryCast && !samePrimitive) || doCast || doCastNull
+      || doCastNarrowing || doCastGenerics || doubleCast || fieldBoundCast) && !exactRecordedType;
 
     if (castNull == NullCastType.DONT_CAST_AT_ALL && rightType.type == CodeType.NULL) {
       cast = castAlways;
@@ -2391,7 +2414,15 @@ public class ExprProcessor implements CodeConstants {
             cast.setConstType(type);
           }
         } else if (genType.equalsExact(funcType) && !func.doesCast()) {
-          func.setNeedsCast(true);
+          // The cast's recorded target and the context target are the same type. A cast around
+          // a value whose own source type is exactly that type is the redundant one javac
+          // reports; keep the value bare and let its type stand.
+          VarType valueType = func.getLstOperands().get(0).getInferredExprType(null);
+          if (sameType(valueType, funcType)) {
+            func.setCompilerCast(true);
+          } else {
+            func.setNeedsCast(true);
+          }
         }
       }
     }

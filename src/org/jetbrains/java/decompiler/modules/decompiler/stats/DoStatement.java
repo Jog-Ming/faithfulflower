@@ -584,9 +584,17 @@ public class DoStatement extends Statement {
     } else {
       return;
     }
-    // The recorded cast is part of the loop expression's source; it must print even though the
-    // decompiler's own inference finds it redundant (a raw cast loses the element type).
-    cast.setNeedsCast(true);
+    // A raw recorded cast loses the element type, so the recovered form must print — unless the
+    // iterable's own source type already is exactly that form. javac calls a cast redundant when
+    // the operand's type is the same type as the cast's, so a source whose iterable already has
+    // the narrowed type wrote no cast: the recorded checkcast is the erasure boundary's.
+    VarType operandType = cast.getLstOperands().get(0).getInferredExprType(null);
+    if (isNameableForEachType(narrowed) && FunctionExprent.sameType(operandType, narrowed)) {
+      cast.setNeedsCast(false);
+      cast.setCompilerCast(true);
+    } else {
+      cast.setNeedsCast(true);
+    }
   }
 
   /** A type a for-each cast can name: no free variable, wildcard or raw generic anywhere. */

@@ -326,7 +326,20 @@ public class FunctionExprent extends Exprent {
             right = right.resizeArrayDim(arrayDim);
           }
 
+          // The recorded checkcast names exactly the value's own source type: no conversion
+          // happens, and javac emits no instruction for a redundant source cast, so this one is
+          // the erasure boundary's and must not be restored by the bytecode-range force.
+          if (this.recordedCheckcast && cast.size() == 1 && sameType(cast.get(0), right)) {
+            this.compilerCast = true;
+          }
+
           return right;
+        }
+
+        // The lattice probes above stripped the array dimension from the value's type. The
+        // conversion rules below compare whole types, so the value keeps its own shape.
+        if (arrayDim > 0) {
+          right = right.resizeArrayDim(arrayDim);
         }
       } else { //TODO: Capture generics to make cast better?
         final VarType finalRight = right;
@@ -352,6 +365,31 @@ public class FunctionExprent extends Exprent {
         && erasedCheckcast(cast.get(0), right, lstOperands.get(0))) {
         this.needsCast = false;
         this.compilerCast = true;
+      }
+
+      // JLS 10.7: an array's clone() has the array's own type, whatever the descriptor erases it
+      // to. The recorded checkcast is javac's adaptation of that special typing, and the source
+      // wrote no cast: printing one would be a redundant cast over a value javac already types.
+      if (cast.size() == 1 && arrayCloneCast(cast.get(0), lstOperands.get(0))) {
+        this.needsCast = false;
+        this.compilerCast = true;
+      }
+
+      // A recorded checkcast to a type variable (or an array of one) that the value's own source
+      // type already is exactly: javac's erasure boundary produced the instruction, and the
+      // source wrote the value bare. A wildcard capture fails the equality, which keeps the
+      // source's unchecked cast.
+      if (cast.size() == 1 && cast.get(0) != null && cast.get(0).type == CodeType.GENVAR
+        && nameableCastType(cast.get(0)) && sameType(cast.get(0), right)) {
+        this.needsCast = false;
+        this.compilerCast = true;
+      }
+
+      // A compiler cast has no written type: its value's type is the operand's own, so the
+      // enclosing printer must not compare the recorded erasure (Enum[] for a value the source
+      // typed E[]) against the context target and add a second, now redundant cast.
+      if (this.compilerCast && right != null) {
+        return right;
       }
 
       return getExprType();
@@ -421,8 +459,24 @@ public class FunctionExprent extends Exprent {
     return false;
   }
 
+  /**
+   * A recorded checkcast around an array's {@code clone()}: JLS 10.7 gives the invocation the
+   * receiver's array type, so the cast is javac's erasure adaptation. The receiver's recorded
+   * type must be the array the cast names — any other array conversion is the source's.
+   */
+  private static boolean arrayCloneCast(VarType target, Exprent operand) {
+    if (target == null || target.arrayDim == 0 || !(operand instanceof InvocationExprent call)
+      || call.getInstance() == null || call.isStatic() || !"clone".equals(call.getName())
+      || call.getDescriptor() == null || call.getDescriptor().params.length != 0
+      || call.getDescriptor().ret.arrayDim != 0) {
+      return false;
+    }
+    VarType receiver = call.getInstance().getExprType();
+    return receiver != null && receiver.arrayDim == target.arrayDim && sameType(receiver, target);
+  }
+
   /** Exact type equality, including generic arguments and wildcards. */
-  private static boolean sameType(VarType left, VarType right) {
+  public static boolean sameType(VarType left, VarType right) {
     if (left == right) {
       return true;
     }
@@ -1235,6 +1289,15 @@ public class FunctionExprent extends Exprent {
 
   public void setNeedsCast(boolean needsCast) {
     this.needsCast = needsCast;
+  }
+
+  /**
+   * Marks the cast as one javac inserts on its own at an erasure boundary: the source wrote the
+   * operand bare, and the cast must print as the operand alone even where the recorded checkcast
+   * would otherwise be kept.
+   */
+  public void setCompilerCast(boolean compilerCast) {
+    this.compilerCast = compilerCast;
   }
 
   /** Marks a cast created from a checkcast instruction, i.e. one the original source wrote. */

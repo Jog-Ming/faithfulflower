@@ -410,6 +410,16 @@ public class InvocationExprent extends Exprent {
       desc = cl != null ? cl.getMethodRecursive(name, stringDescriptor) : null;
     }
 
+    // JLS 10.7: an array's clone() has the array's own type. The descriptor erases that to
+    // Object, and the source's use of the value is typed by the receiver, not by the erasure.
+    if (instance != null && !isStatic && "clone".equals(name) && lstParameters.isEmpty()
+      && descriptor.params.length == 0 && descriptor.ret.arrayDim == 0) {
+      VarType receiver = instance.getExprType();
+      if (receiver != null && receiver.arrayDim > 0) {
+        return receiver;
+      }
+    }
+
     // Clear existing state
     genericArgs.clear();
     genericsMap.clear();
