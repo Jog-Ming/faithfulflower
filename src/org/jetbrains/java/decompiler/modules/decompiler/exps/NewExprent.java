@@ -1632,6 +1632,10 @@ public class NewExprent extends Exprent {
       if (resolved instanceof GenericType generic && generic.getWildcard() != GenericType.WILDCARD_NO) {
         resolved = GenericType.withWildcard(generic, GenericType.WILDCARD_NO);
       }
+      // A lower-bounded wildcard deeper in the parameter type is a capture our inference left
+      // where javac solved the variable to the bound itself (List<? super S> against a value
+      // the call instantiates with List<S>). The bound is what types the body.
+      resolved = unwrapLowerBounds(resolved);
       // Only a type the source could name may stand for the parameter: a variable the target
       // left open, or a wildcard, is the inference's own capture and pinning it would change
       // what the target infers from the body.
@@ -1641,6 +1645,43 @@ public class NewExprent extends Exprent {
       types.add(!inferenceVariable && resolved != null && nameableLambdaParameterType(resolved) ? resolved : null);
     }
     return types;
+  }
+
+  /**
+   * Replaces every {@code ? super X} inside a lambda parameter type with its bound X, or null
+   * when an unbounded wildcard leaves no nameable form. An upper-bounded wildcard is left as
+   * the target recorded it.
+   */
+  private static VarType unwrapLowerBounds(VarType type) {
+    if (type instanceof GenericType generic) {
+      if (generic.getWildcard() == GenericType.WILDCARD_SUPER) {
+        return generic.value == null ? null
+          : unwrapLowerBounds(GenericType.withWildcard(generic, GenericType.WILDCARD_NO));
+      }
+      if (generic.getArguments().isEmpty()) {
+        return type;
+      }
+      List<VarType> arguments = new ArrayList<>(generic.getArguments().size());
+      boolean changed = false;
+      for (VarType argument : generic.getArguments()) {
+        if (argument == null) {
+          arguments.add(null);
+          continue;
+        }
+        VarType unwrapped = unwrapLowerBounds(argument);
+        if (unwrapped == null) {
+          return null;
+        }
+        if (unwrapped != argument) {
+          changed = true;
+        }
+        arguments.add(unwrapped);
+      }
+      return changed
+        ? new GenericType(generic.type, generic.arrayDim, generic.value, generic.getParent(), arguments, generic.getWildcard())
+        : type;
+    }
+    return type;
   }
 
   /**
