@@ -305,7 +305,8 @@ public class IfStatement extends Statement {
     // head; the edge tells which keyword the guard printed.
     if (ifstat == null && elsestat == null && !isLabeled() && !isPatternMatched()
         && condition instanceof IfExprent ifHead
-        && !declaresPattern(ifHead.getCondition())
+        // A pattern test only prints back apart in the fused-first-break shape, where the
+        // binding's flow scope ends at the statement that declares it; printMergedGuards decides.
         && ifedge != null
         && (ifedge.getType() == StatEdge.TYPE_CONTINUE || ifedge.getType() == StatEdge.TYPE_BREAK)
         // An explicit jump edge carries the continue or break; a labeled one is `continue outer;`
@@ -1534,12 +1535,22 @@ public class IfStatement extends Statement {
     // the merge kept the test for reaching the next statement and each group needs its complement.
     boolean written = ifedge.explicit;
     List<Exprent> operands = written ? orOperands(head.getCondition()) : booleanOperands(head.getCondition());
-    RoundTrip.GuardSplit split = RoundTrip.mergedGuards(head, operands, this, breaks);
+    // A condition that declares a pattern variable prints back apart only through the fused first
+    // break: each written guard becomes its own statement, and the binding's flow scope ends
+    // exactly where the statement that declares it does.
+    boolean patternCondition = declaresPattern(head.getCondition());
+    RoundTrip.GuardSplit split = patternCondition ? null
+      : RoundTrip.mergedGuards(head, operands, this, breaks);
+    if (split == null && written) {
+      // The first written guard's break may be fused into its own branch, leaving no pair for the
+      // table to split at; the operand that starts the next statement is where the second if began.
+      split = RoundTrip.fusedFirstBreak(operands, this, breaks);
+    }
     if (split == null) {
       // A run of guards whose continues each run through a try-with-resources close: the target
       // records every branch as an else guard at the close's goto, and the next statement begins
       // at the branch's target. Split the run there and print one guard per group.
-      List<List<Exprent>> closeGroups = written && !breaks
+      List<List<Exprent>> closeGroups = written && !breaks && !patternCondition
         ? RoundTrip.closeGuardGroups(head, operands, this) : null;
       if (closeGroups == null) {
         return false;

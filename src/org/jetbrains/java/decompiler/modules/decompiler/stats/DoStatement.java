@@ -252,6 +252,10 @@ public class DoStatement extends Statement {
           break;
         }
         Exprent whileGuard = RoundTrip.foldedBreakGuard(conditionExprent.get(0), this, first);
+        // `while (A) { if (B) { if (!test) break; body } else break; }`: the merge folded the
+        // outer if's test and the inner break guard into one `B && test` operand. The outer test
+        // exits on its own branch; the inner test is the pair the merge consumed.
+        Exprent[] nestedGuard = whileGuard == null ? null : RoundTrip.nestedBreakGuard(whileGuard, this);
         buf.appendIndent(indent).append("while (");
         buf.pushNewlineGroup(indent, 1);
         buf.appendPossibleNewline();
@@ -260,10 +264,20 @@ public class DoStatement extends Statement {
         buf.appendPossibleNewline("", true);
         buf.popNewlineGroup();
         buf.append(") {").appendLineSeparator();
-        if (whileGuard != null) {
+        if (nestedGuard != null) {
+          buf.appendIndent(indent + 1).append("if (")
+            .append(nestedGuard[0].toJava(indent + 1)).append(") {").appendLineSeparator();
+          appendBreakGuard(buf, nestedGuard[1], indent + 2);
+          buf.append(ExprProcessor.jmpWrapper(first, indent + 2, false));
+          buf.appendIndent(indent + 1).append("} else {").appendLineSeparator();
+          buf.appendIndent(indent + 2).append("break;").appendLineSeparator();
+          buf.appendIndent(indent + 1).append("}").appendLineSeparator();
+        } else if (whileGuard != null) {
           appendBreakGuard(buf, whileGuard, indent + 1);
+          buf.append(ExprProcessor.jmpWrapper(first, indent + 1, false));
+        } else {
+          buf.append(ExprProcessor.jmpWrapper(first, indent + 1, false));
         }
-        buf.append(ExprProcessor.jmpWrapper(first, indent + 1, false));
         appendLoopClose(buf, indent);
         break;
       case FOR:

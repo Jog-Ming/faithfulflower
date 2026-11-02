@@ -8379,6 +8379,119 @@ public final class RoundTrip {
     return groups.size() > 1 ? new GuardSplit(groups, headGroup) : null;
   }
 
+  /**
+   * The groups of a written guard run whose FIRST break the compiler fused into its own branch:
+   * {@code if (!A) break; if (B) break;} needs no goto for the first break when a pattern binding
+   * follows it, so the test branches straight to the exit. A single {@code if (!A || B) break;}
+   * would emit that goto, and its absence is the proof the run was two statements. The second
+   * statement must begin a line of its own: its first instruction carries the entry, where a
+   * continuation of one expression enters the line at the invocation instead.
+   */
+  public static GuardSplit fusedFirstBreak(java.util.List<Exprent> operands, Statement around, boolean breaks) {
+    if (!selector("continueguard") || operands == null || operands.size() != 2) {
+      return null;
+    }
+    StructMethod method = currentMethod();
+    if (method == null) {
+      return null;
+    }
+    java.util.Map<Integer, Integer> ends = INSTRUCTION_ENDS.get(method);
+    java.util.Map<Integer, Integer> targets = BRANCH_TARGETS.get(method);
+    java.util.Map<Integer, Integer> gotos = GOTO_TARGETS.get(method);
+    if (ends == null || targets == null || gotos == null) {
+      return null;
+    }
+    Exprent first = operands.get(0);
+    Exprent second = operands.get(1);
+    if (first == null || second == null) {
+      return null;
+    }
+    int branchEnd = lastBranchEnd(ends, targets, first);
+    // A goto after the branch is the single statement's break; the pair is the ordinary guard.
+    if (branchEnd < 0 || gotos.containsKey(branchEnd)) {
+      return null;
+    }
+    Integer target = targets.get(branchEnd);
+    if (target == null || (breaks ? !targetBreaks(target, around) : !targetContinues(target, around))) {
+      return null;
+    }
+    int secondStart = firstOffsetOf(second);
+    if (secondStart < 0 || !lineStartsAt(secondStart)) {
+      return null;
+    }
+    int start = lineAtOffset(secondStart);
+    int endLine = lastLine(first);
+    if (endLine < 0) {
+      endLine = sourceLineEnd(first);
+    }
+    if (start < 0 || endLine < 0 || start <= endLine) {
+      return null;
+    }
+    java.util.List<java.util.List<Exprent>> groups = new java.util.ArrayList<>();
+    groups.add(new java.util.ArrayList<>(java.util.List.of(first)));
+    groups.add(new java.util.ArrayList<>(java.util.List.of(second)));
+    return new GuardSplit(groups, -1);
+  }
+
+  /** The end offset of the last conditional branch the expression covers, or -1. */
+  private static int lastBranchEnd(java.util.Map<Integer, Integer> ends,
+                                   java.util.Map<Integer, Integer> targets, Exprent exprent) {
+    BitSet bits = exprent == null ? null : exprent.bytecode;
+    if (bits == null) {
+      return -1;
+    }
+    int branchEnd = -1;
+    for (int offset = bits.nextSetBit(0); offset >= 0; offset = bits.nextSetBit(offset + 1)) {
+      Integer end = ends.get(offset);
+      if (end != null && targets.containsKey(end)) {
+        branchEnd = end;
+      }
+    }
+    return branchEnd;
+  }
+
+  /**
+   * The two written tests of a loop guard the source wrote as {@code if (B) { if (!test) break;
+   * body } else break;}: the merge folded both into the loop condition as {@code B && test}, and
+   * the inner statement's branch-then-goto pair is what {@link #foldedBreakGuard} read as the
+   * guard. The first test's own branch carries no pair — it lands past the loop's code directly,
+   * where a written {@code if (!B) break;} of a flat run of guards would leave one — and it takes
+   * the same exit as the inner test's goto. Returns {@code {B, test}}, or null.
+   */
+  public static Exprent[] nestedBreakGuard(Exprent guard, Statement loop) {
+    if (!selector("loopguard") || !(guard instanceof FunctionExprent function)
+        || function.getFuncType() != FunctionExprent.FunctionType.BOOLEAN_AND
+        || function.getLstOperands().size() != 2) {
+      return null;
+    }
+    StructMethod method = currentMethod();
+    java.util.Map<Integer, Integer> ends = method == null ? null : INSTRUCTION_ENDS.get(method);
+    java.util.Map<Integer, Integer> targets = method == null ? null : BRANCH_TARGETS.get(method);
+    java.util.Map<Integer, Integer> gotos = method == null ? null : GOTO_TARGETS.get(method);
+    BitSet loopBits = loop == null ? null : statementOffsets(loop);
+    if (ends == null || targets == null || gotos == null || loopBits == null || loopBits.isEmpty()) {
+      return null;
+    }
+    int loopEnd = loopBits.length() - 1;
+    Exprent before = function.getLstOperands().get(0);
+    Exprent test = function.getLstOperands().get(1);
+    int beforeBranch = lastBranchEnd(ends, targets, before);
+    if (beforeBranch < 0 || gotos.containsKey(beforeBranch)) {
+      // A pair is the flat run's written `if (!B) break;`: its own statement, not an else arm.
+      return null;
+    }
+    Integer beforeTarget = targets.get(beforeBranch);
+    int testBranch = lastBranchEnd(ends, targets, test);
+    if (beforeTarget == null || beforeTarget <= loopEnd || testBranch < 0) {
+      return null;
+    }
+    Integer exit = gotos.get(testBranch);
+    if (exit == null || !exit.equals(beforeTarget)) {
+      return null;
+    }
+    return new Exprent[]{before, test};
+  }
+
   /** A condition split at the target's recorded guards. */
   public static final class GuardSplit {
     public final java.util.List<java.util.List<Exprent>> groups;
