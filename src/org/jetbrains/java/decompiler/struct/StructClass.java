@@ -302,7 +302,11 @@ public class StructClass extends StructMember {
             else {
               Map<VarType, VarType> sub = new HashMap<>();
               for (Entry<VarType, VarType> e2 : e.getValue().entrySet()) {
-                sub.put(e2.getKey(), sig.getOrDefault(e2.getValue(), e2.getValue()));
+                // The parent's view can name one of its own variables inside a compound type
+                // (`ArgumentType<Holder<T>>`), so the value is remapped recursively, not looked
+                // up as a whole: a plain getOrDefault leaves the variable uninstantiated and
+                // the child's generic view leaks the parent's parameter.
+                sub.put(e2.getKey(), e2.getValue() == null ? null : e2.getValue().remap(sig));
               }
               ret.put(e.getKey(), sub);
             }
@@ -336,7 +340,9 @@ public class StructClass extends StructMember {
             else {
               Map<VarType, VarType> sub = new HashMap<>();
               for (Entry<VarType, VarType> e2 : e.getValue().entrySet()) {
-                sub.put(e2.getKey(), sig.getOrDefault(e2.getValue(), e2.getValue()));
+                // Same recursive substitution as the interface branch above: a superclass view
+                // such as `ArgumentType<Holder<T>>` carries its variable inside an argument.
+                sub.put(e2.getKey(), e2.getValue() == null ? null : e2.getValue().remap(sig));
               }
               ret.put(e.getKey(), sub);
             }
