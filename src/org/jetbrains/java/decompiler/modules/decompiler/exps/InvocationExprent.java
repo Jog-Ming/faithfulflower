@@ -1148,7 +1148,6 @@ public class InvocationExprent extends Exprent {
     if (recordedReturn != null) {
       return recordedReturn;
     }
-
     return getExprType();
   }
 

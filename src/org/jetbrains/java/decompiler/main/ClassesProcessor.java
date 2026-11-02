@@ -305,6 +305,10 @@ public class ClassesProcessor implements CodeConstants {
                 // this is crucial for naming the local variables correctly
                 // FIXME: figure out a better way of detecting when this information is incorrect and when not
                 if (nestedNode.type == ClassNode.Type.ANONYMOUS) {
+                  // The class file names the source method; the code that creates the class may
+                  // sit in a synthetic lambda method. Keep the source method for type scope and
+                  // clear the name so the lambda method is recorded for variable scopes later.
+                  nestedNode.sourceEnclosingMethod = nestedNode.enclosingMethod;
                   nestedNode.enclosingMethod = null;
                 }
                 nestedNode.access = rec.accessFlags;
@@ -641,6 +645,14 @@ public class ClassesProcessor implements CodeConstants {
      */
     public @Nullable StructMethod dynamicInitializerOwner;
     public String enclosingMethod;
+    /**
+     * The method whose type parameters and text enclose this class in the source. For an
+     * anonymous class whose class file names the real method but which is created inside a
+     * lambda, the source enclosing method is that real method; {@link #enclosingMethod} names
+     * the synthetic lambda method, which is where the captured variables' names and table
+     * scopes live. Type scope reads this field, naming reads the other.
+     */
+    public String sourceEnclosingMethod;
     public InvocationExprent superInvocation;
     public final Map<String, VarVersionPair> mapFieldsToVars = new HashMap<>();
     public VarType anonymousClassType;

@@ -395,7 +395,9 @@ public abstract class Exprent implements IMatchable {
       if (class_ == null || class_.parent == null || class_.parent.getWrapper() == null) {
         break;
       }
-      method = class_.enclosingMethod == null ? null : class_.parent.getWrapper().getMethods().getWithKey(class_.enclosingMethod);
+      String enclosing = class_.sourceEnclosingMethod != null
+        ? class_.sourceEnclosingMethod : class_.enclosingMethod;
+      method = enclosing == null ? null : class_.parent.getWrapper().getMethods().getWithKey(enclosing);
       class_ = class_.parent;
     }
     return ret;
@@ -472,10 +474,11 @@ public abstract class Exprent implements IMatchable {
   /** Whether a method enclosing this class node in the source declares the variable. */
   private static boolean declaredByEnclosingMethod(ClassNode start, String name) {
     for (ClassNode node = start; node != null && node.parent != null; node = node.parent) {
-      if (node.enclosingMethod == null || node.parent.getWrapper() == null) {
+      String enclosing = node.sourceEnclosingMethod != null ? node.sourceEnclosingMethod : node.enclosingMethod;
+      if (enclosing == null || node.parent.getWrapper() == null) {
         continue;
       }
-      MethodWrapper host = node.parent.getWrapper().getMethods().getWithKey(node.enclosingMethod);
+      MethodWrapper host = node.parent.getWrapper().getMethods().getWithKey(enclosing);
       if (host != null && host.methodStruct != null && host.methodStruct.getSignature() != null
         && host.methodStruct.getSignature().typeParameters.contains(name)) {
         return true;
