@@ -1,6 +1,7 @@
 // Copyright 2000-2018 JetBrains s.r.o. Use of this source code is governed by the Apache 2.0 license that can be found in the LICENSE file.
 package org.jetbrains.java.decompiler.modules.decompiler;
 
+import org.jetbrains.annotations.Nullable;
 import org.jetbrains.java.decompiler.api.Decompiler;
 import org.jetbrains.java.decompiler.api.plugin.LanguageSpec;
 import org.jetbrains.java.decompiler.api.plugin.StatementWriter;
@@ -1584,6 +1585,42 @@ public class ExprProcessor implements CodeConstants {
     return recorded != null && isPrimitive(recorded) && recorded.equals(type);
   }
 
+  /** The type the local variable table records for this variable, signature first. */
+  private static @Nullable VarType recordedVarType(VarExprent var) {
+    LocalVariable lvt = var.getLVT();
+    if (lvt == null && var.getProcessor() != null) {
+      lvt = var.getProcessor().getVarLVT(var.getVarVersionPair());
+    }
+    if (lvt == null) {
+      return null;
+    }
+    if (lvt.getSignature() != null) {
+      try {
+        return GenericType.parse(lvt.getSignature());
+      } catch (RuntimeException ignored) {
+        return lvt.getVarType();
+      }
+    }
+    return lvt.getVarType();
+  }
+
+  /** Exact type equality, including generic arguments and wildcards. */
+  private static boolean sameType(VarType left, VarType right) {
+    if (left == right) {
+      return true;
+    }
+    if (left == null || right == null) {
+      return false;
+    }
+    if (left instanceof GenericType generic) {
+      return generic.equalsExact(right);
+    }
+    if (right instanceof GenericType generic) {
+      return generic.equalsExact(left);
+    }
+    return left.equals(right);
+  }
+
   public static boolean getCastedExprent(Exprent exprent,
                                          VarType leftType,
                                          TextBuffer buffer,
@@ -1621,6 +1658,14 @@ public class ExprProcessor implements CodeConstants {
       }
     } else {
       rightType = exprent.getInferredExprType(leftType);
+    }
+    // A local whose table row records exactly the target type needs no cast: the printer's own
+    // inference fell back to an erasure or a wildcard the source never wrote.
+    if (exprent instanceof VarExprent recordedVar) {
+      VarType recorded = recordedVarType(recordedVar);
+      if (recorded != null && sameType(recorded, leftType)) {
+        rightType = leftType;
+      }
     }
     if (exprent instanceof SwitchExprent switchExprent) {
       // The switch is poly in this context; the arms are printed against this target.

@@ -537,7 +537,7 @@ public class VarExprent extends Exprent implements Pattern {
       return null;
     }
     String name = processor.getVarName(getVarVersionPair());
-    return name == null ? null : Exprent.currentLambdaParameterTypes().get(name);
+    return name == null ? null : Exprent.lambdaParameterType(name);
   }
 
   /** The function target's type for this lambda parameter, or null outside a lambda body. */

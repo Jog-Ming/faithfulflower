@@ -76,6 +76,24 @@ public abstract class Exprent implements IMatchable {
     return stack.isEmpty() ? Collections.emptyMap() : stack.peek();
   }
 
+  /**
+   * The functional type of the slot printed as {@code name}, searched from the innermost lambda
+   * body out: an outer lambda's parameter stays readable as a captured local inside a nested
+   * lambda, whose own map does not name it.
+   */
+  public static @org.jetbrains.annotations.Nullable VarType lambdaParameterType(String name) {
+    if (lambdaParameterTypesSuspended()) {
+      return null;
+    }
+    for (Map<String, VarType> types : lambdaParameterTypes.get()) {
+      VarType type = types.get(name);
+      if (type != null) {
+        return type;
+      }
+    }
+    return null;
+  }
+
   public static void pushLambdaParameterTypes(Map<String, VarType> types) {
     lambdaParameterTypes.get().push(types);
   }

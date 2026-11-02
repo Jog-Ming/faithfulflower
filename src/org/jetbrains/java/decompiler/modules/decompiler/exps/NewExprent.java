@@ -1604,6 +1604,18 @@ public class NewExprent extends Exprent {
       map = new HashMap<>();
       iface.getSignature().genericType.mapGenVarsTo((GenericType) inferredLambdaType, map);
     }
+    // A type variable that is both the parameter and the return type is the inference variable
+    // a value-preserving lambda fixes from its target; pinning it here would decide the very
+    // inference the source's own cast may have been written to guide.
+    VarType samReturn = sam.getSignature() != null && sam.getSignature().returnType != null
+      ? sam.getSignature().returnType
+      : MethodDescriptor.parseDescriptor(sam.getDescriptor()).ret;
+    if (map != null) {
+      samReturn = samReturn.remap(map);
+    }
+    if (samReturn instanceof GenericType returnWildcard && returnWildcard.getWildcard() != GenericType.WILDCARD_NO) {
+      samReturn = GenericType.withWildcard(returnWildcard, GenericType.WILDCARD_NO);
+    }
     List<VarType> types = new ArrayList<>();
     for (VarType parameter : parameters) {
       VarType resolved = map == null ? parameter : parameter.remap(map);
@@ -1613,14 +1625,22 @@ public class NewExprent extends Exprent {
       // Only a type the source could name may stand for the parameter: a variable the target
       // left open, or a wildcard, is the inference's own capture and pinning it would change
       // what the target infers from the body.
-      types.add(resolved != null && nameableLambdaParameterType(resolved) ? resolved : null);
+      boolean inferenceVariable = resolved != null && resolved.type == CodeType.GENVAR
+        && samReturn != null && samReturn.type == CodeType.GENVAR
+        && resolved.value != null && resolved.value.equals(samReturn.value);
+      types.add(!inferenceVariable && resolved != null && nameableLambdaParameterType(resolved) ? resolved : null);
     }
     return types;
   }
 
   private static boolean nameableLambdaParameterType(VarType type) {
-    if (type == null || type.type == CodeType.GENVAR || type.type == CodeType.VOID
-        || type.type == CodeType.UNKNOWN) {
+    if (type == null || type.type == CodeType.VOID || type.type == CodeType.UNKNOWN) {
+      return false;
+    }
+    if (type.type == CodeType.GENVAR) {
+      return nameableTypeVariable(type.value);
+    }
+    if (type instanceof GenericType generic && generic.getWildcard() != GenericType.WILDCARD_NO) {
       return false;
     }
     if (type instanceof GenericType generic) {
@@ -1643,6 +1663,23 @@ public class NewExprent extends Exprent {
       }
     }
     return true;
+  }
+
+  /** Whether a type variable of this name is in scope at the print site. */
+  private static boolean nameableTypeVariable(String name) {
+    if (name == null || name.isEmpty()) {
+      return false;
+    }
+    MethodWrapper method = DecompilerContext.getContextProperty(DecompilerContext.CURRENT_METHOD_WRAPPER);
+    if (method == null) {
+      return false;
+    }
+    GenericMethodDescriptor methodSignature = method.methodStruct.getSignature();
+    if (methodSignature != null && methodSignature.typeParameters.contains(name)) {
+      return true;
+    }
+    GenericClassDescriptor classSignature = method.classStruct.getSignature();
+    return classSignature != null && classSignature.fparameters.contains(name);
   }
 
   /**
