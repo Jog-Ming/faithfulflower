@@ -305,6 +305,66 @@ public class SwitchExprent extends Exprent {
   }
 
   /**
+   * Whether a simple arm's value cannot be converted to the target without a cast. A local,
+   * field or constant is typed by the class file; when it is neither the target nor a subtype
+   * of it, javac rejects a bare switch, so the outer cast is the source's and must stay. Block
+   * arms and poly values are left to their own printing.
+   */
+  public boolean simpleArmsFitTarget(VarType target) {
+    if (target == null) {
+      return false;
+    }
+    for (Statement stat : backing.getCaseStatements()) {
+      List<Exprent> exprents = stat.getExprents();
+      if (exprents == null || exprents.size() != 1 || !(exprents.get(0) instanceof YieldExprent yield)) {
+        continue;
+      }
+      Exprent content = yield.getContent();
+      if (!(content instanceof VarExprent || content instanceof FieldExprent || content instanceof ConstExprent)) {
+        continue;
+      }
+      VarType type = content.getExprType();
+      if (type == null) {
+        return false;
+      }
+      if (type.type == CodeType.NULL) {
+        continue;
+      }
+      if (FunctionExprent.sameType(type, target)) {
+        continue;
+      }
+      if (target.type == CodeType.GENVAR) {
+        // A concrete type is not implicitly convertible to a type variable.
+        return false;
+      }
+      if (type.type != CodeType.OBJECT || target.type != CodeType.OBJECT || type.value == null
+        || target.value == null || type.arrayDim != target.arrayDim
+        || !DecompilerContext.getStructContext().instanceOf(type.value, target.value)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Whether a label is {@code case null}: the null does not determine the switch's type, so the
+   * surrounding context needs the explicit cast to type the merge.
+   */
+  public boolean hasNullCase() {
+    for (List<Exprent> values : backing.getCaseValues()) {
+      if (values == null) {
+        continue;
+      }
+      for (Exprent value : values) {
+        if (value instanceof ConstExprent constant && constant.isNull()) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /**
    * A bare switch with a type-variable target gets one cast per arm to the switch's own erasure
    * from javac itself, so the cast the tree carries around each arm's value is that compiled
    * coercion, not something the source wrote. Printing the value lets javac put it back.

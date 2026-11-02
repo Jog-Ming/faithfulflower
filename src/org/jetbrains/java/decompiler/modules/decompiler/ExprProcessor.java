@@ -1694,8 +1694,18 @@ public class ExprProcessor implements CodeConstants {
     // expressions are excluded — the target is what types them — and so is an overload-choice
     // cast. Constants are excluded too: their inferred type is the context's, and a narrowing
     // constant cast is what makes a byte/short argument or constructor compile.
+    // A lambda parameter's recorded type can keep the functional target's wildcard form; the
+    // value's own source type is its bound (`? super X` stands for X there), so the variable is
+    // exactly the target when the bound is.
+    boolean wildcardParameter = exprent instanceof VarExprent
+      && rightType instanceof GenericType wildcardRight
+      && wildcardRight.getWildcard() != GenericType.WILDCARD_NO
+      && sameType(GenericType.withWildcard(wildcardRight, GenericType.WILDCARD_NO), leftType);
+
     boolean exactRecordedType = !castAlways && rightType != null
       && ((exprent instanceof VarExprent recordedVar && sameType(recordedVarType(recordedVar), leftType))
+          || (exprent instanceof VarExprent lambdaVar && lambdaVar.lambdaParameterTypeEquals(leftType))
+          || wildcardParameter
           || (!InvocationExprent.inArgument()
               && (exprent instanceof VarExprent || exprent instanceof FieldExprent)
               && sameType(rightType, leftType)));
@@ -1917,6 +1927,15 @@ public class ExprProcessor implements CodeConstants {
       && recordedPrimitiveMatches(exprent, leftType);
     boolean cast = ((castAlways && !narrowTernaryCast && !samePrimitive) || doCast || doCastNull
       || doCastNarrowing || doCastGenerics || doubleCast || fieldBoundCast) && !exactRecordedType;
+
+    // A switch expression is poly: javac types every arm from the context target and emits no
+    // cast after the merge, so an outer cast is the printer's. The target was handed to the
+    // switch above. A `case null` cannot determine the merge's type, so that switch keeps the
+    // context's spelled-out cast.
+    if (exprent instanceof SwitchExprent switchCast && !switchCast.hasNullCase()
+        && switchCast.simpleArmsFitTarget(leftType)) {
+      cast = false;
+    }
 
     if (castNull == NullCastType.DONT_CAST_AT_ALL && rightType.type == CodeType.NULL) {
       cast = castAlways;
