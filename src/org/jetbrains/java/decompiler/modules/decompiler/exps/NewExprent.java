@@ -61,6 +61,10 @@ public class NewExprent extends Exprent {
   // parameter type rather than from resolved arguments; only an in-scope type variable return
   // is used from such a target.
   private boolean wildcardTargetLambda = false;
+  // The call site's recorded target names a capture at a SAM position instead of a type the
+  // source could write. An identity parameter (the parameter and the return are one variable)
+  // must then stay untyped, or the source's own cast, which guides the inference, is lost.
+  private boolean functionalParameterCaptured = true;
   // Type arguments the class file proved for a constructor call whose diamond javac would
   // otherwise close on a narrower type than the recorded method reference needs.
   private List<VarType> forcedConstructorArgs;
@@ -1579,6 +1583,15 @@ public class NewExprent extends Exprent {
   }
 
   /**
+   * Tells this lambda whether the call site's recorded target left a SAM position captured. A
+   * captured target cannot type an identity parameter: its position is an inference the source's
+   * own cast is what guides.
+   */
+  public void setFunctionalParameterCaptured(boolean captured) {
+    this.functionalParameterCaptured = captured;
+  }
+
+  /**
    * The SAM's return type as this functional argument was inferred to produce, instantiated from
    * the functional interface's recorded type. A type variable that stays unresolved here belongs
    * to the referenced class or the interface itself; print-time code cannot name it, and a
@@ -1666,10 +1679,13 @@ public class NewExprent extends Exprent {
       resolved = unwrapLowerBounds(resolved);
       // Only a type the source could name may stand for the parameter: a variable the target
       // left open, or a wildcard, is the inference's own capture and pinning it would change
-      // what the target infers from the body.
+      // what the target infers from the body. A variable that is both the parameter and the
+      // return is the inference an identity lambda fixes from its target; it is typed only where
+      // the call site's recorded target proves that position is not a capture.
       boolean inferenceVariable = resolved != null && resolved.type == CodeType.GENVAR
         && samReturn != null && samReturn.type == CodeType.GENVAR
-        && resolved.value != null && resolved.value.equals(samReturn.value);
+        && resolved.value != null && resolved.value.equals(samReturn.value)
+        && functionalParameterCaptured;
       types.add(!inferenceVariable && resolved != null && nameableLambdaParameterType(resolved) ? resolved : null);
     }
     return types;

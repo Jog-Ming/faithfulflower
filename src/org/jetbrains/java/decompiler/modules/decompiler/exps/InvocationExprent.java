@@ -416,7 +416,7 @@ public class InvocationExprent extends Exprent {
     for (String parameter : callee.getSignature().fparameters) {
       VarType variable = GenericType.parse("T" + parameter + ";");
       VarType value = solved.get(variable);
-      if (recordedBindingNameable(value, callee, named)) {
+      if (recordedBindingNameable(value, named)) {
         result.put(variable, value);
       }
     }
@@ -434,6 +434,19 @@ public class InvocationExprent extends Exprent {
       return null;
     }
     if (expr instanceof VarExprent var) {
+      // The table row's generic Signature is the recorded source type; its descriptor (and the
+      // processor's copy of it) is the erasure.
+      StructLocalVariableTableAttribute.LocalVariable row = var.getLVT();
+      if (row == null && var.getProcessor() != null) {
+        row = var.getProcessor().getVarLVT(var.getVarVersionPair());
+      }
+      if (row != null && row.getSignature() != null) {
+        try {
+          return GenericType.parse(row.getSignature());
+        } catch (RuntimeException ignored) {
+          // A malformed row falls back to the table's own type.
+        }
+      }
       return var.getVarType();
     }
     if (expr instanceof FieldExprent field) {
@@ -551,11 +564,15 @@ public class InvocationExprent extends Exprent {
       return;
     }
     boolean patternWildcard = pattern instanceof GenericType p && p.getWildcard() != GenericType.WILDCARD_NO;
-    if (pattern.type == CodeType.GENVAR && pattern.arrayDim == 0 && !patternWildcard) {
+    if (pattern.type == CodeType.GENVAR && !patternWildcard) {
+      if (pattern.arrayDim > actual.arrayDim) {
+        return;
+      }
+      VarType value = actual.resizeArrayDim(actual.arrayDim - pattern.arrayDim);
       // A wildcard is the call's own capture, not the type the source wrote there.
-      boolean actualWildcard = actual instanceof GenericType a && a.getWildcard() != GenericType.WILDCARD_NO;
+      boolean actualWildcard = value instanceof GenericType a && a.getWildcard() != GenericType.WILDCARD_NO;
       if (!actualWildcard) {
-        map.putIfAbsent(pattern, actual);
+        map.putIfAbsent(pattern.resizeArrayDim(0), value);
       }
       return;
     }
@@ -563,6 +580,7 @@ public class InvocationExprent extends Exprent {
       && patternType.getWildcard() == GenericType.WILDCARD_NO
       && actualType.getWildcard() == GenericType.WILDCARD_NO
       && patternType.value != null && patternType.value.equals(actualType.value)
+      && patternType.arrayDim == actualType.arrayDim
       && patternType.getArguments().size() == actualType.getArguments().size()) {
       for (int i = 0; i < patternType.getArguments().size(); i++) {
         recordedBindPattern(patternType.getArguments().get(i), actualType.getArguments().get(i), map);
@@ -590,23 +608,21 @@ public class InvocationExprent extends Exprent {
    * Whether a recorded value may stand for a receiver class variable: no wildcard, no capture,
    * and every type variable it names is in scope at the print site.
    */
-  private static boolean recordedBindingNameable(VarType value, StructClass callee,
-                                                 Map<VarType, List<VarType>> named) {
+  private static boolean recordedBindingNameable(VarType value, Map<VarType, List<VarType>> named) {
     if (value == null || GenericType.DUMMY_VAR.equals(value)) {
       return false;
     }
     if (value.type == CodeType.GENVAR) {
-      if (value.value == null || callee.getSignature().fparameters.contains(value.value)) {
-        return false;
-      }
-      return isInScopeTypeVariable(value.resizeArrayDim(0), named);
+      // A variable of the same letter as one of the class's own reads the same as a caller's:
+      // only the print site's scope decides whether the recorded view can name it.
+      return value.value != null && isInScopeTypeVariable(value.resizeArrayDim(0), named);
     }
     if (value instanceof GenericType generic) {
       if (generic.getWildcard() != GenericType.WILDCARD_NO) {
         return false;
       }
       for (VarType argument : generic.getArguments()) {
-        if (argument != null && !recordedBindingNameable(argument, callee, named)) {
+        if (argument != null && !recordedBindingNameable(argument, named)) {
           return false;
         }
       }
@@ -628,6 +644,20 @@ public class InvocationExprent extends Exprent {
       }
     }
     return false;
+  }
+
+  /**
+   * Tells every lambda inside an argument whether the receiver's recorded instantiation fixed
+   * the called class's variables. Only such a target proves the positions the lambda's own
+   * parameter type comes from; without it a position can be a capture the printer could not
+   * name, and an identity parameter must stay untyped.
+   */
+  private static void recordFunctionalTarget(Exprent argument, boolean recorded) {
+    for (Exprent inner : argument.getAllExprents(true, true)) {
+      if (inner instanceof NewExprent created && created.isLambda()) {
+        created.setFunctionalParameterCaptured(!recorded);
+      }
+    }
   }
 
   /**
@@ -1156,6 +1186,7 @@ public class InvocationExprent extends Exprent {
                       }
                     });
                   }
+                  recordFunctionalTarget(parameter, receiverBindings != null);
                 }
                 VarType paramUB = paramType.remap(hierarchyMap).remap(combined);
 
