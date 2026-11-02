@@ -707,6 +707,19 @@ public class NestedClassProcessor {
     }
   }
 
+  /**
+   * The source type of a captured enclosing instance: the enclosing class instantiated with its
+   * own type parameters. The synthetic field records the erased class, but the text
+   * {@code Outer.this} has the enclosing class's declared generic type, and a member read
+   * through it is typed by that instantiation.
+   */
+  private static VarType enclosingInstanceType(ClassNode outer, VarType fallback) {
+    if (outer == null || outer.classStruct.getSignature() == null) {
+      return fallback;
+    }
+    return outer.classStruct.getSignature().genericType;
+  }
+
   private static void insertLocalVars(ClassNode parent, ClassNode child) {
     // enclosing method, is null iff member class
     MethodWrapper enclosingMethod = findEnclosingMethod(child);
@@ -756,6 +769,7 @@ public class NestedClassProcessor {
                 if (varLVT != null) {
                   varLVT = varLVT.rename(varName);
                 }
+                varType = enclosingInstanceType(parent, varType);
                 method.varproc.getThisVars().put(newVar, parent.classStruct.qualifiedName);
               }
 
@@ -800,6 +814,7 @@ public class NestedClassProcessor {
               if (varLVT != null) {
                 varLVT = varLVT.rename(varName);
               }
+              varType = enclosingInstanceType(classNode.parent, varType);
               method.varproc.getThisVars().put(newVar, classNode.parent.classStruct.qualifiedName);
             }
 
