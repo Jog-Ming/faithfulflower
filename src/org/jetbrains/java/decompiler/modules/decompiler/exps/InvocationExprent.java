@@ -386,6 +386,310 @@ public class InvocationExprent extends Exprent {
     return false;
   }
 
+  /** A scope no caller source can spell, used while a chain's variables are read from signatures. */
+  private static final String RECORDED_VAR_PREFIX = "#recorded#";
+
+  /**
+   * The receiver class's own type variables as the receiver's recorded instantiation fixes them.
+   * A chain's receiver type is written in the class file (a field's Signature, a local's table
+   * row, a called method's declared return type), so the instantiation the enclosing target left
+   * open can be read without re-running inference. Only signatures are read: an argument that is
+   * itself poly (a lambda, a method reference, a call whose result the target may type) cannot
+   * have fixed a variable, so it is skipped, and a variable the value still names makes the whole
+   * chain unreadable. A binding that would be a wildcard, a capture or an unbound variable is
+   * dropped: the caller could not have written it.
+   */
+  private static @Nullable Map<VarType, VarType> recordedClassVarBindings(StructClass callee, Exprent receiver,
+                                                                         Map<VarType, List<VarType>> named) {
+    if (callee == null || receiver == null || callee.getSignature() == null
+      || callee.getSignature().fparameters.isEmpty()) {
+      return null;
+    }
+    VarType receiverType = recordedInstantiation(receiver, 3);
+    GenericType view = recordedGenericView(receiverType, callee.getSignature().genericType);
+    if (view == null) {
+      return null;
+    }
+    Map<VarType, VarType> solved = new HashMap<>();
+    callee.getSignature().genericType.mapGenVarsTo(view, solved);
+    Map<VarType, VarType> result = new HashMap<>();
+    for (String parameter : callee.getSignature().fparameters) {
+      VarType variable = GenericType.parse("T" + parameter + ";");
+      VarType value = solved.get(variable);
+      if (recordedBindingNameable(value, callee, named)) {
+        result.put(variable, value);
+      }
+    }
+    return result.isEmpty() ? null : result;
+  }
+
+  /**
+   * The type the class file records for an expression, read from signatures and table rows only.
+   * A call is read one level at a time from its declaring Signature, its receiver's recorded view
+   * and its non-poly arguments; no inference pass is entered, so the reading cannot recurse
+   * through a call that is still being inferred. Null means the class file does not fix one.
+   */
+  private static @Nullable VarType recordedInstantiation(Exprent expr, int depth) {
+    if (expr == null || depth < 0) {
+      return null;
+    }
+    if (expr instanceof VarExprent var) {
+      return var.getVarType();
+    }
+    if (expr instanceof FieldExprent field) {
+      return field.getInferredExprType(null);
+    }
+    if (expr instanceof ConstExprent constant) {
+      return constant.getExprType();
+    }
+    if (expr instanceof FunctionExprent function) {
+      if (function.getFuncType() == FunctionType.CAST) {
+        // The printer's own erasure cast (the checkcast javac inserts at a parameter boundary)
+        // carries the erased type; the value it wraps is the recorded one.
+        return function.getLstOperands().isEmpty() ? null
+          : recordedInstantiation(function.getLstOperands().get(0), depth);
+      }
+      return null;
+    }
+    if (expr instanceof InvocationExprent call) {
+      return recordedCallReturn(call, depth);
+    }
+    return null;
+  }
+
+  /** The return type a call's declared Signature and recorded operands fix, or null. */
+  private static @Nullable VarType recordedCallReturn(InvocationExprent call, int depth) {
+    if (call == null || depth < 0 || call.getFunctype() != Type.GENERAL) {
+      return null;
+    }
+    StructMethod method = call.getDesc();
+    if (method == null || method.getSignature() == null || method.getSignature().returnType == null) {
+      return null;
+    }
+    GenericMethodDescriptor signature = method.getSignature();
+    // A name the callee and the caller share is a different variable on each side; tag the
+    // callee's so a value that still mentions one cannot be read as the caller's.
+    Map<VarType, VarType> rename = new HashMap<>();
+    for (String name : signature.typeParameters) {
+      rename.put(GenericType.parse("T" + name + ";"), GenericType.parse("T" + RECORDED_VAR_PREFIX + name + ";"));
+    }
+    VarType declared = signature.returnType.remap(rename);
+    if (declared == null) {
+      return null;
+    }
+    Map<VarType, VarType> map = new HashMap<>();
+    if (!call.isStatic() && call.getInstance() != null) {
+      StructClass declaring = DecompilerContext.getStructContext().getClass(method.getClassQualifiedName());
+      if (declaring != null && declaring.getSignature() != null && !declaring.getSignature().fparameters.isEmpty()) {
+        GenericType view = recordedGenericView(recordedInstantiation(call.getInstance(), depth - 1),
+          declaring.getSignature().genericType);
+        if (view == null) {
+          // The receiver does not record the class's instantiation; its variables would be
+          // indistinguishable from caller variables of the same letter.
+          return null;
+        }
+        declaring.getSignature().genericType.mapGenVarsTo(view, map);
+      }
+    }
+    List<VarType> parameters = signature.parameterTypes;
+    List<Exprent> arguments = call.getLstParameters();
+    int count = Math.min(parameters.size(), arguments.size());
+    for (int i = 0; i < count; i++) {
+      VarType actual = recordedNonPolyArgument(arguments.get(i), depth - 1);
+      VarType pattern = parameters.get(i) == null ? null : parameters.get(i).remap(rename);
+      if (actual != null && pattern != null) {
+        recordedBindPattern(pattern, actual, map);
+      }
+    }
+    VarType result = declared.remap(map);
+    if (result == null) {
+      return null;
+    }
+    // A variable of the called method the arguments did not fix has no name at the call site.
+    for (VarType variable : rename.values()) {
+      if (mentionsTypeVariable(result, variable)) {
+        return null;
+      }
+    }
+    return result;
+  }
+
+  /**
+   * The recorded type of an argument that cannot have been typed by its call's target: a
+   * variable, a field, a constant or a static call. A lambda, a method reference or an instance
+   * call is poly in a target and tells the chain nothing.
+   */
+  private static @Nullable VarType recordedNonPolyArgument(Exprent argument, int depth) {
+    if (depth < 0 || argument == null) {
+      return null;
+    }
+    if (argument instanceof VarExprent || argument instanceof FieldExprent || argument instanceof ConstExprent) {
+      return recordedInstantiation(argument, depth);
+    }
+    if (argument instanceof FunctionExprent function && function.getFuncType() == FunctionType.CAST) {
+      return recordedInstantiation(argument, depth);
+    }
+    if (argument instanceof InvocationExprent call && call.isStatic() && call.getFunctype() == Type.GENERAL) {
+      return recordedCallReturn(call, depth);
+    }
+    return null;
+  }
+
+  /** Unifies a declared parameter type with a recorded argument type, binding its variables. */
+  private static void recordedBindPattern(VarType pattern, VarType actual, Map<VarType, VarType> map) {
+    if (pattern == null || actual == null) {
+      return;
+    }
+    if (pattern instanceof GenericType patternWild
+      && actual instanceof GenericType actualWild
+      && patternWild.getWildcard() != GenericType.WILDCARD_NO
+      && actualWild.getWildcard() != GenericType.WILDCARD_NO) {
+      if (patternWild.getWildcard() == actualWild.getWildcard()) {
+        recordedBindPattern(GenericType.withWildcard(patternWild, GenericType.WILDCARD_NO),
+          GenericType.withWildcard(actualWild, GenericType.WILDCARD_NO), map);
+      }
+      return;
+    }
+    boolean patternWildcard = pattern instanceof GenericType p && p.getWildcard() != GenericType.WILDCARD_NO;
+    if (pattern.type == CodeType.GENVAR && pattern.arrayDim == 0 && !patternWildcard) {
+      // A wildcard is the call's own capture, not the type the source wrote there.
+      boolean actualWildcard = actual instanceof GenericType a && a.getWildcard() != GenericType.WILDCARD_NO;
+      if (!actualWildcard) {
+        map.putIfAbsent(pattern, actual);
+      }
+      return;
+    }
+    if (pattern instanceof GenericType patternType && actual instanceof GenericType actualType
+      && patternType.getWildcard() == GenericType.WILDCARD_NO
+      && actualType.getWildcard() == GenericType.WILDCARD_NO
+      && patternType.value != null && patternType.value.equals(actualType.value)
+      && patternType.getArguments().size() == actualType.getArguments().size()) {
+      for (int i = 0; i < patternType.getArguments().size(); i++) {
+        recordedBindPattern(patternType.getArguments().get(i), actualType.getArguments().get(i), map);
+      }
+    }
+  }
+
+  /** The recorded type projected onto a class's declared generic view, with matching arguments. */
+  private static @Nullable GenericType recordedGenericView(VarType type, GenericType declared) {
+    if (!(type instanceof GenericType view) || view.value == null || declared == null || declared.value == null) {
+      return null;
+    }
+    GenericType projected = view;
+    if (!view.value.equals(declared.value)) {
+      VarType superView = GenericType.getGenericSuperType(view, declared);
+      if (!(superView instanceof GenericType asGeneric) || !declared.value.equals(asGeneric.value)) {
+        return null;
+      }
+      projected = asGeneric;
+    }
+    return projected.getArguments().size() == declared.getArguments().size() ? projected : null;
+  }
+
+  /**
+   * Whether a recorded value may stand for a receiver class variable: no wildcard, no capture,
+   * and every type variable it names is in scope at the print site.
+   */
+  private static boolean recordedBindingNameable(VarType value, StructClass callee,
+                                                 Map<VarType, List<VarType>> named) {
+    if (value == null || GenericType.DUMMY_VAR.equals(value)) {
+      return false;
+    }
+    if (value.type == CodeType.GENVAR) {
+      if (value.value == null || callee.getSignature().fparameters.contains(value.value)) {
+        return false;
+      }
+      return isInScopeTypeVariable(value.resizeArrayDim(0), named);
+    }
+    if (value instanceof GenericType generic) {
+      if (generic.getWildcard() != GenericType.WILDCARD_NO) {
+        return false;
+      }
+      for (VarType argument : generic.getArguments()) {
+        if (argument != null && !recordedBindingNameable(argument, callee, named)) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+
+  /** Whether the expression or anything inside it is a lambda or a method reference. */
+  private static boolean containsLambda(Exprent expr) {
+    if (expr == null) {
+      return false;
+    }
+    if (expr instanceof NewExprent created && created.isLambda()) {
+      return true;
+    }
+    for (Exprent inner : expr.getAllExprents(true, true)) {
+      if (inner instanceof NewExprent created && created.isLambda()) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Whether the argument is a static call whose own recorded class is exactly the parameter's.
+   * Handing the target down to such an argument types the lambda inside it without the printer
+   * ever writing a cast around the argument or its receiver: a cast type that still named the
+   * called method's variable could not be spelled at the call site.
+   */
+  private static boolean argumentClassIsParameterClass(VarType parameter, Exprent argument) {
+    if (!(argument instanceof InvocationExprent call) || call.getFunctype() != Type.GENERAL
+      || !call.isStatic()) {
+      return false;
+    }
+    VarType value = call.getDescriptor().ret;
+    return parameter != null && parameter.type == CodeType.OBJECT && parameter.value != null
+      && value != null && value.type == CodeType.OBJECT
+      && parameter.value.equals(value.value) && parameter.arrayDim == value.arrayDim;
+  }
+
+  /**
+   * Whether every type variable in the type is either nameable here or one of the called
+   * method's own parameters. Such a variable has no spelling at the call site, so a target that
+   * carries it cannot be confused with a caller variable of the same name; javac infers it again
+   * from the same arguments.
+   */
+  private static boolean namesNameableOrCalleeTypeParameters(VarType type, Set<VarType> named,
+                                                            List<String> calleeParameters) {
+    if (type == null) {
+      return false;
+    }
+    if (type.type == CodeType.GENVAR) {
+      return named.contains(type.resizeArrayDim(0))
+        || (type.value != null && calleeParameters.contains(type.value));
+    }
+    if (type instanceof GenericType generic) {
+      for (VarType argument : generic.getArguments()) {
+        if (argument != null && !namesNameableOrCalleeTypeParameters(argument, named, calleeParameters)) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+
+  /** Whether one of the named type variables occurs anywhere in the type. */
+  private static boolean mentionsTypeVariable(VarType type, VarType variable) {
+    if (type == null || variable == null) {
+      return false;
+    }
+    if (type.type == CodeType.GENVAR) {
+      return type.resizeArrayDim(0).equals(variable.resizeArrayDim(0));
+    }
+    if (type instanceof GenericType generic) {
+      for (VarType argument : generic.getArguments()) {
+        if (mentionsTypeVariable(argument, variable)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
   /** The first target with every type variable the second one already fixed filled in. */
   private static VarType mergeTargets(VarType primary, VarType fallback) {
     if (!(primary instanceof GenericType first) || !(fallback instanceof GenericType second)
@@ -837,6 +1141,22 @@ public class InvocationExprent extends Exprent {
                   if (!combined.containsKey(k))
                     combined.put(k, v);
                 });
+                // A lambda is typed by the declared parameter type standing here. The receiver's
+                // recorded instantiation fixes the class's variables even when this call's target
+                // left them open: the chain's own value (a field or a called method's declared
+                // return) names them. Only this argument's target is completed; the values never
+                // enter genericsMap, a witness or the instance type.
+                if (!isNew && instance != null && containsLambda(parameter)) {
+                  Map<VarType, VarType> receiverBindings = recordedClassVarBindings(mthCls, instance, named);
+                  if (receiverBindings != null) {
+                    receiverBindings.forEach((variable, value) -> {
+                      VarType present = combined.get(variable);
+                      if (present == null || GenericType.DUMMY_VAR.equals(present) || hasUnboundVariable(present)) {
+                        combined.put(variable, value);
+                      }
+                    });
+                  }
+                }
                 VarType paramUB = paramType.remap(hierarchyMap).remap(combined);
 
                 VarType argtype;
@@ -2928,7 +3248,16 @@ public class InvocationExprent extends Exprent {
           // keeping such a target cannot print an erased or captured form.
           boolean lambdaTarget = type != null && lstParameters.get(x) instanceof NewExprent argument
             && argument.isLambda() && namesOnlyCalleeTypeParameters(type, desc.getSignature().typeParameters);
-          if (type != null && (lambdaTarget
+          // An argument that carries a lambda is typed by that lambda's own functional target
+          // inside the call. The declared target keeps the variables the receiver's recorded
+          // instantiation fixed; a variable of the called method that remains open is never
+          // printed as a cast (the argument's own class is the parameter's, so none is written),
+          // and javac infers it again from the same arguments, so the target cannot be confused
+          // with a caller variable of the same name.
+          boolean lambdaCarrier = type != null && containsLambda(lstParameters.get(x))
+            && argumentClassIsParameterClass(type, lstParameters.get(x))
+            && namesNameableOrCalleeTypeParameters(type, namedGens, desc.getSignature().typeParameters);
+          if (type != null && (lambdaTarget || lambdaCarrier
               || !(type.isGeneric() && ((GenericType)type).hasUnknownGenericType(namedGens)))) {
             types[x] = type;
           }
