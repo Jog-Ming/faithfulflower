@@ -188,6 +188,12 @@ public class SwitchExprent extends Exprent {
         if (exprent instanceof YieldExprent) {
           Exprent content = bareArmValue(((YieldExprent) exprent).getContent(), target);
 
+          // A cast written inside an arm is poly against the switch's target; infer it there so
+          // the recorded checkcast at the erasure boundary is judged before the arm prints.
+          if (content instanceof FunctionExprent armCast && armCast.getFuncType() == FunctionType.CAST) {
+            content.getInferredExprType(target);
+          }
+
           if (content instanceof ConstExprent && !Objects.equals(content.getExprType(), VarType.VARTYPE_NULL)) {
             ((ConstExprent)content).setConstType(this.type);
           }

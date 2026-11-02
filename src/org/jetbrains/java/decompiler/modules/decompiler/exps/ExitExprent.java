@@ -210,6 +210,11 @@ public class ExitExprent extends Exprent {
         }
       }
 
+      if (value != null) {
+        // The throw statement has no target type of its own, so nothing else infers the cast
+        // decisions of the thrown value before it prints.
+        value.getInferredExprType(null);
+      }
       return buf.append(value.toJava(indent)).prepend("throw ");
     }
   }
