@@ -3,8 +3,11 @@
  */
 package org.jetbrains.java.decompiler.modules.decompiler.exps;
 
+import org.jetbrains.java.decompiler.main.DecompilerContext;
 import org.jetbrains.java.decompiler.modules.decompiler.ValidationHelper;
+import org.jetbrains.java.decompiler.modules.decompiler.exps.FunctionExprent.FunctionType;
 import org.jetbrains.java.decompiler.modules.decompiler.vars.CheckTypesResult;
+import org.jetbrains.java.decompiler.struct.gen.CodeType;
 import org.jetbrains.java.decompiler.struct.gen.VarType;
 import org.jetbrains.java.decompiler.util.InterpreterUtil;
 import org.jetbrains.java.decompiler.util.TextBuffer;
@@ -89,9 +92,59 @@ public class SwitchHeadExprent extends Exprent {
 
   @Override
   public TextBuffer toJava(int indent) {
-    TextBuffer buf = value.toJava(indent).enclose("switch (", ")");
+    Exprent printed = value;
+    if (value instanceof FunctionExprent cast && cast.getFuncType() == FunctionType.CAST
+      && cast.getLstOperands().size() == 2 && labelsProveSelectorType(cast.getLstOperands().get(1).getExprType())) {
+      // The labels alone require the selector's type, so the source wrote the selector bare and
+      // the recorded checkcast is the erasure boundary's: print its operand.
+      printed = cast.getLstOperands().get(0);
+    }
+    TextBuffer buf = printed.toJava(indent).enclose("switch (", ")");
     buf.addStartBytecodeMapping(bytecode);
     return buf;
+  }
+
+  /**
+   * Whether every case label forces the selector's type to the cast's class: enum constants of
+   * that class, string constants, or patterns of that class or a subtype. A `case null` or a
+   * label of another shape leaves the cast in place.
+   */
+  private boolean labelsProveSelectorType(VarType target) {
+    if (target == null || target.type != CodeType.OBJECT || target.arrayDim != 0 || target.value == null) {
+      return false;
+    }
+    boolean any = false;
+    for (List<Exprent> values : caseValues) {
+      if (values == null) {
+        continue;
+      }
+      for (Exprent label : values) {
+        if (label == null) {
+          continue;
+        }
+        if (label instanceof FieldExprent field) {
+          if (!field.isStatic() || !target.value.equals(field.getClassname())) {
+            return false;
+          }
+        } else if (label instanceof ConstExprent constant) {
+          VarType type = constant.getConstType();
+          if (type == null || type.type != CodeType.OBJECT || !"java/lang/String".equals(type.value)) {
+            return false;
+          }
+        } else if (label instanceof FunctionExprent pattern && pattern.getFuncType() == FunctionType.INSTANCEOF
+          && pattern.getLstOperands().size() == 3) {
+          VarType patternType = pattern.getLstOperands().get(1).getExprType();
+          if (patternType == null || patternType.value == null
+            || !DecompilerContext.getStructContext().instanceOf(patternType.value, target.value)) {
+            return false;
+          }
+        } else {
+          return false;
+        }
+        any = true;
+      }
+    }
+    return any;
   }
 
   @Override
