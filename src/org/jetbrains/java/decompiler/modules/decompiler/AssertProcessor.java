@@ -15,6 +15,7 @@ import org.jetbrains.java.decompiler.struct.gen.VarType;
 import org.jetbrains.java.decompiler.util.InterpreterUtil;
 
 import java.util.ArrayList;
+import java.util.BitSet;
 import java.util.List;
 
 public final class AssertProcessor {
@@ -163,6 +164,9 @@ public final class AssertProcessor {
     }
 
     AssertExprent asexpr = new AssertExprent(lstParams);
+    if (res.bytecode != null) {
+      asexpr.bytecode = res.bytecode;
+    }
 
     Statement newstat = BasicBlockStatement.create();
     Statement block = newstat;
@@ -286,6 +290,7 @@ public final class AssertProcessor {
     private boolean replaceParent;
     private boolean negate = true;
     private boolean assignment = false;
+    private BitSet bytecode;
 
     private AssertResult(Exprent exprent, boolean valid) {
       this.exprent = exprent;
@@ -335,8 +340,13 @@ public final class AssertProcessor {
           }
         }
       } else if (isAssertionField(fexpr, classname, key)) {
-        // assert false;
-        return new AssertResult(null, true);
+        // `assert false;` has no condition exprent, so the printed statement would carry no
+        // bytecode of its own and the line alignment could not place its line. The matched
+        // assertion-field test opens at the field read, which is the instruction the target's
+        // table dates the statement on, so lend its offsets to the assert.
+        AssertResult res = new AssertResult(null, true);
+        res.bytecode = fexpr.bytecode;
+        return res;
       } else if (fexpr.getFuncType() == FunctionType.EQ) {
         // Switch expression assert
 
