@@ -278,8 +278,24 @@ public class FunctionExprent extends Exprent {
     if (funcType == FunctionType.CAST) {
       this.needsCast = true;
       this.compilerCast = false;
-      VarType right = lstOperands.get(0).getInferredExprType(upperBound);
       List<VarType> cast = lstOperands.subList(1, lstOperands.size()).stream().map(Exprent::getExprType).toList();
+      // A source cast whose target the operand's functional type does not carry exactly (a raw
+      // or capture form) is an unchecked conversion the source wrote; judge it against the
+      // operand's own recorded type, not the functional target's view.
+      Exprent operand = lstOperands.get(0);
+      boolean suspendLambdaType = operand instanceof VarExprent var && var.hasLambdaParameterType()
+        && (cast.size() != 1 || !sameType(var.getLambdaParameterType(), cast.get(0)));
+      if (suspendLambdaType) {
+        Exprent.suspendLambdaParameterTypes();
+      }
+      VarType right;
+      try {
+        right = operand.getInferredExprType(upperBound);
+      } finally {
+        if (suspendLambdaType) {
+          Exprent.resumeLambdaParameterTypes();
+        }
+      }
 
       if (upperBound != null && (upperBound.isGeneric() || right.isGeneric())) {
         Map<VarType, List<VarType>> names = this.getNamedGenerics();
@@ -326,6 +342,18 @@ public class FunctionExprent extends Exprent {
         this.compilerCast = true;
       }
 
+      // A checkcast is the compiler's own adaptation when the operand's source type is exactly
+      // the cast type and the bytecode value's erased type is a supertype: a lambda's parameter
+      // is erased in the synthetic method, and a generic call's descriptor returns Object while
+      // its signature names the target. The source wrote the value bare, and javac re-inserts
+      // the same checkcast at the erasure boundary. A target the operand's recorded type does
+      // not carry exactly (a raw or capture form) is the source's unchecked cast and stays.
+      if (cast.size() == 1 && nameableCastType(cast.get(0))
+        && erasedCheckcast(cast.get(0), right, lstOperands.get(0))) {
+        this.needsCast = false;
+        this.compilerCast = true;
+      }
+
       return getExprType();
     } else if (funcType == FunctionType.TERNARY) {
       VarType type1;
@@ -365,6 +393,67 @@ public class FunctionExprent extends Exprent {
     }
 
     return getExprType();
+  }
+
+  /**
+   * Whether this recorded checkcast merely restores a type the compiled form erased. The
+   * operand's source type must be exactly the cast type, and the bytecode value a proper
+   * supertype of it; a type no source could write (a wildcard) disqualifies the site.
+   */
+  private static boolean erasedCheckcast(VarType target, VarType operandType, Exprent operand) {
+    if (target == null || target.type != CodeType.OBJECT || target.value == null
+      || operandType == null || !sameType(operandType, target)) {
+      return false;
+    }
+    if (operand instanceof VarExprent var) {
+      // A lambda's own parameter has no written type: the synthetic method erases the slot,
+      // and the functional target's instantiated type is the source's view of it.
+      return var.hasLambdaParameterType();
+    }
+    if (operand instanceof InvocationExprent || operand instanceof FieldExprent) {
+      VarType erased = operand.getExprType();
+      if (erased == null || erased.value == null || sameType(erased, target)) {
+        return false;
+      }
+      return erased.arrayDim == target.arrayDim
+        && DecompilerContext.getStructContext().instanceOf(target.value, erased.value);
+    }
+    return false;
+  }
+
+  /** Exact type equality, including generic arguments and wildcards. */
+  private static boolean sameType(VarType left, VarType right) {
+    if (left == right) {
+      return true;
+    }
+    if (left == null || right == null) {
+      return false;
+    }
+    if (left instanceof GenericType generic) {
+      return generic.equalsExact(right);
+    }
+    if (right instanceof GenericType generic) {
+      return generic.equalsExact(left);
+    }
+    return left.equals(right);
+  }
+
+  /** A type the source could write in a cast: no wildcard anywhere. */
+  private static boolean nameableCastType(VarType type) {
+    if (type == null) {
+      return false;
+    }
+    if (type instanceof GenericType generic) {
+      if (generic.getWildcard() != GenericType.WILDCARD_NO) {
+        return false;
+      }
+      for (VarType argument : generic.getArguments()) {
+        if (argument != null && !nameableCastType(argument)) {
+          return false;
+        }
+      }
+    }
+    return true;
   }
 
   private static boolean areGenericTypesSame(VarType right, VarType upperBound) {

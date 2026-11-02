@@ -61,6 +61,57 @@ public abstract class Exprent implements IMatchable {
   @Deprecated
   protected static ThreadLocal<Map<String, VarType>> inferredLambdaTypes = ThreadLocal.withInitial(HashMap::new);
 
+  /**
+   * The types the functional target fixes for a lambda's own parameters while its body prints.
+   * The synthetic method only records the erased descriptor of each parameter; the source wrote
+   * neither a type nor a cast, so the functional interface's instantiated parameter type is the
+   * value's source type. Keyed by the name the body prints for the slot.
+   */
+  private static final ThreadLocal<Deque<Map<String, VarType>>> lambdaParameterTypes =
+    ThreadLocal.withInitial(ArrayDeque::new);
+  private static final ThreadLocal<Integer> lambdaParameterTypesSuspended = ThreadLocal.withInitial(() -> 0);
+
+  public static Map<String, VarType> currentLambdaParameterTypes() {
+    Deque<Map<String, VarType>> stack = lambdaParameterTypes.get();
+    return stack.isEmpty() ? Collections.emptyMap() : stack.peek();
+  }
+
+  public static void pushLambdaParameterTypes(Map<String, VarType> types) {
+    lambdaParameterTypes.get().push(types);
+  }
+
+  public static void popLambdaParameterTypes() {
+    Deque<Map<String, VarType>> stack = lambdaParameterTypes.get();
+    if (!stack.isEmpty()) {
+      stack.pop();
+    }
+    if (stack.isEmpty()) {
+      lambdaParameterTypes.remove();
+    }
+  }
+
+  /**
+   * A recorded cast that is not exactly the target's type must be judged against the operand's
+   * own recorded type, not the functional target's: the target may be a raw or capture form the
+   * source's unchecked cast converted away from.
+   */
+  public static void suspendLambdaParameterTypes() {
+    lambdaParameterTypesSuspended.set(lambdaParameterTypesSuspended.get() + 1);
+  }
+
+  public static void resumeLambdaParameterTypes() {
+    int depth = lambdaParameterTypesSuspended.get() - 1;
+    if (depth <= 0) {
+      lambdaParameterTypesSuspended.remove();
+    } else {
+      lambdaParameterTypesSuspended.set(depth);
+    }
+  }
+
+  public static boolean lambdaParameterTypesSuspended() {
+    return lambdaParameterTypesSuspended.get() > 0;
+  }
+
   public final Type type;
   public final int id;
   public BitSet bytecode = null;  // offsets of bytecode instructions decompiled to this exprent

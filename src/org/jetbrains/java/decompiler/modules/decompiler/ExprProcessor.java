@@ -1588,7 +1588,21 @@ public class ExprProcessor implements CodeConstants {
       }
     }
 
-    VarType rightType = exprent.getInferredExprType(leftType);
+    VarType rightType;
+    // A lambda parameter is typed by its functional target only where the target's type is
+    // exactly the context's: otherwise the source's own conversion (often a cast that pins a
+    // generic inference) is what the body wrote, and the parameter's own inference must decide.
+    if (exprent instanceof VarExprent lambdaVar && lambdaVar.hasLambdaParameterType()
+        && !lambdaVar.lambdaParameterTypeEquals(leftType)) {
+      Exprent.suspendLambdaParameterTypes();
+      try {
+        rightType = exprent.getInferredExprType(leftType);
+      } finally {
+        Exprent.resumeLambdaParameterTypes();
+      }
+    } else {
+      rightType = exprent.getInferredExprType(leftType);
+    }
     if (exprent instanceof SwitchExprent switchExprent) {
       // The switch is poly in this context; the arms are printed against this target.
       switchExprent.setPrintTarget(leftType);

@@ -90,6 +90,10 @@ public class VarExprent extends Exprent implements Pattern {
 
   @Override
   public VarType getInferredExprType(VarType upperBound) {
+    VarType lambdaType = lambdaParameterType();
+    if (lambdaType != null) {
+      return lambdaType;
+    }
     if (lvt != null && lvt.getSignature() != null) {
       // TODO; figure out why it's crashing, ugly fix for now
       try {
@@ -487,6 +491,10 @@ public class VarExprent extends Exprent implements Pattern {
   }
 
   public VarType getVarType() {
+    VarType lambdaType = lambdaParameterType();
+    if (lambdaType != null) {
+      return lambdaType;
+    }
     if (DecompilerContext.getOption(IFernflowerPreferences.USE_DEBUG_VAR_NAMES) && lvt != null) {
       return new VarType(lvt.getDescriptor());
     }
@@ -518,6 +526,48 @@ public class VarExprent extends Exprent implements Pattern {
     }
 
     return vt == null ? VarType.VARTYPE_UNKNOWN : vt;
+  }
+
+  /**
+   * The functional target's parameter type while the lambda body this variable belongs to
+   * prints, or null outside a lambda body and for captured locals.
+   */
+  private @org.jetbrains.annotations.Nullable VarType lambdaParameterType() {
+    if (processor == null || Exprent.lambdaParameterTypesSuspended()) {
+      return null;
+    }
+    String name = processor.getVarName(getVarVersionPair());
+    return name == null ? null : Exprent.currentLambdaParameterTypes().get(name);
+  }
+
+  /** The function target's type for this lambda parameter, or null outside a lambda body. */
+  public @org.jetbrains.annotations.Nullable VarType getLambdaParameterType() {
+    return lambdaParameterType();
+  }
+
+  /** Whether this variable currently stands for a lambda's own parameter (see {@link #lambdaParameterType()}). */
+  public boolean hasLambdaParameterType() {
+    return lambdaParameterType() != null;
+  }
+
+  /** Whether the functional target's type for this parameter is exactly {@code type}. */
+  public boolean lambdaParameterTypeEquals(VarType type) {
+    VarType sam = lambdaParameterType();
+    if (sam == null || type == null) {
+      return false;
+    }
+    // A wildcard target stands for the capture the value is checked against; the type the
+    // source's value has is its bound.
+    if (type instanceof GenericType wildcard && wildcard.getWildcard() != GenericType.WILDCARD_NO) {
+      type = GenericType.withWildcard(wildcard, GenericType.WILDCARD_NO);
+    }
+    if (sam instanceof GenericType generic) {
+      return generic.equalsExact(type);
+    }
+    if (type instanceof GenericType generic) {
+      return generic.equalsExact(sam);
+    }
+    return sam.equals(type);
   }
 
   public void setVarType(VarType varType) {

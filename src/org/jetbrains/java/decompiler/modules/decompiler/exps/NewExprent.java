@@ -716,7 +716,8 @@ public class NewExprent extends Exprent {
           buf.addAlignOnlyBytecodeMapping(bytecode);
         }
         new ClassWriter().classLambdaToJava(child, buf, methodObject, indent,
-          callLine >= 0 ? callLine : RoundTrip.sourceLine(this), methodReferenceQualifier(), getFunctionalReturnType());
+          callLine >= 0 ? callLine : RoundTrip.sourceLine(this), methodReferenceQualifier(), getFunctionalReturnType(),
+          getFunctionalParameterTypes());
         if (isMethodReference() && RoundTrip.selector("arg-head-line")) {
           // A method reference has no body method whose table could anchor its text: javac records
           // the invokedynamic (and the null check of a captured receiver) on the line the
@@ -1564,6 +1565,72 @@ public class NewExprent extends Exprent {
     Map<VarType, VarType> map = new HashMap<>();
     iface.getSignature().genericType.mapGenVarsTo((GenericType) inferredLambdaType, map);
     return sam.getSignature().returnType.remap(map);
+  }
+
+  /**
+   * The SAM's parameter types as this functional argument was inferred against, instantiated
+   * from the functional interface's recorded type. A lambda's own parameters carry no written
+   * type: the functional target fixes them, and the synthetic method only records the erased
+   * descriptor. A wildcard in a parameter position is the capture an implicit parameter stands
+   * for; the type the source could name is its bound.
+   */
+  public List<VarType> getFunctionalParameterTypes() {
+    if (!lambda || inferredLambdaType == null || !inferredLambdaType.isGeneric()) {
+      return null;
+    }
+    ClassNode node = DecompilerContext.getClassProcessor().getMapRootClasses().get(newType.value);
+    if (node == null || node.lambdaInformation == null) {
+      return null;
+    }
+    StructClass iface = DecompilerContext.getStructContext().getClass(node.anonymousClassType.value);
+    if (iface == null || iface.getSignature() == null) {
+      return null;
+    }
+    StructMethod sam = iface.getMethod(getLambdaMethodKey());
+    if (sam == null || sam.getSignature() == null) {
+      return null;
+    }
+    Map<VarType, VarType> map = new HashMap<>();
+    iface.getSignature().genericType.mapGenVarsTo((GenericType) inferredLambdaType, map);
+    List<VarType> types = new ArrayList<>();
+    for (VarType parameter : sam.getSignature().parameterTypes) {
+      VarType resolved = parameter.remap(map);
+      if (resolved instanceof GenericType generic && generic.getWildcard() != GenericType.WILDCARD_NO) {
+        resolved = GenericType.withWildcard(generic, GenericType.WILDCARD_NO);
+      }
+      // Only a type the source could name may stand for the parameter: a variable the target
+      // left open, or a wildcard, is the inference's own capture and pinning it would change
+      // what the target infers from the body.
+      types.add(resolved != null && nameableLambdaParameterType(resolved) ? resolved : null);
+    }
+    return types;
+  }
+
+  private static boolean nameableLambdaParameterType(VarType type) {
+    if (type == null || type.type == CodeType.GENVAR || type.type == CodeType.VOID
+        || type.type == CodeType.UNKNOWN) {
+      return false;
+    }
+    if (type instanceof GenericType generic) {
+      if (generic.getWildcard() != GenericType.WILDCARD_NO) {
+        return false;
+      }
+      if (generic.getArguments().isEmpty() && generic.value != null) {
+        // A parameterized class written bare is a raw form: the target's capture left the
+        // arguments unbound, and the source's own unchecked conversion lives in the body.
+        StructClass cls = DecompilerContext.getStructContext().getClass(generic.value);
+        if (cls != null && cls.getSignature() != null && !cls.getSignature().fparameters.isEmpty()) {
+          return false;
+        }
+      }
+      for (VarType argument : generic.getArguments()) {
+        // A null argument is the unbounded wildcard `?`: a capture no source can name.
+        if (argument == null || !nameableLambdaParameterType(argument)) {
+          return false;
+        }
+      }
+    }
+    return true;
   }
 
   /**

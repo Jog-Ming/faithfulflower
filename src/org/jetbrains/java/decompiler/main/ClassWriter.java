@@ -180,7 +180,8 @@ public class ClassWriter implements StatementWriter {
   }
 
   public void classLambdaToJava(ClassNode node, TextBuffer buffer, Exprent method_object, int indent,
-                                int creationLine, VarType referenceQualifier, VarType functionalReturn) {
+                                int creationLine, VarType referenceQualifier, VarType functionalReturn,
+                                List<VarType> functionalParameters) {
     ClassWrapper wrapper = node.getWrapper();
     if (wrapper == null) {
       return;
@@ -245,6 +246,12 @@ public class ClassWriter implements StatementWriter {
 
         boolean simpleLambda = false;
         boolean written = false;
+
+        // A lambda's own parameters have no written type: the functional target fixes them, and
+        // the synthetic method only records the erased descriptor. While the body prints, the
+        // instantiated SAM parameter types stand for the source's view of those slots, so a
+        // value read from a parameter is typed as the source saw it rather than as the erasure.
+        Exprent.pushLambdaParameterTypes(lambdaParameterTypes(node, methodWrapper, md_content, md_lambda, functionalParameters));
 
         if (!lambdaToAnonymous) {
           RootStatement root = wrapper.getMethodWrapper(mt.getName(), mt.getDescriptor()).root;
@@ -498,10 +505,44 @@ public class ClassWriter implements StatementWriter {
       }
     }
     finally {
+      Exprent.popLambdaParameterTypes();
       DecompilerContext.setProperty(DecompilerContext.CURRENT_CLASS_NODE, outerNode);
     }
 
     DecompilerContext.getLogger().endWriteClass();
+  }
+
+  /**
+   * The name-to-type view of a lambda's own parameters while its body prints: each slot's
+   * printed name mapped to the functional target's instantiated parameter type.
+   */
+  private static Map<String, VarType> lambdaParameterTypes(ClassNode node, MethodWrapper methodWrapper,
+                                                           MethodDescriptor md_content, MethodDescriptor md_lambda,
+                                                           List<VarType> functionalParameters) {
+    if (methodWrapper == null || methodWrapper.varproc == null || functionalParameters == null
+        || md_content == null || md_lambda == null
+        || functionalParameters.size() != md_lambda.params.length) {
+      return Collections.emptyMap();
+    }
+    int startIndex = md_content.params.length - md_lambda.params.length;
+    if (startIndex < 0) {
+      return Collections.emptyMap();
+    }
+    Map<String, VarType> types = new HashMap<>();
+    int index = node.lambdaInformation.is_content_method_static ? 0 : 1;
+    int param = 0;
+    for (int i = 0; i < md_content.params.length; i++) {
+      if (i >= startIndex) {
+        VarType type = param < functionalParameters.size() ? functionalParameters.get(param) : null;
+        param++;
+        String name = methodWrapper.varproc.getVarName(new VarVersionPair(index, 0));
+        if (name != null && type != null && type.type != CodeType.VOID) {
+          types.put(name, type);
+        }
+      }
+      index += md_content.params[i].stackSize;
+    }
+    return types;
   }
 
   /**
