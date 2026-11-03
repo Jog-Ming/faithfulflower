@@ -2618,6 +2618,125 @@ public class InvocationExprent extends Exprent {
     return true;
   }
 
+  /**
+   * Whether the call whose argument is being printed lets its parameter's type variable widen to
+   * the value's wildcard form: every sibling use of the variable is an input position of a
+   * functional interface's method, whose capture the wildcard's subtype satisfies. A use in the
+   * method's return, or any invariant use, needs the target's invariant instantiation.
+   */
+  public static boolean currentArgumentVariableWeakenable() {
+    InvocationExprent call = ARGUMENT_CALL.get();
+    Integer index = ARGUMENT_INDEX.get();
+    if (call == null || index == null || call.desc == null || call.desc.getSignature() == null) {
+      return false;
+    }
+    GenericMethodDescriptor signature = call.desc.getSignature();
+    if (signature.typeParameters.isEmpty() || signature.parameterTypes.size() != call.descriptor.params.length
+      || index < 0 || index >= signature.parameterTypes.size()) {
+      return false;
+    }
+    List<String> mentioned = new ArrayList<>();
+    for (String name : signature.typeParameters) {
+      if (mentionsTypeVariable(signature.parameterTypes.get(index), List.of(name))) {
+        mentioned.add(name);
+      }
+    }
+    if (mentioned.isEmpty() || mentionsTypeVariable(signature.returnType, mentioned)) {
+      return false;
+    }
+    boolean weakened = false;
+    for (int i = 0; i < signature.parameterTypes.size(); i++) {
+      if (i == index) {
+        continue;
+      }
+      for (String variable : mentioned) {
+        int use = functionalVariance(signature.parameterTypes.get(i), variable);
+        if (use == 1) {
+          weakened = true;
+        } else if (use == 2) {
+          return false;
+        }
+      }
+    }
+    return weakened;
+  }
+
+  /** 0: absent; 1: only input positions of a functional interface; 2: any other use. */
+  private static int functionalVariance(VarType type, String variable) {
+    return functionalVariance(type, variable, 1);
+  }
+
+  private static int functionalVariance(VarType type, String variable, int sign) {
+    if (type == null) {
+      return 0;
+    }
+    if (type.type == CodeType.GENVAR) {
+      if (!variable.equals(type.value)) {
+        return 0;
+      }
+      if (type instanceof GenericType wildcard && wildcard.getWildcard() != GenericType.WILDCARD_NO) {
+        return 2;
+      }
+      // A variable directly at this position: contravariant when the composed sign is negative.
+      return sign < 0 ? 1 : 2;
+    }
+    if (!(type instanceof GenericType generic) || generic.value == null) {
+      return 0;
+    }
+    int result = 0;
+    for (int i = 0; i < generic.getArguments().size(); i++) {
+      VarType argument = generic.getArguments().get(i);
+      if (!mentionsTypeVariable(argument, List.of(variable))) {
+        continue;
+      }
+      int variance = samVariance(generic.value, i);
+      if (variance == 0) {
+        return 2; // invariant or unknown position
+      }
+      int nested = functionalVariance(argument, variable, sign * variance);
+      if (nested == 2) {
+        return 2;
+      }
+      if (nested == 1) {
+        result = 1;
+      }
+    }
+    return result;
+  }
+
+  /** 1 when the interface's parameter is a SAM input, -1 when a SAM output, 0 otherwise. */
+  private static int samVariance(String rawClass, int index) {
+    StructClass cls = DecompilerContext.getStructContext().getClass(rawClass);
+    if (cls == null || cls.getSignature() == null || !cls.hasModifier(CodeConstants.ACC_INTERFACE)
+      || index < 0 || index >= cls.getSignature().fparameters.size()) {
+      return 0;
+    }
+    String parameter = cls.getSignature().fparameters.get(index);
+    StructMethod sam = null;
+    for (StructMethod candidate : cls.getMethods()) {
+      if (candidate.hasModifier(CodeConstants.ACC_STATIC) || !candidate.hasModifier(CodeConstants.ACC_ABSTRACT)
+        || candidate.getName().equals("equals") || candidate.getName().equals("hashCode")
+        || candidate.getName().equals("toString")) {
+        continue;
+      }
+      if (sam != null) {
+        return 0;
+      }
+      sam = candidate;
+    }
+    if (sam == null || sam.getSignature() == null) {
+      return 0;
+    }
+    GenericMethodDescriptor signature = sam.getSignature();
+    boolean input = signature.parameterTypes.stream()
+      .anyMatch(type -> mentionsTypeVariable(type, List.of(parameter)));
+    boolean output = mentionsTypeVariable(signature.returnType, List.of(parameter));
+    if (input && !output) {
+      return 1;
+    }
+    return output && !input ? -1 : 0;
+  }
+
   private static final ThreadLocal<boolean[]> ARGUMENT_MAY_INFER = ThreadLocal.withInitial(() -> new boolean[1]);
 
   /**

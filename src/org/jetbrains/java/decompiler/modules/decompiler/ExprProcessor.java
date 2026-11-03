@@ -1821,6 +1821,7 @@ public class ExprProcessor implements CodeConstants {
     boolean doubleCast = false;
     VarType doubleCastTarget = leftType;
     VarType doubleCastInner = null;
+    VarType wildcardOnlyCast = null;
     if (doCastGenerics && !castAlways && !doCast && !doCastNull && !doCastNarrowing
       && provablyInconvertible(leftType, rightType)) {
       if (InvocationExprent.inArgument()) {
@@ -1904,12 +1905,21 @@ public class ExprProcessor implements CodeConstants {
       // is the target, and the source passed it bare.
       boolean argumentInferred = InvocationExprent.inArgument()
         && InvocationExprent.currentArgumentVariableUnconstrained();
+      // Where the variable is constrained only in a functional interface's input positions, the
+      // wildcard form's capture is accepted there and the invariant outer layer is the printer's.
+      boolean wildcardAccepted = InvocationExprent.inArgument()
+        && InvocationExprent.currentArgumentVariableWeakenable();
       if (captured[0] && view instanceof GenericType superView && leftType.value.equals(superView.value)
         && superView.getWildcard() == GenericType.WILDCARD_NO && !superView.equalsExact(typedValue)
         && !invalidGenericInstantiation(superView) && unboundedClassParameters(superView.value)
         && !argumentInferred) {
-        doubleCastTarget = superView;
-        doubleCast = true;
+        VarType wildcardForm = wildcardAccepted ? strictDoubleCastInner(superView) : null;
+        if (wildcardForm != null) {
+          wildcardOnlyCast = wildcardForm;
+        } else {
+          doubleCastTarget = superView;
+          doubleCast = true;
+        }
       }
     }
 
@@ -1982,7 +1992,8 @@ public class ExprProcessor implements CodeConstants {
     boolean samePrimitive = castAlways && leftType.equals(rightType) && isPrimitive(leftType)
       && recordedPrimitiveMatches(exprent, leftType);
     boolean cast = ((castAlways && !narrowTernaryCast && !samePrimitive) || doCast || doCastNull
-      || doCastNarrowing || doCastGenerics || doubleCast || fieldBoundCast) && !exactRecordedType;
+      || doCastNarrowing || doCastGenerics || doubleCast || wildcardOnlyCast != null
+      || fieldBoundCast) && !exactRecordedType;
 
     // A switch expression is poly: javac types every arm from the context target and emits no
     // cast after the merge, so an outer cast is the printer's. The target was handed to the
@@ -2015,7 +2026,8 @@ public class ExprProcessor implements CodeConstants {
     }
 
     if (cast) {
-      VarType castType = fieldBoundCast ? fieldBoundTarget
+      VarType castType = wildcardOnlyCast != null ? wildcardOnlyCast
+        : fieldBoundCast ? fieldBoundTarget
         : doubleCast ? doubleCastTarget
         : castRaw ? new VarType(leftType.type, leftType.arrayDim, leftType.value) : leftType;
       List<org.jetbrains.java.decompiler.util.Pair<Queue<TypeAnnotation.PathValue>, AnnotationExprent>> castAnnotations =
