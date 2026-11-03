@@ -2486,6 +2486,9 @@ public class InvocationExprent extends Exprent {
   }
 
   private static final ThreadLocal<int[]> ARGUMENT = ThreadLocal.withInitial(() -> new int[1]);
+  /** The call whose argument is being printed, and that argument's descriptor position. */
+  private static final ThreadLocal<InvocationExprent> ARGUMENT_CALL = new ThreadLocal<>();
+  private static final ThreadLocal<Integer> ARGUMENT_INDEX = new ThreadLocal<>();
 
   // The direct arguments of a this(...)/super(...) delegation whose class declares another
   // constructor of the same arity: only those expressions are judged, and only while one is
@@ -2580,6 +2583,39 @@ public class InvocationExprent extends Exprent {
 
   public static boolean inArgument() {
     return ARGUMENT.get()[0] > 0;
+  }
+
+  /**
+   * Whether the call whose argument is being printed leaves its parameter's type variable to
+   * this argument alone: no sibling parameter mentions it, so javac infers it from the value's
+   * own recorded type and the source needed no cast there.
+   */
+  public static boolean currentArgumentVariableUnconstrained() {
+    InvocationExprent call = ARGUMENT_CALL.get();
+    Integer index = ARGUMENT_INDEX.get();
+    if (call == null || index == null || call.desc == null || call.desc.getSignature() == null) {
+      return false;
+    }
+    GenericMethodDescriptor signature = call.desc.getSignature();
+    if (signature.typeParameters.isEmpty() || signature.parameterTypes.size() != call.descriptor.params.length
+      || index < 0 || index >= signature.parameterTypes.size()) {
+      return false;
+    }
+    List<String> mentioned = new ArrayList<>();
+    for (String name : signature.typeParameters) {
+      if (mentionsTypeVariable(signature.parameterTypes.get(index), List.of(name))) {
+        mentioned.add(name);
+      }
+    }
+    if (mentioned.isEmpty()) {
+      return false;
+    }
+    for (int i = 0; i < signature.parameterTypes.size(); i++) {
+      if (i != index && mentionsTypeVariable(signature.parameterTypes.get(i), mentioned)) {
+        return false;
+      }
+    }
+    return true;
   }
 
   private static final ThreadLocal<boolean[]> ARGUMENT_MAY_INFER = ThreadLocal.withInitial(() -> new boolean[1]);
@@ -3692,9 +3728,23 @@ public class InvocationExprent extends Exprent {
           : i == start ? callTextLine : Math.max(previous, callTextLine);
         boolean savedMayInfer = ARGUMENT_MAY_INFER.get()[0];
         ARGUMENT_MAY_INFER.get()[0] = i < targetMayInfer.length ? targetMayInfer[i] : true;
+        InvocationExprent savedArgumentCall = ARGUMENT_CALL.get();
+        Integer savedArgumentIndex = ARGUMENT_INDEX.get();
+        ARGUMENT_CALL.set(this);
+        ARGUMENT_INDEX.set(i);
         try {
           ExprProcessor.getCastedExprent(lstParameters.get(i), argumentType, buff, indent, ambiguous ? ExprProcessor.NullCastType.CAST : ExprProcessor.NullCastType.DONT_CAST_AT_ALL, ambiguous, true, true);
         } finally {
+          if (savedArgumentCall == null) {
+            ARGUMENT_CALL.remove();
+          } else {
+            ARGUMENT_CALL.set(savedArgumentCall);
+          }
+          if (savedArgumentIndex == null) {
+            ARGUMENT_INDEX.remove();
+          } else {
+            ARGUMENT_INDEX.set(savedArgumentIndex);
+          }
           ARGUMENT_MAY_INFER.get()[0] = savedMayInfer;
           ARG_AT_LINE_START.set(savedAtLineStart);
           ARGUMENT_TEXT_START.get()[0] = savedTextStart;

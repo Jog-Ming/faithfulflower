@@ -1899,9 +1899,15 @@ public class ExprProcessor implements CodeConstants {
       VarType view = GenericType.getGenericSuperType(typedValue, new VarType(CodeType.OBJECT, 0, leftType.value));
       boolean[] captured = new boolean[1];
       view = wildcardUnnameableInView(view, exprent.getNamedGenerics(), captured);
+      // In an argument list whose parameter type variable nothing else constrains, javac infers
+      // that variable from this argument's own recorded type: the value's supertype view already
+      // is the target, and the source passed it bare.
+      boolean argumentInferred = InvocationExprent.inArgument()
+        && InvocationExprent.currentArgumentVariableUnconstrained();
       if (captured[0] && view instanceof GenericType superView && leftType.value.equals(superView.value)
         && superView.getWildcard() == GenericType.WILDCARD_NO && !superView.equalsExact(typedValue)
-        && !invalidGenericInstantiation(superView) && unboundedClassParameters(superView.value)) {
+        && !invalidGenericInstantiation(superView) && unboundedClassParameters(superView.value)
+        && !argumentInferred) {
         doubleCastTarget = superView;
         doubleCast = true;
       }
