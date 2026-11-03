@@ -755,6 +755,23 @@ public class InvocationExprent extends Exprent {
 
   @Override
   public VarType getInferredExprType(VarType upperBound) {
+    VarType inferred = inferExprType(upperBound);
+    // An unbounded wildcard is the inference's own unresolved capture, not a type the class file
+    // records. A call chained on another call has a type its own and the receiver's signatures and
+    // recorded inputs fix; when that type is exactly the context target, the source wrote the
+    // value bare and javac re-infers it from the same records. The full inference has already run
+    // above, so the arguments it types keep their target.
+    if (instance instanceof InvocationExprent && inferred != null && hasUnboundedWildcard(inferred)) {
+      VarType target = inferredUpperBound != null ? inferredUpperBound : upperBound;
+      VarType chainReturn = receiverRecordedReturn(target);
+      if (chainReturn != null) {
+        return chainReturn;
+      }
+    }
+    return inferred;
+  }
+
+  private VarType inferExprType(VarType upperBound) {
     // Printing re-infers the same call with a different target than the one it was first inferred
     // against: an enclosing chain hands its receiver only its own still-open variables. Each pass
     // fixes some of them, so the call keeps the target merged from every pass it has seen.
@@ -1609,7 +1626,7 @@ public class InvocationExprent extends Exprent {
     if (upperBound == null || instance == null || isStatic || functype == Type.INIT
       || desc == null || desc.getSignature() == null
       || !(instance instanceof VarExprent || instance instanceof FieldExprent || instance instanceof ConstExprent
-           || instance instanceof SwitchExprent)) {
+           || instance instanceof SwitchExprent || instance instanceof InvocationExprent)) {
       return null;
     }
     VarType declared = getDeclaredGenericReturnType();
@@ -1619,7 +1636,9 @@ public class InvocationExprent extends Exprent {
     String owner = desc.getClassQualifiedName();
     VarType receiver = instance instanceof SwitchExprent switchReceiver
       ? switchReceiver.recordedArmType()
-      : instance.getInferredExprType(null);
+      : instance instanceof InvocationExprent receiverCall
+        ? recordedChainReturn(receiverCall, 2)
+        : instance.getInferredExprType(null);
     if (receiver == null || receiver.type != CodeType.OBJECT || receiver.value == null) {
       return null;
     }
@@ -1640,6 +1659,244 @@ public class InvocationExprent extends Exprent {
       return null;
     }
     return upperBound;
+  }
+
+  /**
+   * The type a call's own signature and recorded inputs fix, without the printer's inference.
+   * Only values the class file types on its own are read: a local's variable-table signature, a
+   * field's Signature, a constant, or another call that qualifies. Every formal type that names
+   * one of the callee's variables must be pinned by its argument's recorded type, a varargs
+   * array is read element by element, and an unresolved or wildcard result fails the whole
+   * chain. The depth bound keeps a long chain from costing more than the printer's own pass.
+   */
+  private static @Nullable VarType recordedChainReturn(InvocationExprent call, int depth) {
+    if (call.desc == null) {
+      StructClass cl = DecompilerContext.getStructContext().getClass(call.classname);
+      call.desc = cl != null ? cl.getMethodRecursive(call.name, call.stringDescriptor) : null;
+    }
+    if (depth < 0 || call.functype != Type.GENERAL || call.desc == null || call.desc.getSignature() == null) {
+      return null;
+    }
+    GenericMethodDescriptor signature = call.desc.getSignature();
+    MethodDescriptor descriptor = call.descriptor;
+    if (descriptor == null || signature.returnType == null
+      || signature.parameterTypes.size() != descriptor.params.length) {
+      return null;
+    }
+    Map<VarType, VarType> bindings = new HashMap<>();
+    Set<VarType> methodVariables = new HashSet<>();
+    for (String name : signature.typeParameters) {
+      methodVariables.add(GenericType.parse("T" + name + ";"));
+    }
+
+    if (call.instance != null) {
+      StructClass owner = DecompilerContext.getStructContext().getClass(call.desc.getClassQualifiedName());
+      if (owner == null || owner.getSignature() == null) {
+        return null;
+      }
+      boolean returnUsesOwner = false;
+      for (VarType variable : owner.getSignature().genericType.getAllGenericVars()) {
+        if (mentionsTypeVariable(signature.returnType, variable)) {
+          returnUsesOwner = true;
+          break;
+        }
+      }
+      if (returnUsesOwner) {
+        VarType receiver = recordedChainValue(call.instance, depth - 1);
+        if (receiver == null || receiver.type != CodeType.OBJECT || receiver.value == null) {
+          return null;
+        }
+        VarType view = receiver.value.equals(owner.qualifiedName) ? receiver
+          : GenericType.getGenericSuperType(receiver, new VarType(CodeType.OBJECT, 0, owner.qualifiedName));
+        if (!(view instanceof GenericType viewType) || viewType.value == null || !viewType.value.equals(owner.qualifiedName)) {
+          return null;
+        }
+        owner.getSignature().genericType.mapGenVarsTo(viewType, bindings);
+        for (VarType value : bindings.values()) {
+          if (value == null) {
+            return null;
+          }
+        }
+      }
+    }
+
+    List<VarType> formals = signature.parameterTypes;
+    List<Exprent> arguments = call.lstParameters;
+    boolean varargs = call.desc.hasModifier(CodeConstants.ACC_VARARGS);
+    if (arguments.size() < formals.size() - (varargs ? 1 : 0) || (!varargs && arguments.size() != formals.size())) {
+      return null;
+    }
+    for (int i = 0; i < formals.size(); i++) {
+      VarType formal = formals.get(i);
+      if (i == formals.size() - 1 && varargs && arguments.size() >= formals.size()) {
+        // The printer keeps a varargs call's array as one argument and unpacks it in the text;
+        // every element stands against the array's element type and must pin the same variables.
+        Exprent last = arguments.get(arguments.size() - 1);
+        List<Exprent> elements = last instanceof NewExprent creation ? creation.getLstArrayElements() : null;
+        if (elements != null) {
+          VarType elementFormal = formal.decreaseArrayDim();
+          if (!mentionsAnyOfTypeVariables(elementFormal, methodVariables)) {
+            continue;
+          }
+          for (Exprent element : elements) {
+            VarType actual = recordedChainValue(element, depth);
+            if (actual == null || !unifyRecordedType(elementFormal, actual, bindings, methodVariables)) {
+              return null;
+            }
+          }
+          continue;
+        }
+      }
+      if (i >= arguments.size()) {
+        return null;
+      }
+      if (!mentionsAnyOfTypeVariables(formal, methodVariables)) {
+        continue;
+      }
+      VarType actual = recordedChainValue(arguments.get(i), depth);
+      if (actual == null || !unifyRecordedType(formal, actual, bindings, methodVariables)) {
+        return null;
+      }
+    }
+
+    VarType result = signature.returnType.remap(bindings);
+    return result == null || hasUnrecordedType(result) ? null : result;
+  }
+
+  /** The type a recorded value carries: a table signature, a field Signature, or a chained call. */
+  private static @Nullable VarType recordedChainValue(Exprent value, int depth) {
+    if (value instanceof VarExprent var) {
+      return ExprProcessor.recordedVarType(var);
+    }
+    if (value instanceof FieldExprent field) {
+      return field.getInferredExprType(null);
+    }
+    if (value instanceof ConstExprent) {
+      return value.getExprType();
+    }
+    if (value instanceof InvocationExprent call && depth >= 0) {
+      return recordedChainReturn(call, depth);
+    }
+    return null;
+  }
+
+  /**
+   * Pins the callee's type variables named by {@code formal} from the argument's recorded type.
+   * Returns false when the formal names a variable this call cannot solve or when the recorded
+   * argument is itself unresolved: the chain is then not fixed by the class file.
+   */
+  private static boolean unifyRecordedType(VarType formal, VarType actual, Map<VarType, VarType> bindings,
+                                           Set<VarType> methodVariables) {
+    if (formal == null || actual == null) {
+      return false;
+    }
+    boolean formalVariable = formal.type == CodeType.GENVAR
+      && (!(formal instanceof GenericType generic) || generic.getWildcard() == GenericType.WILDCARD_NO);
+    if (formalVariable) {
+      if (!methodVariables.contains(formal.resizeArrayDim(0))) {
+        return false;
+      }
+      if (actual.arrayDim < formal.arrayDim || actual.type == CodeType.GENVAR) {
+        return false;
+      }
+      VarType bound = actual.resizeArrayDim(actual.arrayDim - formal.arrayDim);
+      if (hasUnrecordedType(bound)) {
+        return false;
+      }
+      return bindRecordedType(formal.resizeArrayDim(0), bound, bindings);
+    }
+    if (formal instanceof GenericType genericFormal
+      && genericFormal.type == CodeType.GENVAR
+      && genericFormal.getWildcard() == GenericType.WILDCARD_EXTENDS) {
+      // `? extends T` accepts any concrete type, so the argument's recorded type pins T.
+      if (!methodVariables.contains(GenericType.parse("T" + genericFormal.value + ";"))) {
+        return false;
+      }
+      if (actual.type == CodeType.GENVAR || hasUnrecordedType(actual)) {
+        return false;
+      }
+      return bindRecordedType(GenericType.parse("T" + genericFormal.value + ";"), actual, bindings);
+    }
+    if (formal.arrayDim > 0 || actual.arrayDim > 0) {
+      return formal.arrayDim == actual.arrayDim
+        && unifyRecordedType(formal.resizeArrayDim(0), actual.resizeArrayDim(0), bindings, methodVariables);
+    }
+    if (formal instanceof GenericType genericFormal && actual instanceof GenericType genericActual
+      && genericFormal.value != null && genericFormal.value.equals(genericActual.value)
+      && genericFormal.getArguments().size() == genericActual.getArguments().size()) {
+      for (int i = 0; i < genericFormal.getArguments().size(); i++) {
+        VarType formalArgument = genericFormal.getArguments().get(i);
+        VarType actualArgument = genericActual.getArguments().get(i);
+        if (formalArgument == null) {
+          continue;
+        }
+        if (actualArgument == null) {
+          return !mentionsAnyOfTypeVariables(formalArgument, methodVariables);
+        }
+        if (!unifyRecordedType(formalArgument, actualArgument, bindings, methodVariables)) {
+          return false;
+        }
+      }
+      return true;
+    }
+    // A formal with no variable of this call pins nothing; one that names a variable cannot be
+    // solved from this argument unless it was one of the shapes above.
+    return !mentionsAnyOfTypeVariables(formal, methodVariables);
+  }
+
+  private static boolean bindRecordedType(VarType variable, VarType value, Map<VarType, VarType> bindings) {
+    VarType previous = bindings.get(variable);
+    if (previous != null) {
+      return FunctionExprent.sameType(previous, value);
+    }
+    bindings.put(variable, value);
+    return true;
+  }
+
+  private static boolean mentionsAnyOfTypeVariables(VarType type, Set<VarType> variables) {
+    for (VarType variable : variables) {
+      if (mentionsTypeVariable(type, variable)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** Whether the type carries an unbounded wildcard, the printer's marker for an unresolved value. */
+  private static boolean hasUnboundedWildcard(VarType type) {
+    if (!(type instanceof GenericType generic) || generic.getWildcard() != GenericType.WILDCARD_NO) {
+      return false;
+    }
+    for (VarType argument : generic.getArguments()) {
+      if (argument == null) {
+        return true;
+      }
+      if (argument instanceof GenericType nested && nested.getWildcard() == GenericType.WILDCARD_UNBOUND) {
+        return true;
+      }
+      if (hasUnboundedWildcard(argument)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** Whether the type still names a variable or carries a wildcard, so it is not a recorded type. */
+  private static boolean hasUnrecordedType(VarType type) {
+    if (type == null || type.type == CodeType.GENVAR) {
+      return true;
+    }
+    if (type instanceof GenericType generic) {
+      if (generic.getWildcard() != GenericType.WILDCARD_NO) {
+        return true;
+      }
+      for (VarType argument : generic.getArguments()) {
+        if (argument == null || hasUnrecordedType(argument)) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   /**
