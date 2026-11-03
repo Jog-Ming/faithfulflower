@@ -108,6 +108,12 @@ public class InvocationExprent extends Exprent {
   private int callerTextLine = -1;
   public boolean forceGenericQualfication = false;
   private final NullableConcurrentHashMap<VarType, VarType> genericsMap = new NullableConcurrentHashMap<>();
+  /**
+   * Class variables the arguments solved. The receiver's own wildcard can bind a variable to the
+   * unbound wildcard first, and that binding wins; this keeps the argument's nameable value so a
+   * receiver cast can name it.
+   */
+  private final Map<VarType, VarType> argumentBindings = new HashMap<>();
   /** Type arguments recorded for a call whose variables the arguments leave unbound. */
   private List<VarType> recordedGenericArgs;
   private boolean isInvocationInstance = false;
@@ -779,11 +785,22 @@ public class InvocationExprent extends Exprent {
     // Clear existing state
     genericArgs.clear();
     genericsMap.clear();
+    argumentBindings.clear();
     resultIsDeclaredReturn = isDeclaredReturnTarget(upperBound);
     this.remappedInstType = null;
     this.witnessQualifier = false;
 
     StructClass mthCls = DecompilerContext.getStructContext().getClass(classname);
+
+    // A recorded checkcast used as this call's receiver: the call decides whether the source had
+    // to name the receiver class's type variables. The invocation's arguments are checked against
+    // the instantiated parameter types, so a wildcard receiver would capture and reject them.
+    FunctionExprent receiverCast = null;
+    if (instance instanceof FunctionExprent cast && cast.getFuncType() == FunctionType.CAST
+      && cast.isRecordedCheckcast()) {
+      receiverCast = cast;
+      cast.markInvocationReceiver(receiverCastNeedsClassVariable(desc, mthCls, upperBound));
+    }
 
     // In the case of `(Long)call() & 100L)`, the boxing call must exist.
     if (isUnboxingCall() && upperBound != null) {
@@ -1038,6 +1055,13 @@ public class InvocationExprent extends Exprent {
             instType = named.get(instType).get(0);
           }
 
+          if (receiverCast != null) {
+            // The value the call sees is an instantiation of the cast class itself: the recorded
+            // checkcast is javac's erasure boundary, not a source cast, and the source wrote the
+            // value bare.
+            receiverCast.applyReceiverTarget(instUB, instType);
+          }
+
           if (instType.isGeneric() && instType.type != CodeType.GENVAR) {
             GenericType ginstance = (GenericType)instType;
 
@@ -1281,6 +1305,7 @@ public class InvocationExprent extends Exprent {
                       // The known type of invoc *must* be A, and not B.
                       // Without doing this, we may lose some extra information.
                       // TODO: generalize this! Seems there's cases where generalizing can cause breakages currently
+                      recordArgumentBinding(from, to, mthCls, desc);
                       if (!processGenericMapping(from, to, named, bounds)) {
                         VarType current = genericsMap.get(from);
                         if (to != null && current != null && !current.isGeneric() && !to.isGeneric()) {
@@ -1299,6 +1324,7 @@ public class InvocationExprent extends Exprent {
                   if (!excluded.contains(paramType)) {
                     paramGenerics.add(paramType);
                   }
+                  recordArgumentBinding(paramType, argtype, mthCls, desc);
                   processGenericMapping(paramType, argtype, named, bounds);
                 }
               }
@@ -1316,6 +1342,26 @@ public class InvocationExprent extends Exprent {
             processGenericMapping(k, v, named, bounds);
           }
         });
+
+        // The receiver cast's class, instantiated with the variables the arguments solved (the
+        // target fills in what the value's own inference could not see). The source had to name
+        // them there; a wildcard instantiation would capture and the call's parameters would
+        // reject the arguments.
+        if (receiverCast != null && receiverCast.receiverCastNeedsVariable() && mthCls.getSignature() != null) {
+          Map<VarType, VarType> bindings = new HashMap<>();
+          for (Map.Entry<VarType, VarType> entry : genericsMap.entrySet()) {
+            if (entry.getValue() != null && !GenericType.DUMMY_VAR.equals(entry.getValue())) {
+              bindings.put(entry.getKey(), entry.getValue());
+            }
+          }
+          upperBoundsMap.forEach((variable, value) -> {
+            if (value != null && !GenericType.DUMMY_VAR.equals(value)) {
+              bindings.putIfAbsent(variable, value);
+            }
+          });
+          VarType receiverInstantiation = mthCls.getSignature().genericType.remap(hierarchyMap).remap(bindings);
+          receiverCast.setReceiverCastType(receiverInstantiation, named);
+        }
 
         // A method reference among the arguments fixes the call's type variables from the
         // recorded signatures: an instance call or a shared argument list is no obstacle, and
@@ -1677,6 +1723,40 @@ public class InvocationExprent extends Exprent {
     return false;
   }
 
+  /**
+   * Whether a call's receiver cast must name its class's type variables. A parameter whose type
+   * mentions one of them is checked against the argument's actual type, which a captured wildcard
+   * cannot accept. A return type that mentions one forces the name only when the call's own
+   * target carries an argument at a corresponding position; a wildcard target accepts a capture.
+   */
+  private static boolean receiverCastNeedsClassVariable(StructMethod desc, StructClass mthCls, VarType upperBound) {
+    if (desc == null || desc.getSignature() == null || mthCls == null
+      || mthCls.getSignature() == null || mthCls.getSignature().fparameters.isEmpty()) {
+      return false;
+    }
+    List<String> classParameters = new ArrayList<>(mthCls.getSignature().fparameters);
+    classParameters.removeAll(desc.getSignature().typeParameters);
+    if (classParameters.isEmpty()) {
+      return false;
+    }
+    GenericMethodDescriptor signature = desc.getSignature();
+    for (VarType parameter : signature.parameterTypes) {
+      if (mentionsTypeVariable(parameter, classParameters)) {
+        return true;
+      }
+    }
+    if (!mentionsTypeVariable(signature.returnType, classParameters)
+      || !(upperBound instanceof GenericType target)) {
+      return false;
+    }
+    for (VarType argument : target.getArguments()) {
+      if (argument != null) {
+        return true;
+      }
+    }
+    return false;
+  }
+
 
   @Override
   public CheckTypesResult checkExprTypeBounds() {
@@ -1947,9 +2027,10 @@ public class InvocationExprent extends Exprent {
           // Don't cast to anonymous classes, since they by definition can't have a name
           // TODO: better fix may be to change equals to isSuperSet? all anonymous classes are superset of Object
           if (wildcardCapturedParameter(cl, rightType) >= 0) {
-            // The value cannot be passed to the captured parameter, so the source erased the
-            // receiver's type; the erased cast adds no instruction and keeps the pool's descriptor.
-            appendInstCast(buf, new VarType(CodeType.OBJECT, 0, classname), res);
+            // The value cannot be passed to the captured parameter. When the arguments solved the
+            // receiver class's variables to nameable types, the source named them; otherwise it
+            // erased the receiver's type, and that cast adds no instruction either.
+            appendInstCast(buf, receiverCaptureCast(cl), res);
           } else if (rightType.equals(VarType.VARTYPE_OBJECT) && !leftType.equals(rightType) && (instNode != null && instNode.type != ClassNode.Type.ANONYMOUS)) {
             appendInstCast(buf, leftType, res);
           } else if (remappedInstType != null) {
@@ -4346,6 +4427,41 @@ public class InvocationExprent extends Exprent {
       return false;
     }
     return DecompilerContext.getStructContext().instanceOf(recorded.value, rival.value);
+  }
+
+  /** Records a class variable an argument solved, for naming the receiver cast later. */
+  private void recordArgumentBinding(VarType from, VarType to, StructClass mthCls, StructMethod desc) {
+    if (from == null || from.type != CodeType.GENVAR || from.value == null || from.arrayDim != 0 || to == null
+      || mthCls == null || mthCls.getSignature() == null
+      || !mthCls.getSignature().fparameters.contains(from.value)
+      || (desc != null && desc.getSignature() != null
+          && desc.getSignature().typeParameters.contains(from.value))) {
+      return;
+    }
+    argumentBindings.putIfAbsent(from.resizeArrayDim(0), to);
+  }
+
+  /**
+   * The instantiation a captured receiver prints. The arguments name the receiver class's
+   * variables where they constrain them; otherwise the source erased the receiver's type, and
+   * that cast adds no instruction either.
+   */
+  private VarType receiverCaptureCast(StructClass cl) {
+    if (cl != null && cl.getSignature() != null && !argumentBindings.isEmpty()) {
+      Map<VarType, VarType> merged = new HashMap<>();
+      for (Map.Entry<VarType, VarType> entry : genericsMap.entrySet()) {
+        if (entry.getValue() != null) {
+          merged.put(entry.getKey(), entry.getValue());
+        }
+      }
+      merged.putAll(argumentBindings);
+      VarType solved = cl.getSignature().genericType.remap(merged);
+      if (ExprProcessor.isNameableCastInstantiation(solved, getNamedGenerics())
+        && !ExprProcessor.isAllWildcardInstantiation(solved)) {
+        return solved;
+      }
+    }
+    return new VarType(CodeType.OBJECT, 0, classname);
   }
 
   private boolean processGenericMapping(VarType from, VarType to, Map<VarType, List<VarType>> named, Map<VarType, List<VarType>> bounds) {

@@ -599,10 +599,10 @@ public class DoStatement extends Statement {
     boolean targetDependent = iterableValue instanceof InvocationExprent invocation
       && invocation.getLstParameters().stream()
         .anyMatch(parameter -> parameter instanceof NewExprent created && created.isLambda());
-    VarType operandType = targetDependent
-      ? iterableValue.getInferredExprType(null)
-      : iterableValue.getInferredExprType(narrowed);
-    if (isNameableForEachType(narrowed) && FunctionExprent.sameType(operandType, narrowed)) {
+    // The narrowed type is also the call's target: a poly call's own inference (a lambda body)
+    // needs it to type the arguments the cast would otherwise have to carry.
+    VarType operandType = iterableValue.getInferredExprType(narrowed);
+    if (!targetDependent && isNameableForEachType(narrowed) && FunctionExprent.sameType(operandType, narrowed)) {
       cast.setNeedsCast(false);
       cast.setCompilerCast(true);
     } else {

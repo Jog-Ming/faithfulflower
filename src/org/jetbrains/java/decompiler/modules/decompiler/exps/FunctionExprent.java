@@ -170,6 +170,12 @@ public class FunctionExprent extends Exprent {
   private boolean compilerCast = false;
   /** The cast was born from a checkcast instruction: the target's own source wrote it. */
   private boolean recordedCheckcast = false;
+  /** The instantiation a recorded checkcast prints, when the printer could recover one. */
+  private VarType printedCastType;
+  /** Whether this recorded cast is the receiver of an invocation being typed. */
+  private boolean invocationReceiverCast;
+  /** Whether that invocation's signature forces the receiver's class variables to be named. */
+  private boolean receiverCastNeedsVariable;
   private boolean disableNewlineGroupCreation = false;
   /**
    * Set while a boolean {@code ||} chain whose operator owns the chain's first line prints its
@@ -306,6 +312,15 @@ public class FunctionExprent extends Exprent {
       } finally {
         if (suspendLambdaType) {
           Exprent.resumeLambdaParameterTypes();
+        }
+      }
+
+      // A recorded checkcast names only the erasure. When the cast's value has to satisfy the
+      // context it is printed in, the context target names the instantiation the source wrote.
+      if (printedCastType == null && recordedCheckcast && cast.size() == 1 && upperBound != null) {
+        VarType candidate = ExprProcessor.castInstantiationFromUpperBound(cast.get(0), upperBound, getNamedGenerics());
+        if (candidate != null && ExprProcessor.castTargetValid(candidate, right)) {
+          printedCastType = candidate;
         }
       }
 
@@ -1056,13 +1071,21 @@ public class FunctionExprent extends Exprent {
       case IMM:
         return buf.append(wrapOperandString(lstOperands.get(0), true, indent).append(funcType.operator));
       case CAST:
-        if (!needsCast && (compilerCast || !(RoundTrip.forceCast(this) || recordedArrayWideningCast()))
+        if (receiverCastIsErasureBoundary()
+            || !needsCast && (compilerCast || !(RoundTrip.forceCast(this) || recordedArrayWideningCast()))
             || selfTypedReceiverCast()) {
           return buf.append(lstOperands.get(0).toJava(indent));
         }
         for (int i = 1; i < lstOperands.size(); i++) {
           if (i > 1) {
             buf.append(" & ");
+          }
+          if (i == 1 && lstOperands.size() == 2) {
+            VarType instantiation = printedCastInstantiation();
+            if (instantiation != null) {
+              buf.appendCastTypeName(instantiation);
+              continue;
+            }
           }
           buf.append(lstOperands.get(i).toJava(indent));
         }
@@ -1266,6 +1289,83 @@ public class FunctionExprent extends Exprent {
   }
 
   /**
+   * The type a recorded checkcast prints: the instantiation the receiver's call solved, the
+   * instantiation its context or its operand records, or the all-wildcard form. Null means the
+   * cast has no nameable generic target and its recorded type operand prints as before.
+   */
+  private VarType printedCastInstantiation() {
+    if (funcType != FunctionType.CAST || !recordedCheckcast || lstOperands.size() != 2) {
+      return null;
+    }
+    VarType target = lstOperands.get(1).getExprType();
+    if (target == null || target.type != CodeType.OBJECT || target.arrayDim != 0 || target.value == null
+      || target.isGeneric()) {
+      // The type operand already names an instantiation (a transformed or narrowed cast); it is
+      // the most specific evidence there is.
+      return null;
+    }
+    StructClass cls = DecompilerContext.getStructContext().getClass(target.value);
+    if (cls == null || cls.getSignature() == null || cls.getSignature().fparameters.isEmpty()) {
+      return null;
+    }
+    // The name must be printable at all (the import collector can refuse a short name).
+    if (ExprProcessor.isInvalidTypeName(ExprProcessor.getTypeName(target))) {
+      return null;
+    }
+
+    if (invocationReceiverCast) {
+      if (receiverCastNeedsVariable) {
+        VarType view = ExprProcessor.castInstantiationFromOperand(target, lstOperands.get(0), getNamedGenerics());
+        if (view != null && !ExprProcessor.isAllWildcardInstantiation(view)) {
+          return view;
+        }
+        if (printedCastType != null) {
+          return printedCastType;
+        }
+      }
+      // A receiver whose call needs no variable of the class: the wildcard form is the source's
+      // only nameable conversion and a captured receiver accepts no argument that mentions it.
+      return wildcardCastInstantiation(cls);
+    }
+
+    if (printedCastType != null) {
+      return printedCastType;
+    }
+    VarType view = ExprProcessor.castInstantiationFromOperand(target, lstOperands.get(0), getNamedGenerics());
+    if (view != null && !ExprProcessor.isAllWildcardInstantiation(view)) {
+      return view;
+    }
+    return wildcardCastInstantiation(cls);
+  }
+
+  /**
+   * Whether a receiver cast is javac's erasure boundary even though the operand's own inference
+   * at the call site could not see its source type: the enclosing call's target named the
+   * receiver's instantiation, and the erased value's declared type is a proper supertype of the
+   * cast class, so the printed source types the value from that same target.
+   */
+  private boolean receiverCastIsErasureBoundary() {
+    if (!invocationReceiverCast || printedCastType == null || lstOperands.size() != 2
+      || !(lstOperands.get(0) instanceof InvocationExprent)) {
+      // Only a call's erased return can be the boundary; a variable's own type is what it is, and
+      // a cast over it is either the source's or a real conversion.
+      return false;
+    }
+    VarType target = lstOperands.get(1).getExprType();
+    return target != null && target.type == CodeType.OBJECT && target.arrayDim == 0 && target.value != null
+      && erasedGenericCheckcast(target, printedCastType, printedCastType, lstOperands.get(0));
+  }
+
+  /** The cast class instantiated with one unbounded wildcard per declared parameter. */
+  private static VarType wildcardCastInstantiation(StructClass cls) {
+    List<VarType> arguments = new ArrayList<>(cls.getSignature().fparameters.size());
+    for (int i = 0; i < cls.getSignature().fparameters.size(); i++) {
+      arguments.add(null); // null is the unbounded wildcard in a GenericType's argument list
+    }
+    return new GenericType(CodeType.OBJECT, 0, cls.qualifiedName, null, arguments, GenericType.WILDCARD_NO);
+  }
+
+  /**
    * The test type of a non-pattern {@code instanceof} on a generic class. The class file's
    * CONSTANT_Class names only the erasure, and Java's grammar lets a reference type in this
    * position carry arguments, so the recorded declaration decides their number: one unbounded
@@ -1434,6 +1534,52 @@ public class FunctionExprent extends Exprent {
 
   public boolean isRecordedCheckcast() {
     return recordedCheckcast;
+  }
+
+  /** Tells a recorded checkcast that it is the receiver of an invocation being typed. */
+  public void markInvocationReceiver(boolean needsVariable) {
+    invocationReceiverCast = true;
+    receiverCastNeedsVariable = needsVariable;
+  }
+
+  /** Whether this receiver cast must name its class's type variables to compile. */
+  public boolean receiverCastNeedsVariable() {
+    return receiverCastNeedsVariable;
+  }
+
+  /**
+   * The receiver instantiation an enclosing invocation solved from its arguments. A wildcard
+   * there would capture, so the source had to name the variables the call's signature mentions.
+   */
+  public void setReceiverCastType(VarType type, Map<VarType, List<VarType>> named) {
+    if (type == null || !recordedCheckcast || lstOperands.size() != 2) {
+      return;
+    }
+    VarType target = lstOperands.get(1).getExprType();
+    if (target == null || target.type != CodeType.OBJECT || target.arrayDim != 0 || target.value == null
+      || !target.value.equals(type.value) || !ExprProcessor.isNameableCastInstantiation(type, named)) {
+      return;
+    }
+    printedCastType = type;
+  }
+
+  /**
+   * The recorded checkcast's decision for a receiver whose value the enclosing call inferred:
+   * when it is javac's own erasure-boundary adaptation, the source wrote no cast at all.
+   */
+  public void applyReceiverTarget(VarType receiverTarget, VarType operandType) {
+    if (funcType != FunctionType.CAST || !recordedCheckcast || lstOperands.size() != 2
+      || receiverTarget == null || operandType == null) {
+      return;
+    }
+    VarType target = lstOperands.get(1).getExprType();
+    if (target == null || target.type != CodeType.OBJECT || target.arrayDim != 0 || target.value == null) {
+      return;
+    }
+    if (erasedGenericCheckcast(target, operandType, receiverTarget, lstOperands.get(0))) {
+      needsCast = false;
+      compilerCast = true;
+    }
   }
 
   public void setInvocationInstance() {

@@ -1725,6 +1725,15 @@ public class ExprProcessor implements CodeConstants {
     boolean doCastNull = (castNull.cast && rightType.type == CodeType.NULL && !UNDEFINED_TYPE_STRING.equals(getTypeName(leftType)));
     boolean doCastNarrowing = (castNarrowing && isIntConstant(exprent) && isNarrowedIntType(leftType));
     boolean doCastGenerics = doGenericTypesCast(exprent, leftType, rightType);
+    // An instance call's return type carries the receiver class's type variable, which the
+    // target cannot re-infer: an invariant argument mismatch between them is a conversion only
+    // the source's cast performs. javac emits no instruction for the cast because the erasures
+    // already match.
+    if (!doCastGenerics && exprent instanceof InvocationExprent call
+      && call.getInstance() != null && !call.isStatic() && !call.isPolyCall()
+      && invariantTypeVariableMismatch(exprent.getNamedGenerics(), leftType, rightType)) {
+      doCastGenerics = true;
+    }
     // A generic array creation can only name its component through the all-wildcard form
     // `new X<?>[]`; when the recorded target instantiates that same component with type
     // arguments, the wildcard array is not assignable to it (arrays are invariant over
@@ -1804,17 +1813,26 @@ public class ExprProcessor implements CodeConstants {
     }
 
     // An instantiation of X cannot be cast to another instantiation of X whose arguments are
-    // provably distinct: javac rejects the conversion outright, so no compiling source wrote it.
-    // In an argument list the printer seeded a type variable from the call's own context and
-    // javac infers it again from the value, which is what the original relied on; elsewhere the
-    // value must be converted, and the source that compiled wrote the raw cast.
+    // provably distinct: javac rejects the conversion outright. In an argument list the printer
+    // seeded a type variable from the call's own context and javac infers it again from the
+    // value, which is what the original relied on; elsewhere the source widened the value to a
+    // wildcard instantiation first, and that intermediate cast is an unchecked one javac accepts.
     boolean castRaw = false;
+    boolean doubleCast = false;
+    VarType doubleCastTarget = leftType;
+    VarType doubleCastInner = null;
     if (doCastGenerics && !castAlways && !doCast && !doCastNull && !doCastNarrowing
       && provablyInconvertible(leftType, rightType)) {
       if (InvocationExprent.inArgument()) {
         doCastGenerics = false;
       } else {
-        castRaw = true;
+        doubleCastInner = uncheckedDoubleCastInner(leftType, rightType);
+        if (doubleCastInner != null) {
+          doubleCast = true;
+          doubleCastTarget = leftType;
+        } else {
+          castRaw = true;
+        }
       }
     }
 
@@ -1852,10 +1870,17 @@ public class ExprProcessor implements CodeConstants {
     // A cast from an instantiation whose type argument is a wildcard capture to another
     // instantiation is illegal under JLS 5.5.1 unless the target's argument is the wildcard's
     // own bound (or below it): javac rejects the printed conversion outright. The source that
-    // compiled wrote the raw erasure instead, which erases to the same class, so the class file
-    // is unchanged.
-    if (doCastGenerics && !castRaw && parameterizedCastIllegal(leftType, rightType)) {
-      castRaw = true;
+    // compiled widened to a wildcard instantiation first (an unchecked cast javac accepts), and
+    // that two-step form falls back to the raw erasure when no intermediate exists. All steps
+    // erase to the same class, so the class file is unchanged.
+    if (doCastGenerics && !castRaw && !doubleCast && parameterizedCastIllegal(leftType, rightType)) {
+      doubleCastInner = uncheckedDoubleCastInner(leftType, rightType);
+      if (doubleCastInner != null) {
+        doubleCast = true;
+        doubleCastTarget = leftType;
+      } else {
+        castRaw = true;
+      }
     }
 
     // An argument whose parameter is the raw class G but whose value is a parameterized subtype
@@ -1864,8 +1889,6 @@ public class ExprProcessor implements CodeConstants {
     // cast to (TaggedChoiceType<?> as Type<Pair<?,?>>); that view's instantiation is provably
     // distinct from the subtype's, so the source widened to the erased G first. Both steps erase
     // to the parameter's own class, so no checkcast can appear.
-    boolean doubleCast = false;
-    VarType doubleCastTarget = leftType;
     if (!doCastGenerics && !doCast && !castRaw && !doCastNull && !doCastNarrowing && !castAlways
       && leftType != null && leftType.type == CodeType.OBJECT && leftType.arrayDim == 0 && !leftType.isGeneric()
       && exprent instanceof InvocationExprent
@@ -1890,6 +1913,10 @@ public class ExprProcessor implements CodeConstants {
     // Signature names the instantiation once its unnameable variables are wildcarded, and when
     // that instantiation is exactly the target, the source cast to the erased form first and
     // then to the target. Both erase to the target's class, so no checkcast can appear.
+    // In an argument list the parameter's instantiation is the printer's own inference from this
+    // argument, so javac solves the same variables again from the bare value and the source wrote
+    // none of it; only a target recorded independently of the value (a field, a return) needs the
+    // cast.
     if (!doubleCast && !doCastGenerics && !doCast && !castRaw && !doCastNull && !doCastNarrowing && !castAlways
       && leftType instanceof GenericType erasureTarget && erasureTarget.getWildcard() == GenericType.WILDCARD_NO
       && erasureTarget.arrayDim == 0 && !erasureTarget.getArguments().isEmpty()
@@ -1902,7 +1929,8 @@ public class ExprProcessor implements CodeConstants {
         exprent.getNamedGenerics(), wildcarded);
       if (wildcarded[0] && named instanceof GenericType namedType
         && namedType.getWildcard() == GenericType.WILDCARD_NO
-        && namedType.equalsExact(erasureTarget)) {
+        && namedType.equalsExact(erasureTarget)
+        && !InvocationExprent.inArgument()) {
         doubleCastTarget = erasureTarget;
         doubleCast = true;
       }
@@ -1999,7 +2027,7 @@ public class ExprProcessor implements CodeConstants {
         // target class with its one argument as an upper bound (`Type<? extends Pair<?, ?>>`).
         // When the target itself is the wildcarded erasure (`Dynamic<?>`), no first step exists
         // and printing it again would only repeat the same cast.
-        VarType inner = strictDoubleCastInner(doubleCastTarget);
+        VarType inner = doubleCastInner != null ? doubleCastInner : strictDoubleCastInner(doubleCastTarget);
         if (inner == null) {
           inner = erasedWildcardForm(doubleCastTarget);
         }
@@ -2010,7 +2038,11 @@ public class ExprProcessor implements CodeConstants {
     }
 
     if (castLambda) {
-      buffer.append('(').appendCastTypeName(rightType).append(')');
+      // The lambda's own type is the functional interface the target names; when the target is a
+      // supertype of it, the interface's recorded declaration supplies the type arguments the
+      // source wrote on the cast.
+      VarType lambdaCast = castInstantiationFromUpperBound(rightType, leftType, exprent.getNamedGenerics());
+      buffer.append('(').appendCastTypeName(lambdaCast != null ? lambdaCast : rightType).append(')');
     }
 
     if (quote) {
@@ -2074,6 +2106,35 @@ public class ExprProcessor implements CodeConstants {
       }
     }
     return false;
+  }
+
+  /**
+   * The intermediate a two-step conversion to a provably distinct instantiation widens to: the
+   * cast class with the value's own argument as an upper bound, its type variables wildcarded.
+   * The first cast is an unchecked conversion javac accepts from the value, and the second from
+   * that wildcard instantiation to the target.
+   */
+  private static @Nullable VarType uncheckedDoubleCastInner(VarType target, VarType value) {
+    if (!(target instanceof GenericType targetType) || !(value instanceof GenericType valueType)
+      || targetType.getWildcard() != GenericType.WILDCARD_NO || valueType.getWildcard() != GenericType.WILDCARD_NO
+      || target.value == null || !target.value.equals(value.value)
+      || targetType.getArguments().size() != 1 || valueType.getArguments().size() != 1) {
+      return null;
+    }
+    VarType valueArgument = valueType.getArguments().get(0);
+    if (valueArgument == null) {
+      return null;
+    }
+    VarType bound = valueArgument instanceof GenericType generic
+      && generic.getWildcard() == GenericType.WILDCARD_EXTENDS
+      ? GenericType.withWildcard(generic, GenericType.WILDCARD_NO) : valueArgument;
+    bound = wildcardUnnameableInView(bound, Collections.emptyMap(), new boolean[1]);
+    if (bound == null) {
+      return null;
+    }
+    VarType wildcard = GenericType.withWildcard(bound, GenericType.WILDCARD_EXTENDS);
+    return new GenericType(CodeType.OBJECT, 0, target.value, null,
+      Collections.singletonList(wildcard), GenericType.WILDCARD_NO);
   }
 
   /**
@@ -2211,18 +2272,266 @@ public class ExprProcessor implements CodeConstants {
       if (targetArg.type == CodeType.GENVAR) {
         continue;
       }
+      // A wildcard bound that mentions a type variable fixes the cast's argument: the target must
+      // be contained by that bound with the same variables. A target that drops or replaces one
+      // is provably distinct (the capture could be a sibling subtype), and the source widened to
+      // the bound with the variable wildcarded first.
+      if (mentionsGenericVariable(wildcard)
+        && !boundContainsTarget(GenericType.withWildcard(wildcard, GenericType.WILDCARD_NO), targetArg)) {
+        return true;
+      }
       // A concrete argument is contained by `? extends B` when it is a subtype of B: Integer is
-      // legal under `? extends Number`, Object is not. A parameterized argument is contained only
-      // when its own class is B's class; a parameterized proper subtype is rejected even though
-      // its erasure is a subtype (the capture could have been a sibling subtype), and the source
-      // that compiled wrote the raw erasure there. Only an uncontained argument forces the raw.
+      // legal under `? extends Number`, Object is not. The same erasure rule governs a
+      // parameterized argument (WritableRegistry<?> under `? extends Registry<?>`), so only an
+      // argument whose erasure is not below the bound forces the raw form.
       if (targetArg.type != CodeType.OBJECT || targetArg.arrayDim != 0 || targetArg.value == null
-        || !DecompilerContext.getStructContext().instanceOf(targetArg.value, wildcard.value)
-        || targetArg.isGeneric() && !targetArg.value.equals(wildcard.value)) {
+        || !DecompilerContext.getStructContext().instanceOf(targetArg.value, wildcard.value)) {
         return true;
       }
     }
     return false;
+  }
+
+  /**
+   * The instantiation of a recorded checkcast's target class that the context target names, or
+   * null when the context does not fix one. The class file's checkcast names only the erasure;
+   * a source cast must name an instantiation the context accepts, and when the value is not
+   * assignable to the context the source's cast is what makes it so.
+   */
+  public static @Nullable VarType castInstantiationFromUpperBound(VarType erasedTarget, VarType upperBound,
+                                                                  Map<VarType, List<VarType>> named) {
+    if (erasedTarget == null || erasedTarget.type != CodeType.OBJECT || erasedTarget.value == null
+      || upperBound == null || upperBound.type != CodeType.OBJECT || upperBound.value == null
+      || upperBound.arrayDim != 0) {
+      return null;
+    }
+    StructClass targetClass = DecompilerContext.getStructContext().getClass(erasedTarget.value);
+    if (targetClass == null || targetClass.getSignature() == null
+      || targetClass.getSignature().fparameters.isEmpty()) {
+      return null;
+    }
+
+    VarType view = null;
+    if (upperBound.value.equals(erasedTarget.value)) {
+      view = upperBound;
+    } else if (DecompilerContext.getStructContext().instanceOf(upperBound.value, erasedTarget.value)) {
+      // The context target is a subtype of the cast class: its recorded supertype view names the
+      // instantiation the cast expressed.
+      view = GenericType.getGenericSuperType(upperBound, new VarType(CodeType.OBJECT, 0, erasedTarget.value));
+    } else if (DecompilerContext.getStructContext().instanceOf(erasedTarget.value, upperBound.value)) {
+      // The context target is a supertype of the cast class: instantiate the cast class's own
+      // declaration through its recorded view of that supertype.
+      VarType superView = GenericType.getGenericSuperType(targetClass.getSignature().genericType,
+        new VarType(CodeType.OBJECT, 0, upperBound.value));
+      if (superView != null && upperBound.value.equals(superView.value)) {
+        Map<VarType, VarType> mapping = new HashMap<>();
+        if (upperBound instanceof GenericType && superView instanceof GenericType
+          && ((GenericType) upperBound).getArguments().size() == ((GenericType) superView).getArguments().size()) {
+          ((GenericType) superView).mapGenVarsTo((GenericType) upperBound, mapping);
+        }
+        view = targetClass.getSignature().genericType.remap(mapping);
+      }
+    }
+
+    if (!(view instanceof GenericType) || view.value == null || !view.value.equals(erasedTarget.value)) {
+      return null;
+    }
+    return isNameableCastInstantiation(view, named) ? view : null;
+  }
+
+  /**
+   * The instantiation of a recorded checkcast's target class that the operand itself records, or
+   * null when the operand's type does not fix one. Only a local or field is read: its type is
+   * written by the class file and needs no inference context.
+   */
+  public static @Nullable VarType castInstantiationFromOperand(VarType erasedTarget, Exprent operand,
+                                                               Map<VarType, List<VarType>> named) {
+    if (erasedTarget == null || erasedTarget.type != CodeType.OBJECT || erasedTarget.value == null || operand == null) {
+      return null;
+    }
+    VarType value;
+    if (operand instanceof VarExprent var) {
+      value = var.getInferredExprType(null);
+    } else if (operand instanceof FieldExprent field) {
+      value = field.getInferredExprType(null);
+    } else {
+      return null;
+    }
+
+    VarType view = castOperandView(erasedTarget, value);
+    if (view == null) {
+      return null;
+    }
+    return isNameableCastInstantiation(view, named) ? view : null;
+  }
+
+  /** The target class's instantiation seen from the operand's recorded type, if any. */
+  private static @Nullable VarType castOperandView(VarType erasedTarget, VarType value) {
+    if (value == null || value.type != CodeType.OBJECT || value.value == null || value.arrayDim != 0) {
+      return null;
+    }
+    StructClass targetClass = DecompilerContext.getStructContext().getClass(erasedTarget.value);
+    if (targetClass == null || targetClass.getSignature() == null
+      || targetClass.getSignature().fparameters.isEmpty()) {
+      return null;
+    }
+
+    if (value.value.equals(erasedTarget.value) && value instanceof GenericType valueType) {
+      // The same class: its recorded arguments are the source's instantiation. An upper-bounded
+      // wildcard is the strongest nameable form of the argument and is what the source wrote
+      // where the capture itself cannot be named.
+      List<VarType> arguments = new ArrayList<>(valueType.getArguments().size());
+      for (VarType argument : valueType.getArguments()) {
+        if (argument instanceof GenericType generic
+          && generic.getWildcard() == GenericType.WILDCARD_EXTENDS) {
+          arguments.add(GenericType.withWildcard(generic, GenericType.WILDCARD_NO));
+        } else {
+          arguments.add(argument);
+        }
+      }
+      return new GenericType(CodeType.OBJECT, 0, erasedTarget.value, null, arguments, GenericType.WILDCARD_NO);
+    }
+    if (DecompilerContext.getStructContext().instanceOf(value.value, erasedTarget.value)) {
+      // The operand is a subclass of the cast class: its recorded supertype view is the answer.
+      VarType view = GenericType.getGenericSuperType(value, new VarType(CodeType.OBJECT, 0, erasedTarget.value));
+      return view != null && erasedTarget.value.equals(view.value) ? view : null;
+    }
+    if (DecompilerContext.getStructContext().instanceOf(erasedTarget.value, value.value)) {
+      // The operand is a supertype of the cast class: solve the cast class's parameters from the
+      // recorded instantiation through the hierarchy's own generic map.
+      return solveCastInstantiation(targetClass, value);
+    }
+    return null;
+  }
+
+  private static @Nullable VarType solveCastInstantiation(StructClass targetClass, VarType value) {
+    StructClass valueClass = DecompilerContext.getStructContext().getClass(value.value);
+    if (valueClass == null || valueClass.getSignature() == null || !(value instanceof GenericType valueType)) {
+      return null;
+    }
+    Map<VarType, VarType> hierarchy = targetClass.getAllGenerics().get(valueClass.qualifiedName);
+    if (hierarchy == null || hierarchy.isEmpty()) {
+      return null;
+    }
+    Map<VarType, VarType> actual = new HashMap<>();
+    valueClass.getSignature().genericType.mapGenVarsTo(valueType, actual);
+    Map<VarType, VarType> solved = new HashMap<>();
+    for (Map.Entry<VarType, VarType> entry : hierarchy.entrySet()) {
+      VarType actualValue = actual.get(entry.getKey());
+      if (actualValue == null) {
+        continue;
+      }
+      if (!unifyCastVariable(entry.getValue(), actualValue, solved)) {
+        return null;
+      }
+    }
+    return targetClass.getSignature().genericType.remap(solved);
+  }
+
+  /** Binds the type variables of {@code pattern} to the matching parts of {@code actual}. */
+  private static boolean unifyCastVariable(VarType pattern, VarType actual, Map<VarType, VarType> solved) {
+    if (pattern == null || actual == null) {
+      return pattern == actual;
+    }
+    if (pattern.type == CodeType.GENVAR && pattern.arrayDim == 0
+      && (!(pattern instanceof GenericType generic) || generic.getWildcard() == GenericType.WILDCARD_NO)) {
+      VarType key = pattern.resizeArrayDim(0);
+      VarType existing = solved.get(key);
+      if (existing != null) {
+        return sameType(existing, actual);
+      }
+      solved.put(key, actual);
+      return true;
+    }
+    if (pattern instanceof GenericType patternType && actual instanceof GenericType actualType
+      && patternType.getWildcard() == GenericType.WILDCARD_NO
+      && actualType.getWildcard() == GenericType.WILDCARD_NO
+      && pattern.value != null && pattern.value.equals(actual.value)
+      && patternType.getArguments().size() == actualType.getArguments().size()) {
+      for (int i = 0; i < patternType.getArguments().size(); i++) {
+        if (!unifyCastVariable(patternType.getArguments().get(i), actualType.getArguments().get(i), solved)) {
+          return false;
+        }
+      }
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Whether a cast may name this instantiation: every type argument is recorded and nameable (an
+   * unbounded wildcard is nameable, a capture or an out-of-scope variable is not), no argument is
+   * a raw generic class, and no argument violates its declared bound.
+   */
+  public static boolean isNameableCastInstantiation(VarType type, Map<VarType, List<VarType>> named) {
+    if (!(type instanceof GenericType generic) || generic.getWildcard() != GenericType.WILDCARD_NO
+      || type.type != CodeType.OBJECT || type.arrayDim != 0 || type.value == null) {
+      return false;
+    }
+    StructClass cls = DecompilerContext.getStructContext().getClass(type.value);
+    if (cls == null || cls.getSignature() == null) {
+      return false;
+    }
+    List<VarType> arguments = generic.getArguments();
+    if (arguments.size() != cls.getSignature().fparameters.size()) {
+      return false;
+    }
+    for (VarType argument : arguments) {
+      if (!nameableCastArgument(argument, named)) {
+        return false;
+      }
+    }
+    return !hasRawTypeArgument(type) && !invalidGenericInstantiation(type);
+  }
+
+  private static boolean nameableCastArgument(VarType type, Map<VarType, List<VarType>> named) {
+    if (type == null) {
+      return true; // the unbounded wildcard
+    }
+    if (type instanceof GenericType generic && generic.getWildcard() != GenericType.WILDCARD_NO) {
+      if (type.type == CodeType.GENVAR) {
+        return type.value != null
+          && Exprent.isTypeVariableNameable(GenericType.parse("T" + type.value + ";"), named);
+      }
+      return nameableCastArguments(generic, named);
+    }
+    if (type.type == CodeType.GENVAR) {
+      return Exprent.isTypeVariableNameable(type.resizeArrayDim(0), named);
+    }
+    return nameableCastArguments(type, named);
+  }
+
+  private static boolean nameableCastArguments(VarType type, Map<VarType, List<VarType>> named) {
+    if (!(type instanceof GenericType generic)) {
+      return true;
+    }
+    for (VarType argument : generic.getArguments()) {
+      if (!nameableCastArgument(argument, named)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /** Whether an instantiation names only unbounded wildcards, the capture form no source wrote. */
+  public static boolean isAllWildcardInstantiation(VarType type) {
+    if (!(type instanceof GenericType generic) || generic.getArguments().isEmpty()) {
+      return false;
+    }
+    for (VarType argument : generic.getArguments()) {
+      if (argument != null) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /** Whether a printed cast to this instantiation erases to the same value's recorded type. */
+  public static boolean castTargetValid(VarType candidate, VarType operandType) {
+    if (candidate == null || operandType == null) {
+      return true;
+    }
+    return !provablyInconvertible(candidate, operandType) && !parameterizedCastIllegal(candidate, operandType);
   }
 
   /** JLS 4.5 "provably distinct" for one position, limited to the shapes the printer produces. */
@@ -2586,6 +2895,87 @@ public class ExprProcessor implements CodeConstants {
       }
       if (targetArg.type == CodeType.GENVAR && actualArg.type != CodeType.GENVAR && !targetArg.equals(actualArg)) {
         return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Whether the target and the value are instantiations of one generic class with a plain type
+   * variable of this scope in the target and a different argument in the value at the same
+   * position. The instantiations are invariant, so no assignment converts one into the other and
+   * a source that compiled cast the value; the matching erasure makes the cast free.
+   */
+  private static boolean invariantTypeVariableMismatch(Map<VarType, List<VarType>> named,
+                                                       VarType left, VarType right) {
+    if (!(left instanceof GenericType target) || !(right instanceof GenericType value)
+      || left.arrayDim != 0 || right.arrayDim != 0 || left.value == null
+      || !left.value.equals(right.value)
+      || target.getWildcard() != GenericType.WILDCARD_NO || value.getWildcard() != GenericType.WILDCARD_NO) {
+      return false;
+    }
+    List<VarType> targetArguments = target.getArguments();
+    List<VarType> valueArguments = value.getArguments();
+    if (targetArguments.size() != valueArguments.size()) {
+      return false;
+    }
+    for (int i = 0; i < targetArguments.size(); i++) {
+      VarType targetArgument = targetArguments.get(i);
+      VarType valueArgument = valueArguments.get(i);
+      if (plainTypeVariable(targetArgument) && named.containsKey(targetArgument)
+        && valueArgument != null && !targetArgument.equals(valueArgument)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Whether the type argument {@code target} is contained by the wildcard argument's {@code bound}:
+   * the same type variable, a parameterization whose arguments are contained position by
+   * position, or a value inside an upper-bounded wildcard's bound.
+   */
+  private static boolean boundContainsTarget(VarType bound, VarType target) {
+    if (bound == null || target == null) {
+      return bound == target; // an unbounded wildcard contains only itself
+    }
+    if (bound instanceof GenericType genericBound && genericBound.getWildcard() != GenericType.WILDCARD_NO) {
+      VarType base = GenericType.withWildcard(genericBound, GenericType.WILDCARD_NO);
+      return genericBound.getWildcard() == GenericType.WILDCARD_EXTENDS
+        ? boundContainsTarget(base, target)
+        : boundContainsTarget(target, base);
+    }
+    if (bound.type == CodeType.GENVAR) {
+      return sameType(bound, target);
+    }
+    if (bound instanceof GenericType genericBound && target instanceof GenericType genericTarget
+      && genericBound.getWildcard() == GenericType.WILDCARD_NO
+      && genericTarget.getWildcard() == GenericType.WILDCARD_NO
+      && genericBound.value != null && genericBound.value.equals(genericTarget.value)
+      && genericBound.getArguments().size() == genericTarget.getArguments().size()) {
+      for (int i = 0; i < genericBound.getArguments().size(); i++) {
+        if (!boundContainsTarget(genericBound.getArguments().get(i), genericTarget.getArguments().get(i))) {
+          return false;
+        }
+      }
+      return true;
+    }
+    return sameType(bound, target);
+  }
+
+  /** Whether the type mentions a type variable at or below this position. */
+  private static boolean mentionsGenericVariable(VarType type) {
+    if (type == null) {
+      return false;
+    }
+    if (type.type == CodeType.GENVAR) {
+      return true;
+    }
+    if (type instanceof GenericType generic) {
+      for (VarType argument : generic.getArguments()) {
+        if (mentionsGenericVariable(argument)) {
+          return true;
+        }
       }
     }
     return false;
