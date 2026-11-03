@@ -1586,7 +1586,7 @@ public class ExprProcessor implements CodeConstants {
   }
 
   /** The type the local variable table records for this variable, signature first. */
-  private static @Nullable VarType recordedVarType(VarExprent var) {
+  public static @Nullable VarType recordedVarType(VarExprent var) {
     LocalVariable lvt = var.getLVT();
     if (lvt == null && var.getProcessor() != null) {
       lvt = var.getProcessor().getVarLVT(var.getVarVersionPair());

@@ -352,6 +352,15 @@ public class SwitchExprent extends Exprent {
       if (FunctionExprent.sameType(type, target)) {
         continue;
       }
+      // The descriptor erases a type variable the class file records elsewhere: a local's
+      // signature in the variable table, a field's Signature. When that recorded type is
+      // exactly the target, the arm is the target and the source's switch was inferred
+      // against it.
+      VarType recorded = content instanceof VarExprent var ? ExprProcessor.recordedVarType(var)
+        : content instanceof FieldExprent field ? field.getInferredExprType(null) : null;
+      if (recorded != null && FunctionExprent.sameType(recorded, target)) {
+        continue;
+      }
       if (target.type == CodeType.GENVAR) {
         // A concrete type is not implicitly convertible to a type variable.
         return false;
