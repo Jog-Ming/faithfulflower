@@ -1725,6 +1725,17 @@ public class ExprProcessor implements CodeConstants {
     boolean doCastNull = (castNull.cast && rightType.type == CodeType.NULL && !UNDEFINED_TYPE_STRING.equals(getTypeName(leftType)));
     boolean doCastNarrowing = (castNarrowing && isIntConstant(exprent) && isNarrowedIntType(leftType));
     boolean doCastGenerics = doGenericTypesCast(exprent, leftType, rightType);
+    // A generic array creation can only name its component through the all-wildcard form
+    // `new X<?>[]`; when the recorded target instantiates that same component with type
+    // arguments, the wildcard array is not assignable to it (arrays are invariant over
+    // non-reifiable components) and the source cast the creation.
+    if (!doCastGenerics && exprent instanceof NewExprent creation
+      && creation.printsWildcardArrayComponentFor(leftType)
+      && rightType instanceof GenericType value && value.type == CodeType.OBJECT
+      && value.value != null && value.value.equals(leftType.value)
+      && value.arrayDim == leftType.arrayDim && !sameType(leftType, rightType)) {
+      doCastGenerics = true;
+    }
     // Inference substituted the upper bound into the call's type, so the wildcard the method
     // declared has vanished; the original source had to cast that capture away, and javac elides
     // the checkcast because the erasures match.

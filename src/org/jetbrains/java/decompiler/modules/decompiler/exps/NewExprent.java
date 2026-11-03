@@ -55,6 +55,9 @@ public class NewExprent extends Exprent {
   private boolean isQualifier;
 
   private boolean enumConst;
+  // The component of the context target of a generic array creation (`X<A>[]` from a field or
+  // method signature). The array-creating instruction only names the erased class.
+  private VarType arrayComponentTarget;
   private List<VarType> genericArgs = new ArrayList<>();
   private VarType inferredLambdaType = null;
   // Set when the lambda's interface type came from the wildcard form of the called method's
@@ -121,6 +124,13 @@ public class NewExprent extends Exprent {
 
       if (node != null && node.getSignature() != null) {
         if (newType.arrayDim > 0) {
+          // The context records the instantiation the source wrote: `X<A>[]` from a field or
+          // method signature, while the creation's own instruction names only the erased class.
+          // A source can only write the all-wildcard form `new X<?>[]`, so the recorded target
+          // also decides whether the value needs a cast to it.
+          if (recordArrayComponent(upperBound)) {
+            return printedArrayComponent().resizeArrayDim(newType.arrayDim);
+          }
           // The array's component class is generic and the class file records it erased, but
           // every element's own recorded instantiation agrees: a varargs array of
           // `Pair.of(...)` calls is exactly `Pair<Item, ResourceKey<Pattern>>[]`, and the call
@@ -943,7 +953,8 @@ public class NewExprent extends Exprent {
       // on and the size's iconst is left to the statement's other anchors.
       buf.addBytecodeMapping(bytecode);
       appendNewExpressionTypeAnnotations(buf);
-      buf.appendTypeName(newType);
+      VarType component = printedArrayComponent();
+      buf.appendTypeName(component != null ? component : newType);
 
       if (lstArrayElements.isEmpty()) {
         for (int i = 0; i < newType.arrayDim; i++) {
@@ -1738,6 +1749,123 @@ public class NewExprent extends Exprent {
         : type;
     }
     return type;
+  }
+
+  /**
+   * Records the component of the context's target when it names the same class at the same array
+   * depth as this creation and every type argument is nameable at the print site. A later call
+   * with an unrelated bound (a raw {@code Object[]}, a target inferred from the creation itself)
+   * leaves a recorded component in place.
+   */
+  private boolean recordArrayComponent(VarType upperBound) {
+    // A varargs call's array is the compiler's: the source wrote the elements, and the class
+    // file records the same allocation either way. A bare initializer names the component on
+    // its declaration, never on the creation.
+    if (isVarArgParam || directArrayInit) {
+      return false;
+    }
+    if (newType.arrayDim == 0 || !(upperBound instanceof GenericType target)
+      || target.type != CodeType.OBJECT || target.arrayDim != newType.arrayDim
+      || target.value == null || !target.value.equals(newType.value)
+      || target.getWildcard() != GenericType.WILDCARD_NO || !nameableArrayComponent(target)) {
+      return false;
+    }
+    arrayComponentTarget = target.resizeArrayDim(0);
+    return true;
+  }
+
+  /**
+   * A recorded type a source could name: an unbounded wildcard may stand for an unknown
+   * argument. A bare generic class is a raw type, which is a name but not one this printer may
+   * invent.
+   */
+  private boolean nameableArrayComponent(VarType type) {
+    if (type == null) {
+      return true; // an unbounded wildcard argument
+    }
+    if (type.type == CodeType.GENVAR) {
+      return Exprent.isTypeVariableNameable(type.resizeArrayDim(0), getNamedGenerics());
+    }
+    if (type.type != CodeType.OBJECT || type.value == null) {
+      return false;
+    }
+    if (type instanceof GenericType generic) {
+      if (generic.getParent() != null && !nameableArrayComponent(generic.getParent())) {
+        return false;
+      }
+      for (VarType argument : generic.getArguments()) {
+        if (!nameableArrayComponent(argument)) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+
+  /**
+   * The component text this creation prints: the recorded target as written when it is a
+   * reifiable type (every argument an unbounded wildcard, as in {@code new X<?>[]}), otherwise
+   * the all-wildcard form of that component, the only parameterized array creation a source can
+   * write when the target's arguments are concrete.
+   */
+  private VarType printedArrayComponent() {
+    if (arrayComponentTarget == null) {
+      return null;
+    }
+    return reifiableArrayComponent(arrayComponentTarget)
+      ? arrayComponentTarget : wildcardArrayComponent(arrayComponentTarget);
+  }
+
+  /** Whether an array of this type is a legal creation: every argument, at every level, is `?`. */
+  private static boolean reifiableArrayComponent(VarType type) {
+    if (!(type instanceof GenericType generic)) {
+      return true;
+    }
+    if (generic.type != CodeType.OBJECT || generic.getWildcard() != GenericType.WILDCARD_NO) {
+      return false;
+    }
+    if (generic.getParent() != null && !reifiableArrayComponent(generic.getParent())) {
+      return false;
+    }
+    for (VarType argument : generic.getArguments()) {
+      if (argument != null) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /** The same component with every type argument replaced by the unbounded wildcard. */
+  private static VarType wildcardArrayComponent(VarType type) {
+    if (!(type instanceof GenericType generic)) {
+      return type;
+    }
+    VarType parent = generic.getParent() == null ? null : wildcardArrayComponent(generic.getParent());
+    List<VarType> arguments;
+    if (generic.getArguments().isEmpty()) {
+      arguments = Collections.emptyList();
+    } else {
+      arguments = new ArrayList<>(generic.getArguments().size());
+      for (int i = 0; i < generic.getArguments().size(); i++) {
+        arguments.add(null);
+      }
+    }
+    return new GenericType(generic.type, generic.arrayDim, generic.value, parent, arguments, generic.getWildcard());
+  }
+
+  /**
+   * Whether this creation printed the all-wildcard form of a component the recorded target names
+   * with type arguments: {@code new X<?>[...]} for a target {@code X<A>[]}. The printed array's
+   * element type is then not assignable to the target, so the source cast the creation.
+   */
+  public boolean printsWildcardArrayComponentFor(VarType target) {
+    if (arrayComponentTarget == null || reifiableArrayComponent(arrayComponentTarget)
+      || isVarArgParam || directArrayInit) {
+      return false;
+    }
+    return target instanceof GenericType generic && generic.type == CodeType.OBJECT
+      && generic.value != null && generic.value.equals(newType.value)
+      && generic.arrayDim == newType.arrayDim && generic.arrayDim > 0;
   }
 
   /**
