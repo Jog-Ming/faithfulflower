@@ -534,6 +534,17 @@ public class ClassWriter implements StatementWriter {
     for (int i = 0; i < md_content.params.length; i++) {
       if (i >= startIndex) {
         VarType type = param < functionalParameters.size() ? functionalParameters.get(param) : null;
+        // javac compiles a lambda body as a method whose parameters are the erasures of the SAM's
+        // instantiated parameters. A type rebuilt as the bare Object erasure while the body method
+        // records a concrete reference type in that slot is an unresolved variable: the concrete
+        // type is what the target actually inferred, and the body needs no cast to use it.
+        if (type != null && !type.isGeneric() && type.equals(VarType.VARTYPE_OBJECT)) {
+          VarType recorded = md_content.params[i];
+          if (recorded.type == CodeType.OBJECT && recorded.arrayDim == 0
+              && recorded.value != null && !recorded.value.equals(VarType.VARTYPE_OBJECT.value)) {
+            type = recorded;
+          }
+        }
         param++;
         String name = methodWrapper.varproc.getVarName(new VarVersionPair(index, 0));
         if (name != null && type != null && type.type != CodeType.VOID) {
