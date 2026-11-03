@@ -1065,7 +1065,9 @@ public final class BuilderInference {
   /**
    * The result of applying the functional argument's method reference to {@code arguments}: the
    * referenced method's declared parameter types are unified with the argument types and its
-   * declared return type is substituted.
+   * declared return type is substituted. A constructor reference has no static implementation:
+   * its parameters are the created record's own, so the substitution is the created class's
+   * generic type, which is exactly the instantiation the receiver's target needs.
    */
   private static @Nullable VarType referenceResult(NewExprent reference, List<VarType> arguments, Unifier unifier) {
     ClassNode node = DecompilerContext.getClassProcessor().getMapRootClasses().get(reference.getNewType().value);
@@ -1079,7 +1081,7 @@ public final class BuilderInference {
     }
     StructMethod method = content.getMethodRecursive(node.lambdaInformation.content_method_name,
       node.lambdaInformation.content_method_descriptor);
-    if (method == null || method.getSignature() == null || !method.hasModifier(CodeConstants.ACC_STATIC)) {
+    if (method == null || method.getSignature() == null) {
       return null;
     }
     GenericMethodDescriptor signature = method.getSignature();
@@ -1091,7 +1093,13 @@ public final class BuilderInference {
         return null;
       }
     }
-    return unifier.substitute(signature.returnType);
+    if (method.hasModifier(CodeConstants.ACC_STATIC)) {
+      return unifier.substitute(signature.returnType);
+    }
+    if (!CodeConstants.INIT_NAME.equals(method.getName()) || content.getSignature() == null) {
+      return null;
+    }
+    return unifier.substitute(content.getSignature().genericType);
   }
 
   /**

@@ -2291,8 +2291,8 @@ public class NewExprent extends Exprent {
   }
 
   /**
-   * The instantiated class a static or constructor method reference names, when the recorded
-   * types prove the source pinned its type arguments. The printer's inference took the value's
+   * The instantiated class a static, constructor or unbound instance method reference names, when
+   * the recorded types prove the source pinned its type arguments. The printer's inference took the value's
    * type from the target (a recorded signature); javac types a method reference without the
    * target of the chain it is passed into, and a type variable no constructor argument constrains
    * then defaults to its declared bound. The qualifier is printed only when the recorded
@@ -2307,9 +2307,12 @@ public class NewExprent extends Exprent {
     if (node == null || node.lambdaInformation == null) {
       return null;
     }
-    // Only a static method or a constructor names its class as the reference's qualifier.
-    if (!node.lambdaInformation.is_content_method_static
-      && !CodeConstants.INIT_NAME.equals(node.lambdaInformation.content_method_name)) {
+    // A static method or a constructor names its class as the reference's qualifier; an unbound
+    // instance method names the class of the receiver it takes as the first SAM parameter.
+    boolean isConstructor = CodeConstants.INIT_NAME.equals(node.lambdaInformation.content_method_name);
+    boolean unboundInstance = !node.lambdaInformation.is_content_method_static && !isConstructor
+      && (constructor == null || constructor.getInstance() == null);
+    if (!node.lambdaInformation.is_content_method_static && !isConstructor && !unboundInstance) {
       return null;
     }
     String contentClass = node.lambdaInformation.content_class_name;
@@ -2344,7 +2347,19 @@ public class NewExprent extends Exprent {
     }
     Map<VarType, VarType> map = new HashMap<>();
     iface.getSignature().genericType.mapGenVarsTo((GenericType) inferredLambdaType, map);
-    VarType produced = unwrapWildcard(sam.getSignature().returnType.remap(map));
+    VarType produced;
+    if (unboundInstance) {
+      // The receiver an unbound instance reference takes as its first SAM parameter is the
+      // class the qualifier names, and the recorded instantiation is the one javac infers
+      // for the source's `Type<...>::method`.
+      if (content == null || content.getSignature() == null
+        || content.getSignature().parameterTypes.size() + 1 != sam.getSignature().parameterTypes.size()) {
+        return null;
+      }
+      produced = unwrapWildcard(sam.getSignature().parameterTypes.get(0).remap(map));
+    } else {
+      produced = unwrapWildcard(sam.getSignature().returnType.remap(map));
+    }
     if (produced == null || produced.type != CodeType.OBJECT || !produced.isGeneric()
       || !contentClass.equals(produced.value)) {
       return null;
