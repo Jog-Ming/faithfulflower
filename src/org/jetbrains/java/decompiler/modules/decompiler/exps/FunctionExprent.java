@@ -12,10 +12,12 @@ import org.jetbrains.java.decompiler.modules.decompiler.sforms.VarMapHolder;
 import org.jetbrains.java.decompiler.modules.decompiler.stats.Statement;
 import org.jetbrains.java.decompiler.modules.decompiler.vars.CheckTypesResult;
 import org.jetbrains.java.decompiler.modules.decompiler.vars.VarVersionPair;
+import org.jetbrains.java.decompiler.struct.StructClass;
 import org.jetbrains.java.decompiler.struct.StructContext;
 import org.jetbrains.java.decompiler.struct.gen.CodeType;
 import org.jetbrains.java.decompiler.struct.gen.TypeFamily;
 import org.jetbrains.java.decompiler.struct.gen.VarType;
+import org.jetbrains.java.decompiler.struct.gen.generics.GenericClassDescriptor;
 import org.jetbrains.java.decompiler.struct.gen.generics.GenericType;
 import org.jetbrains.java.decompiler.struct.match.MatchEngine;
 import org.jetbrains.java.decompiler.struct.match.MatchNode;
@@ -1118,7 +1120,12 @@ public class FunctionExprent extends Exprent {
             RoundTrip.exitPatternTest(priorEntry);
           }
         } else {
-          buf.append(wrapOperandString(lstOperands.get(1), true, indent));
+          String testType = wildcardInstanceofName(lstOperands.get(1));
+          if (testType != null) {
+            buf.append(testType);
+          } else {
+            buf.append(wrapOperandString(lstOperands.get(1), true, indent));
+          }
         }
 
 
@@ -1256,6 +1263,43 @@ public class FunctionExprent extends Exprent {
 
   protected TextBuffer wrapOperandString(Exprent expr, boolean eq, int indent) {
     return wrapOperandString(expr, eq, indent, false);
+  }
+
+  /**
+   * The test type of a non-pattern {@code instanceof} on a generic class. The class file's
+   * CONSTANT_Class names only the erasure, and Java's grammar lets a reference type in this
+   * position carry arguments, so the recorded declaration decides their number: one unbounded
+   * wildcard per declared parameter ({@code Stat<?>}), which is the only instantiation a source
+   * can write without recording an argument. Returns null when the type is not a nameable
+   * generic class; the caller then prints the recorded type as before.
+   */
+  private static String wildcardInstanceofName(Exprent operand) {
+    if (!(operand instanceof ConstExprent constant) || constant.getValue() != null) {
+      return null;
+    }
+
+    VarType type = constant.getConstType();
+    if (type.type != CodeType.OBJECT || type.arrayDim != 0 || type.value == null) {
+      return null;
+    }
+
+    StructClass cls = DecompilerContext.getStructContext().getClass(type.value);
+    if (cls == null || cls.getSignature() == null || cls.getSignature().fparameters.isEmpty()) {
+      return null;
+    }
+
+    // The name must be printable at all (the import collector can refuse a short name).
+    if (ExprProcessor.isInvalidTypeName(ExprProcessor.getTypeName(type))) {
+      return null;
+    }
+
+    GenericClassDescriptor signature = cls.getSignature();
+    List<VarType> arguments = new ArrayList<>(signature.fparameters.size());
+    for (int i = 0; i < signature.fparameters.size(); i++) {
+      arguments.add(null); // null is the unbounded wildcard in a GenericType's argument list
+    }
+
+    return ExprProcessor.getTypeName(new GenericType(CodeType.OBJECT, 0, type.value, null, arguments, GenericType.WILDCARD_NO));
   }
 
   private TextBuffer wrapOperandString(Exprent expr, boolean eq, int indent, boolean newlineGroup) {
