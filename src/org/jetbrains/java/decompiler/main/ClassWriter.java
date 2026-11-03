@@ -1991,7 +1991,7 @@ public class ClassWriter implements StatementWriter {
       }
     }
 
-    if (!isEnum && isSealed) {
+    if (!isEnum && isSealed && !permitsIsImplicit(cl, permittedSubClasses)) {
       buffer.appendPossibleNewline(" ");
       buffer.append("permits ");
       for (int i = 0; i < permittedSubClasses.size(); i++) {
@@ -2010,6 +2010,58 @@ public class ClassWriter implements StatementWriter {
     }
 
     buffer.append(" {").appendLineSeparator();
+  }
+
+  /**
+   * A sealed type whose source wrote no permits clause, so the language derives the permitted
+   * subclasses from the compilation unit itself. The omission is only safe when the recorded
+   * attribute is exactly what javac regenerates: every permitted subclass is a member of this
+   * nest (so it is written in this file), and the recorded order equals the host's NestMembers
+   * reversed and filtered to the permitted set. The clause can name bare types only, so a
+   * permitted subclass with recorded type parameters would print raw; that is the case the
+   * omission exists for, and every other sealed type keeps its clause.
+   */
+  private static boolean permitsIsImplicit(StructClass cl, List<String> permittedSubClasses) {
+    boolean genericSubclass = false;
+    for (String name : permittedSubClasses) {
+      StructClass subClass = DecompilerContext.getStructContext().getClass(name);
+      if (subClass == null) {
+        return false;
+      }
+      if (subClass.getSignature() != null && !subClass.getSignature().fparameters.isEmpty()) {
+        genericSubclass = true;
+      }
+    }
+    if (!genericSubclass) {
+      return false;
+    }
+
+    String hostName = nestHost(cl);
+    StructClass host = DecompilerContext.getStructContext().getClass(hostName);
+    if (host == null) {
+      return false;
+    }
+    for (String name : permittedSubClasses) {
+      StructClass subClass = DecompilerContext.getStructContext().getClass(name);
+      if (subClass == null || !nestHost(subClass).equals(hostName)) {
+        return false;
+      }
+    }
+
+    StructNestMembersAttribute nestMembers = host.getAttribute(StructGeneralAttribute.ATTRIBUTE_NEST_MEMBERS);
+    if (nestMembers == null) {
+      return false;
+    }
+    List<String> order = new ArrayList<>(nestMembers.getClasses(host.getPool()));
+    Collections.reverse(order);
+    order.removeIf(name -> !permittedSubClasses.contains(name));
+    return order.equals(permittedSubClasses);
+  }
+
+  /** The class whose nest this class belongs to; a nest host names itself. */
+  private static String nestHost(StructClass cls) {
+    StructNestHostAttribute host = cls.getAttribute(StructGeneralAttribute.ATTRIBUTE_NEST_HOST);
+    return host == null ? cls.qualifiedName : host.getHostClass(cls.getPool());
   }
 
   private static boolean isSuperClassSealed(StructClass cl) {
