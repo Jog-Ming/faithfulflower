@@ -888,7 +888,12 @@ public class NewExprent extends Exprent {
           // the chained receiver then loses the parameterization the caller needs. The original
           // wrote the raw type in that position, and erasure makes the two spellings identical.
           boolean receiverDiamond = args.isEmpty() && isQualifier;
-          if (args.isEmpty() && RoundTrip.selector("rt-diamond") && hasTypeParameters(newType)
+          if (args.isEmpty() && receiverDiamond && printableCreationArguments(expectedCreationArgs)) {
+            // The chain's target fixes the receiver's arguments completely, and the source
+            // pinned them: a diamond there has no target to infer from.
+            appendParameters(buf, expectedCreationArgs);
+          }
+          else if (args.isEmpty() && RoundTrip.selector("rt-diamond") && hasTypeParameters(newType)
               && !receiverDiamond && (InvocationExprent.inArgument() || expectedCreationType != null)) {
             // No recovered type arguments, but javac infers them from the context; the original
             // wrote the diamond, and a raw type would break the caller's inference.
@@ -1595,7 +1600,11 @@ public class NewExprent extends Exprent {
       if (signature != null && args.size() != signature.fparameters.size()) {
         return null;
       }
-      return new ArrayList<>(args);
+      List<VarType> stripped = new ArrayList<>(args.size());
+      for (VarType argument : args) {
+        stripped.add(stripCreationWildcard(argument));
+      }
+      return stripped;
     }
     if (signature == null) {
       return null;
@@ -1614,9 +1623,38 @@ public class NewExprent extends Exprent {
       if (!solved.containsKey(variable)) {
         return null;
       }
-      args.add(solved.get(variable));
+      args.add(stripCreationWildcard(solved.get(variable)));
     }
     return args;
+  }
+
+  /**
+   * The nameable instantiation a recorded target's variance marker stands for: the bound of a
+   * bounded wildcard, and the unbounded wildcard itself when there is none. A creation's target
+   * is often a called method's parameter type ({@code Map<? extends K, ? extends V>}); the
+   * arguments javac infers for the diamond are the bounds, and those are what a source writes.
+   */
+  private static VarType stripCreationWildcard(VarType type) {
+    if (type instanceof GenericType generic && generic.getWildcard() != GenericType.WILDCARD_NO) {
+      if (generic.value == null) {
+        return null;
+      }
+      return stripCreationWildcard(GenericType.withWildcard(generic, GenericType.WILDCARD_NO));
+    }
+    return type;
+  }
+
+  /** Whether every argument a receiver's explicit type argument list would print is nameable. */
+  private boolean printableCreationArguments(List<VarType> args) {
+    if (args == null || args.isEmpty()) {
+      return false;
+    }
+    for (VarType argument : args) {
+      if (!nameableArrayElement(argument)) {
+        return false;
+      }
+    }
+    return true;
   }
 
   /**
