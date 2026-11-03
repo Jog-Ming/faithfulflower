@@ -283,10 +283,17 @@ public final class Main {
 
   private static String summaryOf(Path log) {
     try {
+      String sources = null;
+      String metrics = null;
       for (String line : Files.readAllLines(log, StandardCharsets.UTF_8)) {
         if (line.startsWith("sources ")) {
-          return line;
+          sources = line;
+        } else if (line.startsWith("metrics ")) {
+          metrics = line;
         }
+      }
+      if (sources != null) {
+        return metrics == null ? sources : sources + "  " + metrics;
       }
     } catch (IOException ignored) {
       // an unreadable log is reported as a missing summary by the caller
