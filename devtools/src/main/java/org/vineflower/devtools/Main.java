@@ -172,7 +172,8 @@ public final class Main {
       case "metrics" -> {
         List<String> positional = positionals(rest);
         if (positional.size() < 2) {
-          throw new IllegalArgumentException("usage: metrics <version> <dir> [--threads N] [--casts] [--raw]");
+          throw new IllegalArgumentException(
+            "usage: metrics <version> <dir> [--threads N] [--casts] [--raw] [--lint-all]");
         }
         int threads = intFlag(rest, "--threads", threadsDefault());
         long started = System.nanoTime();
@@ -194,6 +195,12 @@ public final class Main {
         if (rest.contains("--raw")) {
           for (String site : new Verifier(workspace, minecraft)
             .rawSites(positional.get(0), Path.of(positional.get(1)), threads)) {
+            System.out.println(site);
+          }
+        }
+        if (rest.contains("--lint-all")) {
+          for (String site : new Verifier(workspace, minecraft)
+            .lintAllSites(positional.get(0), Path.of(positional.get(1)), threads)) {
             System.out.println(site);
           }
         }
@@ -882,7 +889,7 @@ public final class Main {
                                              --tree verifies a scratch copy of a tree
         compile   <version> <Class>            compile that one class with the verifier's javac
                                              settings and print its errors
-        metrics   <version> <dir> [--threads N] [--casts] [--raw]
+        metrics   <version> <dir> [--threads N] [--casts] [--raw] [--lint-all]
                                              compile every source under a tree with the
                                              verifier's javac and sum its quality counters
         clean     [--trees] [--compile] [--downloads] [--all]

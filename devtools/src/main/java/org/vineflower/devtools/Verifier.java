@@ -223,6 +223,50 @@ public final class Verifier {
     return all;
   }
 
+  /** Every javac warning under {@code -Xlint:all}, as {@code code<TAB>file:line message}. */
+  public List<String> lintAllSites(String version, Path target, int threads) throws Exception {
+    Path client = minecraft.clientJar(version, false);
+    List<Path> classpath = minecraft.classpath(version, false);
+    int release = releaseOf(client);
+    List<Path> sources;
+    try (var walk = Files.walk(target)) {
+      sources = walk.filter(p -> p.toString().endsWith(".java") && Files.isRegularFile(p))
+        .collect(java.util.stream.Collectors.toList());
+    }
+    ExecutorService pool = Executors.newFixedThreadPool(Math.max(1, threads));
+    List<Callable<List<String>>> tasks = new ArrayList<>();
+    for (Path source : sources) {
+      tasks.add(() -> {
+        DiagnosticCollector<JavaFileObject> diagnostics = new DiagnosticCollector<>();
+        StandardJavaFileManager files = FILES.get();
+        MemoryOutput memory = new MemoryOutput(files);
+        COMPILER.get().getTask(null, memory, diagnostics, options(classpath, release, true),
+          null, files.getJavaFileObjects(source)).call();
+        String relative = target.relativize(source).toString().replace('\\', '/');
+        List<String> lines = new ArrayList<>();
+        for (Diagnostic<? extends JavaFileObject> diagnostic : diagnostics.getDiagnostics()) {
+          if (diagnostic.getKind() != Diagnostic.Kind.WARNING
+            && diagnostic.getKind() != Diagnostic.Kind.MANDATORY_WARNING) {
+            continue;
+          }
+          lines.add(diagnostic.getCode() + "\t" + relative + ":" + diagnostic.getLineNumber()
+            + " " + diagnostic.getMessage(Locale.ROOT).split("\n")[0]);
+        }
+        return lines;
+      });
+    }
+    List<String> all = new ArrayList<>();
+    try {
+      for (Future<List<String>> future : pool.invokeAll(tasks)) {
+        all.addAll(future.get());
+      }
+    } finally {
+      pool.shutdown();
+    }
+    Collections.sort(all);
+    return all;
+  }
+
   /**
    * Scores a tree, and when {@code since} is given also lists which files changed relative to that
    * earlier tree — the attribution half of an A/B, which the attribute counts cannot show.
@@ -510,6 +554,10 @@ public final class Verifier {
   }
 
   private static List<String> options(List<Path> classpath, int release) {
+    return options(classpath, release, false);
+  }
+
+  private static List<String> options(List<Path> classpath, int release, boolean allLint) {
     // The lint categories feed the source-quality counters; they are measured, not acted on. A
     // diagnostic collector receives them instead of the console, so no -nowarn is needed.
     // A constructor's parameter names come from its superclass's symbol, so an anonymous class
@@ -528,7 +576,7 @@ public final class Verifier {
     }
     options.addAll(List.of(
       "-g", "-parameters", "-proc:none", "-implicit:none",
-      "-Xlint:rawtypes,cast,unchecked",
+      allLint ? "-Xlint:all" : "-Xlint:rawtypes,cast,unchecked",
       "-classpath", join(classpath)));
     return List.copyOf(options);
   }
