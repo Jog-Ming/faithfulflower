@@ -4491,10 +4491,20 @@ public class InvocationExprent extends Exprent {
 
     BitSet missed = new BitSet(lstParameters.size());
 
-    // treat signature polymorphic methods as always ambiguous
-    // even if we have the classes available and think they are accepting Object...
+    // A signature polymorphic method has no overloads to choose from: the call site's descriptor
+    // records the erased static type of each argument, so an argument whose own type is that same
+    // type needs no cast. Only a differing type (or an unexpanded varargs form, whose arity does
+    // not line up with the descriptor) keeps its cast.
     if (CodeConstants.areParametersPolymorphic(classname, name)) {
-      missed.set(0, lstParameters.size());
+      if (lstParameters.size() == descriptor.params.length) {
+        for (int i = 0; i < lstParameters.size(); i++) {
+          if (!lstParameters.get(i).getExprType().equals(descriptor.params[i])) {
+            missed.set(i);
+          }
+        }
+      } else {
+        missed.set(0, lstParameters.size());
+      }
       return missed;
     }
 
