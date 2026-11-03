@@ -85,9 +85,15 @@ public final class Main {
         if (versions.isEmpty()) {
           throw new IllegalArgumentException("missing version");
         }
+        boolean casts = rest.contains("--casts");
+        boolean raw = rest.contains("--raw");
+        boolean lintAll = rest.contains("--lint-all");
         if (versions.size() > 1) {
           if (stringFlag(rest, "--since", null) != null) {
             throw new IllegalArgumentException("--since needs a single version");
+          }
+          if (casts || raw || lintAll) {
+            throw new IllegalArgumentException("--casts/--raw/--lint-all need a single version");
           }
           scoreMany(workspace, versions, rest);
         } else {
@@ -101,8 +107,13 @@ public final class Main {
             throw new IllegalArgumentException("--since compares whole trees; it cannot be used with --only");
           }
           Path tree = decompiler.tree(version, threads, noCache, only, optionsFlag(rest));
-          new Verifier(workspace, minecraft).score(version, tree, only, threads, json,
-            since == null ? null : Path.of(since));
+          Verifier verifier = new Verifier(workspace, minecraft);
+          verifier.score(version, tree, only, threads, json, since == null ? null : Path.of(since));
+          if (casts || raw || lintAll) {
+            for (String site : verifier.sites(version, tree, threads, casts, raw, lintAll)) {
+              System.out.println(site);
+            }
+          }
         }
       }
       case "diff" -> {
@@ -167,43 +178,6 @@ public final class Main {
         }
         if (!ok) {
           System.exit(1);
-        }
-      }
-      case "metrics" -> {
-        List<String> positional = positionals(rest);
-        if (positional.size() < 2) {
-          throw new IllegalArgumentException(
-            "usage: metrics <version> <dir> [--threads N] [--casts] [--raw] [--lint-all]");
-        }
-        int threads = intFlag(rest, "--threads", threadsDefault());
-        long started = System.nanoTime();
-        Verifier.Measured measured = new Verifier(workspace, minecraft)
-          .measure(positional.get(0), Path.of(positional.get(1)), threads);
-        long elapsed = (System.nanoTime() - started) / 1_000_000;
-        System.out.printf(Locale.ROOT,
-          "sources %d  failed %d  raw %d  redundant-casts %d  double-casts %d  redundant-double-casts %d  unchecked %d  in %dms%n",
-          measured.sources(), measured.failed(), measured.metrics().raw(),
-          measured.metrics().redundantCasts(), measured.metrics().doubleCasts(),
-          measured.metrics().redundantDoubleCasts(),
-          measured.metrics().unchecked(), elapsed);
-        if (rest.contains("--casts")) {
-          for (String site : new Verifier(workspace, minecraft)
-            .lintSites(positional.get(0), Path.of(positional.get(1)), threads,
-              "compiler.warn.redundant.cast")) {
-            System.out.println(site);
-          }
-        }
-        if (rest.contains("--raw")) {
-          for (String site : new Verifier(workspace, minecraft)
-            .rawSites(positional.get(0), Path.of(positional.get(1)), threads)) {
-            System.out.println(site);
-          }
-        }
-        if (rest.contains("--lint-all")) {
-          for (String site : new Verifier(workspace, minecraft)
-            .lintAllSites(positional.get(0), Path.of(positional.get(1)), threads)) {
-            System.out.println(site);
-          }
         }
       }
       case "reports" -> reports(workspace, rest);
@@ -600,7 +574,7 @@ public final class Main {
 
   private static boolean needsTargetJdk(String command) {
     return switch (command) {
-      case "score", "compile", "diff", "metrics" -> true;
+      case "score", "compile", "diff" -> true;
       default -> false;
     };
   }
@@ -887,9 +861,14 @@ public final class Main {
         versions [--no-cache]                  list Mojang's versions
         decompile <version> [--no-cache] [--threads N] [--only Class]
         tree      <version> [--only Class]    print the cached tree path
-        score     <version> [<version>...] [--no-cache] [--only Class] [--threads N] [--json] [--timeout minutes] [--since Tree]
-                                             several versions run one at a time;
-                                             --since lists what changed against an earlier tree
+        score     <version> [<version>...] [--no-cache] [--only Class] [--threads N] [--json] [--timeout minutes] [--since Tree] [--casts|--raw|--lint-all]
+                                             several versions run one at a time and each
+                                             summary carries the quality counters (raw uses,
+                                             redundant casts, double casts, redundant double
+                                             casts, unchecked); --since lists what changed
+                                             against an earlier tree; the three listing flags
+                                             need a single version and print the diagnostics
+                                             the same compile cached
         diff      <version> <Class> [<Class>...] [--full|--tree <dir>] [--dump] [--dump-bytes]
                                              verify classes and explain every failing attribute;
                                              --full verifies against the whole-tree source the
@@ -897,11 +876,6 @@ public final class Main {
                                              --tree verifies a scratch copy of a tree
         compile   <version> <Class>            compile that one class with the verifier's javac
                                              settings and print its errors
-        metrics   <version> <dir> [--threads N] [--casts] [--raw] [--lint-all]
-                                             compile every source under a tree with the
-                                             verifier's javac and sum its quality counters
-                                             (raw uses, redundant casts, double casts,
-                                             redundant double casts, unchecked)
         clean     [--trees] [--compile] [--downloads] [--all]
         reports   [--version V] [--limit N]   list past scores
         cache                                 show cache usage (file counts and sizes)

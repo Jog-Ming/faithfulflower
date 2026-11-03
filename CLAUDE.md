@@ -127,7 +127,12 @@ killed after `--timeout` minutes per version (default 15); its staging tree is d
 devtools/cli versions [--no-cache]                    list Mojang's versions
 devtools/cli decompile <version> [--no-cache] [--threads N] [--only Class] [--options "..."] [--timeout minutes]
 devtools/cli tree      <version> [--only Class]       print the cached tree path
-devtools/cli score     <version> [<version>...] [--no-cache] [--only Class] [--threads N] [--json] [--options "..."] [--timeout minutes] [--since Tree]
+devtools/cli score     <version> [<version>...] [--no-cache] [--only Class] [--threads N] [--json] [--options "..."] [--timeout minutes] [--since Tree] [--casts|--raw|--lint-all]
+                                             score a tree; every version's summary carries the
+                                             quality counters (raw uses, redundant casts, double
+                                             casts, redundant double casts, unchecked); the
+                                             listing flags need a single version and print the
+                                             sites the same compile cached
 devtools/cli diff      <version> <Class> [<Class>...] [--full] [--dump] [--dump-bytes]
                                              verify classes and explain every failing attribute;
                                              --full uses the whole-tree source the score measures
@@ -137,21 +142,15 @@ devtools/cli diff      <version> <Class> [<Class>...] [--full] [--dump] [--dump-
                                              rows, --dump-bytes writes the compiled classes under
                                              .dev/tmp/compiled
 devtools/cli compile   <version> <Class>             compile that one class like the verifier does
-devtools/cli metrics   <version> <dir> [--threads N] [--casts] [--raw] [--lint-all]
-                                             compile a whole source tree with the verifier'
-                                             javac and print the quality counters (raw uses,
-                                             redundant casts, double casts, redundant double
-                                             casts, unchecked) without
-                                             comparing; raw uses of parameterized types are
-                                             counted by our own attributed-tree checker (it sees
-                                             raw casts, which javac's lint does not); a double cast
-                                             is redundant when deleting its inner, outer or both
-                                             casts still verifies fully identical against the
-                                             original classes
 devtools/cli reports   [--version V] [--limit N]      list past scores
 devtools/cli clean     [--trees] [--compile] [--downloads] [--all]
 devtools/cli cache     [--measure]                    show cache usage; --measure sizes old trees once
 ```
+
+Raw uses are counted by our own attributed-tree checker, which also sees raw casts that javac's
+lint does not report. A double cast is redundant when deleting its inner cast, its outer cast or
+both still verifies fully identical against the original classes; the total double-cast count is
+printed beside it, so a redundant site cannot be hidden by adding another, load-bearing layer.
 
 Several versions in one `score` run are scored one after another — there is no concurrency
 switch, because two decompiles beside the verifier's javac exhaust this machine's page file

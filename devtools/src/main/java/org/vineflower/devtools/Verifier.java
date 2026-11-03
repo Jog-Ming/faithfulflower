@@ -71,7 +71,12 @@ public final class Verifier {
     }
   }
 
-  record Compiled(boolean ok, Map<String, byte[]> outputs, List<String> errors, Metrics metrics) {
+  /** One lint or raw-use site, kept in the compile cache so a listing never recompiles. */
+  public record DiagnosticSite(String code, long line, String message) {
+  }
+
+  record Compiled(boolean ok, Map<String, byte[]> outputs, List<String> errors, Metrics metrics,
+                  List<DiagnosticSite> sites) {
   }
 
   /** One compiler and one file manager per worker: scanning the classpath is the expensive part. */
@@ -81,7 +86,7 @@ public final class Verifier {
     COMPILER.get().getStandardFileManager(null, Locale.ROOT, StandardCharsets.UTF_8));
 
   /** Bump when the comparison changes: it is part of the cache key, not of the source hash. */
-  private static final String COMPARATOR_VERSION = "15";
+  private static final String COMPARATOR_VERSION = "16";
 
   private final Workspace workspace;
   private final Minecraft minecraft;
@@ -96,57 +101,12 @@ public final class Verifier {
     return score(version, target, only, threads, json, null);
   }
 
-  /** One arbitrary source tree's counters, compiled the way the verifier compiles. */
-  public record Measured(long sources, long failed, Metrics metrics) {
-  }
-
   /**
-   * Compiles every source under a tree and sums the source-quality counters, without comparing
-   * anything: the measurement a ground-truth or rewritten tree needs, on the verifier's own javac
-   * and options.
+   * The lint and raw-use sites of a tree, read from the compile cache: the same compilation that
+   * produced the counters also records where each warning fell, so a listing never recompiles.
    */
-  public Measured measure(String version, Path target, int threads) throws Exception {
-    Path client = minecraft.clientJar(version, false);
-    Path originalClasses = minecraft.extractedClasses(version, false);
-    List<Path> classpath = minecraft.classpath(version, false);
-    int release = releaseOf(client);
-    List<Path> sources;
-    try (var walk = Files.walk(target)) {
-      sources = walk.filter(p -> p.toString().endsWith(".java") && Files.isRegularFile(p))
-        .collect(java.util.stream.Collectors.toList());
-    }
-    ExecutorService pool = Executors.newFixedThreadPool(Math.max(1, threads));
-    List<Callable<Compiled>> tasks = new ArrayList<>();
-    for (Path source : sources) {
-      tasks.add(() -> compile(source, classpath, release));
-    }
-    Metrics totals = Metrics.ZERO;
-    long failed = 0;
-    try {
-      List<Future<Compiled>> futures = pool.invokeAll(tasks);
-      for (int i = 0; i < futures.size(); i++) {
-        Compiled compiled = futures.get(i).get();
-        String text = Files.readString(sources.get(i));
-        totals = totals.plus(new Metrics(compiled.metrics().raw(),
-          compiled.metrics().redundantCasts(), compiled.metrics().unchecked(),
-          compiled.metrics().doubleCasts(),
-          redundantDoubleCasts(sources.get(i), text, originalClasses, classpath, release)));
-        if (!compiled.ok()) {
-          failed++;
-        }
-      }
-    } finally {
-      pool.shutdown();
-    }
-    return new Measured(sources.size(), failed, totals);
-  }
-
-  /**
-   * The source positions javac reports a lint code at across a whole tree. The compile cache keeps
-   * counters, not diagnostics, so this compiles afresh; it is the listing a family survey starts
-   * from.
-   */
-  public List<String> lintSites(String version, Path target, int threads, String code) throws Exception {
+  public List<String> sites(String version, Path target, int threads, boolean casts, boolean raw,
+                            boolean lintAll) throws Exception {
     Path client = minecraft.clientJar(version, false);
     List<Path> classpath = minecraft.classpath(version, false);
     int release = releaseOf(client);
@@ -159,102 +119,19 @@ public final class Verifier {
     List<Callable<List<String>>> tasks = new ArrayList<>();
     for (Path source : sources) {
       tasks.add(() -> {
-        DiagnosticCollector<JavaFileObject> diagnostics = new DiagnosticCollector<>();
-        JavaCompiler compiler = COMPILER.get();
-        StandardJavaFileManager files = FILES.get();
-        MemoryOutput memory = new MemoryOutput(files);
-        compiler.getTask(null, memory, diagnostics, options(classpath, release), null,
-          files.getJavaFileObjects(source)).call();
-        List<String> sites = new ArrayList<>();
-        for (Diagnostic<? extends JavaFileObject> diagnostic : diagnostics.getDiagnostics()) {
-          if (diagnostic.getCode().startsWith(code)) {
-            sites.add(target.relativize(source).toString().replace('\\', '/')
-              + ":" + diagnostic.getLineNumber() + " "
-              + diagnostic.getMessage(Locale.ROOT).split("\n")[0]);
-          }
-        }
-        return sites;
-      });
-    }
-    List<String> all = new ArrayList<>();
-    try {
-      for (Future<List<String>> future : pool.invokeAll(tasks)) {
-        all.addAll(future.get());
-      }
-    } finally {
-      pool.shutdown();
-    }
-    Collections.sort(all);
-    return all;
-  }
-
-  /** The raw uses our own checker finds across a tree, as sorted {@code file:line} listings. */
-  public List<String> rawSites(String version, Path target, int threads) throws Exception {
-    Path client = minecraft.clientJar(version, false);
-    List<Path> classpath = minecraft.classpath(version, false);
-    int release = releaseOf(client);
-    List<Path> sources;
-    try (var walk = Files.walk(target)) {
-      sources = walk.filter(p -> p.toString().endsWith(".java") && Files.isRegularFile(p))
-        .collect(java.util.stream.Collectors.toList());
-    }
-    ExecutorService pool = Executors.newFixedThreadPool(Math.max(1, threads));
-    List<Callable<List<String>>> tasks = new ArrayList<>();
-    for (Path source : sources) {
-      tasks.add(() -> {
-        DiagnosticCollector<JavaFileObject> diagnostics = new DiagnosticCollector<>();
-        StandardJavaFileManager files = FILES.get();
-        MemoryOutput memory = new MemoryOutput(files);
-        JavacTask task = (JavacTask) COMPILER.get().getTask(null, memory, diagnostics,
-          options(classpath, release), null, files.getJavaFileObjects(source));
+        Compiled compiled = compile(source, classpath, release);
         String relative = target.relativize(source).toString().replace('\\', '/');
         List<String> lines = new ArrayList<>();
-        for (RawUses.Site site : RawUses.analyze(task).sites()) {
-          lines.add(relative + ":" + site.line() + " raw use of " + site.type());
-        }
-        return lines;
-      });
-    }
-    List<String> all = new ArrayList<>();
-    try {
-      for (Future<List<String>> future : pool.invokeAll(tasks)) {
-        all.addAll(future.get());
-      }
-    } finally {
-      pool.shutdown();
-    }
-    Collections.sort(all);
-    return all;
-  }
-
-  /** Every javac warning under {@code -Xlint:all}, as {@code code<TAB>file:line message}. */
-  public List<String> lintAllSites(String version, Path target, int threads) throws Exception {
-    Path client = minecraft.clientJar(version, false);
-    List<Path> classpath = minecraft.classpath(version, false);
-    int release = releaseOf(client);
-    List<Path> sources;
-    try (var walk = Files.walk(target)) {
-      sources = walk.filter(p -> p.toString().endsWith(".java") && Files.isRegularFile(p))
-        .collect(java.util.stream.Collectors.toList());
-    }
-    ExecutorService pool = Executors.newFixedThreadPool(Math.max(1, threads));
-    List<Callable<List<String>>> tasks = new ArrayList<>();
-    for (Path source : sources) {
-      tasks.add(() -> {
-        DiagnosticCollector<JavaFileObject> diagnostics = new DiagnosticCollector<>();
-        StandardJavaFileManager files = FILES.get();
-        MemoryOutput memory = new MemoryOutput(files);
-        COMPILER.get().getTask(null, memory, diagnostics, options(classpath, release, true),
-          null, files.getJavaFileObjects(source)).call();
-        String relative = target.relativize(source).toString().replace('\\', '/');
-        List<String> lines = new ArrayList<>();
-        for (Diagnostic<? extends JavaFileObject> diagnostic : diagnostics.getDiagnostics()) {
-          if (diagnostic.getKind() != Diagnostic.Kind.WARNING
-            && diagnostic.getKind() != Diagnostic.Kind.MANDATORY_WARNING) {
-            continue;
+        for (DiagnosticSite site : compiled.sites()) {
+          if (casts && site.code().startsWith("compiler.warn.redundant.cast")) {
+            lines.add(relative + ":" + site.line() + " " + site.message());
           }
-          lines.add(diagnostic.getCode() + "\t" + relative + ":" + diagnostic.getLineNumber()
-            + " " + diagnostic.getMessage(Locale.ROOT).split("\n")[0]);
+          if (raw && site.code().equals("raw.use")) {
+            lines.add(relative + ":" + site.line() + " " + site.message());
+          }
+          if (lintAll && site.code().startsWith("compiler.warn")) {
+            lines.add(site.code() + "	" + relative + ":" + site.line() + " " + site.message());
+          }
         }
         return lines;
       });
@@ -558,12 +435,10 @@ public final class Verifier {
   }
 
   private static List<String> options(List<Path> classpath, int release) {
-    return options(classpath, release, false);
-  }
-
-  private static List<String> options(List<Path> classpath, int release, boolean allLint) {
-    // The lint categories feed the source-quality counters; they are measured, not acted on. A
-    // diagnostic collector receives them instead of the console, so no -nowarn is needed.
+    // The lint categories feed the source-quality counters and the cached site listings; they
+    // are measured, not acted on. A diagnostic collector receives them instead of the console,
+    // so no -nowarn is needed. All categories are enabled so a cached compile can answer a
+    // --lint-all listing without compiling the tree a second time.
     // A constructor's parameter names come from its superclass's symbol, so an anonymous class
     // extending a platform class got arg0 while --release read ct.sym, whose .sig entries have
     // no names. -source/-target reads the running JDK's real classes and keeps those names; the
@@ -579,8 +454,7 @@ public final class Verifier {
       options.add(Integer.toString(release));
     }
     options.addAll(List.of(
-      "-g", "-parameters", "-proc:none", "-implicit:none",
-      allLint ? "-Xlint:all" : "-Xlint:rawtypes,cast,unchecked",
+      "-g", "-parameters", "-proc:none", "-implicit:none", "-Xlint:all",
       "-classpath", join(classpath)));
     return List.copyOf(options);
   }
@@ -638,11 +512,13 @@ public final class Verifier {
       options(classpath, release), null, files.getJavaFileObjects(source));
     // Our own raw-use check, not javac's -Xlint:rawtypes: a raw cast is a reifiable, checked
     // conversion, so javac reports neither a rawtypes nor an unchecked warning for it.
-    int raw = RawUses.analyze(task).count();
+    RawUses.Result rawUses = RawUses.analyze(task);
+    int raw = rawUses.count();
     task.generate();
     boolean ok = diagnostics.getDiagnostics().stream()
       .noneMatch(diagnostic -> diagnostic.getKind() == Diagnostic.Kind.ERROR);
     List<String> errors = new ArrayList<>();
+    List<DiagnosticSite> sites = new ArrayList<>();
     int redundantCasts = 0;
     int unchecked = 0;
     for (Diagnostic<? extends JavaFileObject> diagnostic : diagnostics.getDiagnostics()) {
@@ -658,6 +534,8 @@ public final class Verifier {
         continue;
       }
       String code = diagnostic.getCode();
+      String message = diagnostic.getMessage(Locale.ROOT).split("\n")[0];
+      sites.add(new DiagnosticSite(code, diagnostic.getLineNumber(), message));
       if (code.startsWith("compiler.warn.redundant.cast")) {
         redundantCasts++;
       }
@@ -666,17 +544,20 @@ public final class Verifier {
         unchecked++;
       }
     }
+    for (RawUses.Site site : rawUses.sites()) {
+      sites.add(new DiagnosticSite("raw.use", site.line(), "raw use of " + site.type()));
+    }
     int doubleCasts = SourceMetrics.doubleCasts(
       new String(sourceBytes, StandardCharsets.UTF_8)).size();
     Metrics metrics = new Metrics(raw, redundantCasts, unchecked, doubleCasts, 0);
     if (ok) {
       try {
-        Workspace.write(cached, serialize(memory.outputs, metrics));
+        Workspace.write(cached, serialize(memory.outputs, metrics, sites));
       } catch (IOException ignored) {
         // The cache is an optimisation; a failed write must not fail the compile.
       }
     }
-    return new Compiled(ok, ok ? memory.outputs : Map.of(), errors, metrics);
+    return new Compiled(ok, ok ? memory.outputs : Map.of(), errors, metrics, sites);
   }
 
   /**
@@ -737,7 +618,8 @@ public final class Verifier {
     }
   }
 
-  private static byte[] serialize(Map<String, byte[]> outputs, Metrics metrics) throws IOException {
+  private static byte[] serialize(Map<String, byte[]> outputs, Metrics metrics,
+                                  List<DiagnosticSite> sites) throws IOException {
     ByteArrayOutputStream bytes = new ByteArrayOutputStream();
     try (DataOutputStream data = new DataOutputStream(bytes)) {
       data.writeInt(outputs.size());
@@ -750,6 +632,12 @@ public final class Verifier {
       data.writeInt(metrics.redundantCasts());
       data.writeInt(metrics.unchecked());
       data.writeInt(metrics.doubleCasts());
+      data.writeInt(sites.size());
+      for (DiagnosticSite site : sites) {
+        data.writeUTF(site.code());
+        data.writeLong(site.line());
+        data.writeUTF(site.message());
+      }
     }
     return bytes.toByteArray();
   }
@@ -766,7 +654,12 @@ public final class Verifier {
       }
       Metrics metrics = new Metrics(data.readInt(), data.readInt(), data.readInt(),
         data.readInt(), 0);
-      return new Compiled(true, outputs, List.of(), metrics);
+      int siteCount = data.readInt();
+      List<DiagnosticSite> sites = new ArrayList<>(siteCount);
+      for (int i = 0; i < siteCount; i++) {
+        sites.add(new DiagnosticSite(data.readUTF(), data.readLong(), data.readUTF()));
+      }
+      return new Compiled(true, outputs, List.of(), metrics, sites);
     }
   }
 
