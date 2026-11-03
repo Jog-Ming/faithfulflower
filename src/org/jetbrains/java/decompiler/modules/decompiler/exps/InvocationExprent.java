@@ -111,6 +111,11 @@ public class InvocationExprent extends Exprent {
   /** Type arguments recorded for a call whose variables the arguments leave unbound. */
   private List<VarType> recordedGenericArgs;
   private boolean isInvocationInstance = false;
+  // The created class's arguments the enclosing creation's recorded target fixes, by position.
+  // The target gather can refuse a variable whose name the caller also declares, and the
+  // constructor's arguments would then be typed without the instantiation javac took from the
+  // target of the diamond the source wrote.
+  private List<VarType> creationClassArgs;
   /** The invocation whose receiver is currently being typed; set only for the duration. */
   private static final ThreadLocal<InvocationExprent> OUTER_INVOCATION = new ThreadLocal<>();
   /** The receiver chain being printed, outermost first: each link pushes itself around its receiver. */
@@ -915,6 +920,22 @@ public class InvocationExprent extends Exprent {
               }
             });
             tempMap.clear();
+          }
+        }
+
+        // The enclosing creation's recorded target fixes the created class's arguments by
+        // position. The target gather above can refuse a variable whose name the caller also
+        // declares; but a creation's target is exactly the instantiation javac infers for a
+        // diamond, so it is what the constructor's own arguments must be typed against.
+        if (isGenNew && creationClassArgs != null && mthCls.getSignature() != null) {
+          List<String> classParams = mthCls.getSignature().fparameters;
+          if (creationClassArgs.size() == classParams.size()) {
+            for (int i = 0; i < classParams.size(); i++) {
+              VarType value = creationClassArgs.get(i);
+              if (value != null) {
+                upperBoundsMap.put(GenericType.parse("T" + classParams.get(i) + ";"), value);
+              }
+            }
           }
         }
 
@@ -7380,6 +7401,11 @@ public class InvocationExprent extends Exprent {
 
   public void setInvocationInstance() {
     isInvocationInstance = true;
+  }
+
+  /** The created class's arguments the enclosing creation's target fixes, by position. */
+  public void setCreationClassArgs(List<VarType> args) {
+    creationClassArgs = args;
   }
 
   @Override

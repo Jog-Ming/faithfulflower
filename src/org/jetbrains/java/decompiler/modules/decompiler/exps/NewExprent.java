@@ -77,6 +77,14 @@ public class NewExprent extends Exprent {
   // A diamond whose recorded target is a parameterized supertype: the arguments implied by
   // that supertype's instantiation are the ones the source wrote on the constructor.
   private List<VarType> impliedConstructorArgs;
+  // The context target of a creation that has no target type of its own (a field initializer,
+  // a return value, a local's initializer). javac types such an expression from that target;
+  // when the target fixes every type parameter of the created class, the source wrote the
+  // diamond rather than the raw type the recovered argument list leaves behind.
+  private VarType expectedCreationType;
+  // The created class's own type arguments as that target fixes them; a null entry is the
+  // unbounded wildcard.
+  private List<VarType> expectedCreationArgs;
 
   public NewExprent(VarType newType, ListStack<Exprent> stack, int arrayDim, BitSet bytecodeOffsets) {
     this(newType, getDimensions(arrayDim, stack), bytecodeOffsets);
@@ -121,6 +129,7 @@ public class NewExprent extends Exprent {
     genericArgs.clear();
     if (!lambda && newType.type == CodeType.OBJECT) {
       StructClass node = DecompilerContext.getStructContext().getClass(newType.value);
+      recordExpectedCreationType(node == null ? null : node.getSignature(), upperBound);
 
       if (node != null && node.getSignature() != null) {
         if (newType.arrayDim > 0) {
@@ -149,6 +158,9 @@ public class NewExprent extends Exprent {
         else if (newType.arrayDim == 0 && !node.getSignature().fparameters.isEmpty()) {
           GenericClassDescriptor sig = node.getSignature();
           if (constructor != null) {
+            // The recorded target is the instantiation javac inferred for a diamond; give it
+            // to the constructor so its arguments are typed against the same parameter types.
+            constructor.setCreationClassArgs(expectedCreationArgs);
             InvocationExprent.enterPoly();
             VarType ret;
             try {
@@ -835,6 +847,13 @@ public class NewExprent extends Exprent {
           if (qualified != null && !implicitEnclosing) {
             typename = qualified;
           }
+          else if (expectedCreationType instanceof GenericType expected && expected.getParent() != null
+              && newType.value != null && newType.value.equals(expected.value)) {
+            // A member class of a generic outer class names the outer's type argument; the
+            // allocation's own instruction only carries the erased class, and the recorded
+            // target is where the source's `Outer<T>.Inner` spelling survives.
+            typename = ExprProcessor.getTypeName(expected);
+          }
         }
         else if (!implicitEnclosing) {
           ClassNode newNode = DecompilerContext.getClassProcessor().getMapRootClasses().get(newType.value);
@@ -869,8 +888,8 @@ public class NewExprent extends Exprent {
           // the chained receiver then loses the parameterization the caller needs. The original
           // wrote the raw type in that position, and erasure makes the two spellings identical.
           boolean receiverDiamond = args.isEmpty() && isQualifier;
-          if (args.isEmpty() && RoundTrip.selector("rt-diamond")
-              && InvocationExprent.inArgument() && hasTypeParameters(newType) && !receiverDiamond) {
+          if (args.isEmpty() && RoundTrip.selector("rt-diamond") && hasTypeParameters(newType)
+              && !receiverDiamond && (InvocationExprent.inArgument() || expectedCreationType != null)) {
             // No recovered type arguments, but javac infers them from the context; the original
             // wrote the diamond, and a raw type would break the caller's inference.
             buf.append("<>");
@@ -1531,6 +1550,73 @@ public class NewExprent extends Exprent {
       return node != null && node.getSignature() != null && !node.getSignature().fparameters.isEmpty();
     }
     return false;
+  }
+
+  /**
+   * Records the context target of a creation when it fixes every type parameter of the created
+   * class. A creation in a field initializer, a return value or a local's initializer has no
+   * target type of its own: javac types it from the surrounding declaration, so a source that
+   * wrote the diamond produced the same allocation as one that named every argument. Without
+   * the record the printer has no recovered argument to print and writes the raw type, which
+   * changes what javac infers for the enclosing call.
+   */
+  private void recordExpectedCreationType(GenericClassDescriptor signature, VarType upperBound) {
+    if (expectedCreationType != null || anonymous || lambda || enumConst || constructor == null
+        || newType.arrayDim != 0) {
+      return;
+    }
+    if (!(upperBound instanceof GenericType target) || target.type != CodeType.OBJECT
+        || target.arrayDim != 0 || target.getWildcard() != GenericType.WILDCARD_NO
+        || target.value == null || !target.isGeneric()) {
+      return;
+    }
+    // A target a source could name. A capture or an out-of-scope variable means the target is
+    // the printer's own inference rather than a type the original could have written.
+    if (!nameableArrayComponent(target)) {
+      return;
+    }
+    List<VarType> args = creationArguments(signature, target);
+    if (args == null) {
+      return;
+    }
+    expectedCreationType = target;
+    expectedCreationArgs = args;
+  }
+
+  /**
+   * The created class's own type parameters as the recorded target fixes them, in declaration
+   * order, or null when the target leaves one of them open. A same-class target lists them
+   * directly; a supertype target is projected back through the class's recorded hierarchy
+   * ({@code ChunkResult<R>} is {@code Fail<R>} through {@code Fail<T> extends ChunkResult<T>}).
+   */
+  private List<VarType> creationArguments(GenericClassDescriptor signature, GenericType target) {
+    if (target.value.equals(newType.value)) {
+      List<VarType> args = target.getArguments();
+      if (signature != null && args.size() != signature.fparameters.size()) {
+        return null;
+      }
+      return new ArrayList<>(args);
+    }
+    if (signature == null) {
+      return null;
+    }
+    VarType view = GenericType.getGenericSuperType(signature.genericType, target);
+    if (!(view instanceof GenericType viewType) || viewType.value == null
+        || !viewType.value.equals(target.value)
+        || viewType.getArguments().size() != target.getArguments().size()) {
+      return null;
+    }
+    Map<VarType, VarType> solved = new HashMap<>();
+    viewType.mapGenVarsTo(target, solved);
+    List<VarType> args = new ArrayList<>(signature.fparameters.size());
+    for (String parameter : signature.fparameters) {
+      VarType variable = GenericType.parse("T" + parameter + ";");
+      if (!solved.containsKey(variable)) {
+        return null;
+      }
+      args.add(solved.get(variable));
+    }
+    return args;
   }
 
   /**
