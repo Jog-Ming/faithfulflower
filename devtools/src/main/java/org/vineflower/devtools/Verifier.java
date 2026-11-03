@@ -86,7 +86,7 @@ public final class Verifier {
     COMPILER.get().getStandardFileManager(null, Locale.ROOT, StandardCharsets.UTF_8));
 
   /** Bump when the comparison changes: it is part of the cache key, not of the source hash. */
-  private static final String COMPARATOR_VERSION = "16";
+  private static final String COMPARATOR_VERSION = "17";
 
   private final Workspace workspace;
   private final Minecraft minecraft;
@@ -105,8 +105,8 @@ public final class Verifier {
    * The lint and raw-use sites of a tree, read from the compile cache: the same compilation that
    * produced the counters also records where each warning fell, so a listing never recompiles.
    */
-  public List<String> sites(String version, Path target, int threads, boolean casts, boolean raw,
-                            boolean lintAll) throws Exception {
+  public List<String> sites(String version, Path target, int threads, boolean casts, boolean raw)
+      throws Exception {
     Path client = minecraft.clientJar(version, false);
     List<Path> classpath = minecraft.classpath(version, false);
     int release = releaseOf(client);
@@ -128,9 +128,6 @@ public final class Verifier {
           }
           if (raw && site.code().equals("raw.use")) {
             lines.add(relative + ":" + site.line() + " " + site.message());
-          }
-          if (lintAll && site.code().startsWith("compiler.warn")) {
-            lines.add(site.code() + "	" + relative + ":" + site.line() + " " + site.message());
           }
         }
         return lines;
@@ -437,8 +434,7 @@ public final class Verifier {
   private static List<String> options(List<Path> classpath, int release) {
     // The lint categories feed the source-quality counters and the cached site listings; they
     // are measured, not acted on. A diagnostic collector receives them instead of the console,
-    // so no -nowarn is needed. All categories are enabled so a cached compile can answer a
-    // --lint-all listing without compiling the tree a second time.
+    // so no -nowarn is needed.
     // A constructor's parameter names come from its superclass's symbol, so an anonymous class
     // extending a platform class got arg0 while --release read ct.sym, whose .sig entries have
     // no names. -source/-target reads the running JDK's real classes and keeps those names; the
@@ -454,7 +450,7 @@ public final class Verifier {
       options.add(Integer.toString(release));
     }
     options.addAll(List.of(
-      "-g", "-parameters", "-proc:none", "-implicit:none", "-Xlint:all",
+      "-g", "-parameters", "-proc:none", "-implicit:none", "-Xlint:rawtypes,cast,unchecked",
       "-classpath", join(classpath)));
     return List.copyOf(options);
   }

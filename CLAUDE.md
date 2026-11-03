@@ -127,7 +127,7 @@ killed after `--timeout` minutes per version (default 15); its staging tree is d
 devtools/cli versions [--no-cache]                    list Mojang's versions
 devtools/cli decompile <version> [--no-cache] [--threads N] [--only Class] [--options "..."] [--timeout minutes]
 devtools/cli tree      <version> [--only Class]       print the cached tree path
-devtools/cli score     <version> [<version>...] [--no-cache] [--only Class] [--threads N] [--json] [--options "..."] [--timeout minutes] [--since Tree] [--casts|--raw|--lint-all]
+devtools/cli score     <version> [<version>...] [--no-cache] [--only Class] [--threads N] [--json] [--options "..."] [--timeout minutes] [--since Tree] [--casts|--raw]
                                              score a tree; every version's summary carries the
                                              quality counters (raw uses, redundant casts, double
                                              casts, redundant double casts, unchecked); the

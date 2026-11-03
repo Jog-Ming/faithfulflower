@@ -87,13 +87,12 @@ public final class Main {
         }
         boolean casts = rest.contains("--casts");
         boolean raw = rest.contains("--raw");
-        boolean lintAll = rest.contains("--lint-all");
         if (versions.size() > 1) {
           if (stringFlag(rest, "--since", null) != null) {
             throw new IllegalArgumentException("--since needs a single version");
           }
-          if (casts || raw || lintAll) {
-            throw new IllegalArgumentException("--casts/--raw/--lint-all need a single version");
+          if (casts || raw) {
+            throw new IllegalArgumentException("--casts/--raw need a single version");
           }
           scoreMany(workspace, versions, rest);
         } else {
@@ -109,8 +108,8 @@ public final class Main {
           Path tree = decompiler.tree(version, threads, noCache, only, optionsFlag(rest));
           Verifier verifier = new Verifier(workspace, minecraft);
           verifier.score(version, tree, only, threads, json, since == null ? null : Path.of(since));
-          if (casts || raw || lintAll) {
-            for (String site : verifier.sites(version, tree, threads, casts, raw, lintAll)) {
+          if (casts || raw) {
+            for (String site : verifier.sites(version, tree, threads, casts, raw)) {
               System.out.println(site);
             }
           }
@@ -861,12 +860,12 @@ public final class Main {
         versions [--no-cache]                  list Mojang's versions
         decompile <version> [--no-cache] [--threads N] [--only Class]
         tree      <version> [--only Class]    print the cached tree path
-        score     <version> [<version>...] [--no-cache] [--only Class] [--threads N] [--json] [--timeout minutes] [--since Tree] [--casts|--raw|--lint-all]
+        score     <version> [<version>...] [--no-cache] [--only Class] [--threads N] [--json] [--timeout minutes] [--since Tree] [--casts|--raw]
                                              several versions run one at a time and each
                                              summary carries the quality counters (raw uses,
                                              redundant casts, double casts, redundant double
                                              casts, unchecked); --since lists what changed
-                                             against an earlier tree; the three listing flags
+                                             against an earlier tree; the two listing flags
                                              need a single version and print the diagnostics
                                              the same compile cached
         diff      <version> <Class> [<Class>...] [--full|--tree <dir>] [--dump] [--dump-bytes]
