@@ -193,8 +193,7 @@ public final class Main {
         }
         if (rest.contains("--raw")) {
           for (String site : new Verifier(workspace, minecraft)
-            .lintSites(positional.get(0), Path.of(positional.get(1)), threads,
-              "compiler.warn.raw")) {
+            .rawSites(positional.get(0), Path.of(positional.get(1)), threads)) {
             System.out.println(site);
           }
         }

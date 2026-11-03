@@ -141,9 +141,12 @@ devtools/cli metrics   <version> <dir> [--threads N] [--casts] [--raw]
                                              compile a whole source tree with the verifier'
                                              javac and print the quality counters (raw, redundant
                                              casts, redundant double casts, unchecked) without
-                                             comparing; a double cast is redundant when deleting
-                                             its inner, outer or both casts still verifies fully
-                                             identical against the original classes
+                                             comparing; raw uses of parameterized types are
+                                             counted by our own attributed-tree checker (it sees
+                                             raw casts, which javac's lint does not); a double cast
+                                             is redundant when deleting its inner, outer or both
+                                             casts still verifies fully identical against the
+                                             original classes
 devtools/cli reports   [--version V] [--limit N]      list past scores
 devtools/cli clean     [--trees] [--compile] [--downloads] [--all]
 devtools/cli cache     [--measure]                    show cache usage; --measure sizes old trees once

@@ -3,6 +3,7 @@ package org.vineflower.devtools;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import com.sun.source.util.JavacTask;
 
 import javax.tools.Diagnostic;
 import javax.tools.DiagnosticCollector;
@@ -51,10 +52,12 @@ public final class Verifier {
   }
 
   /**
-   * Source-quality counters of one file or tree. Raw types, redundant single casts and unchecked
-   * operations come from javac's lint. A redundant double cast is a double cast that still verifies
-   * fully identical with its inner cast, its outer cast or both deleted; javac has no warning for
-   * either shape, so both are measured by the text matcher plus trial compiles.
+   * Source-quality counters of one file or tree. Raw uses of parameterized types come from our own
+   * attributed-tree checker, which also sees raw casts that javac's lint does not report.
+   * Redundant single casts and unchecked operations come from javac's lint. A redundant double cast
+   * is a double cast that still verifies fully identical with its inner cast, its outer cast or
+   * both deleted; javac has no warning for either shape, so both are measured by the text matcher
+   * plus trial compiles.
    */
   public record Metrics(int raw, int redundantCasts, int unchecked, int redundantDoubleCasts) {
     public static final Metrics ZERO = new Metrics(0, 0, 0, 0);
@@ -75,7 +78,7 @@ public final class Verifier {
     COMPILER.get().getStandardFileManager(null, Locale.ROOT, StandardCharsets.UTF_8));
 
   /** Bump when the comparison changes: it is part of the cache key, not of the source hash. */
-  private static final String COMPARATOR_VERSION = "11";
+  private static final String COMPARATOR_VERSION = "14";
 
   private final Workspace workspace;
   private final Minecraft minecraft;
@@ -167,6 +170,45 @@ public final class Verifier {
           }
         }
         return sites;
+      });
+    }
+    List<String> all = new ArrayList<>();
+    try {
+      for (Future<List<String>> future : pool.invokeAll(tasks)) {
+        all.addAll(future.get());
+      }
+    } finally {
+      pool.shutdown();
+    }
+    Collections.sort(all);
+    return all;
+  }
+
+  /** The raw uses our own checker finds across a tree, as sorted {@code file:line} listings. */
+  public List<String> rawSites(String version, Path target, int threads) throws Exception {
+    Path client = minecraft.clientJar(version, false);
+    List<Path> classpath = minecraft.classpath(version, false);
+    int release = releaseOf(client);
+    List<Path> sources;
+    try (var walk = Files.walk(target)) {
+      sources = walk.filter(p -> p.toString().endsWith(".java") && Files.isRegularFile(p))
+        .collect(java.util.stream.Collectors.toList());
+    }
+    ExecutorService pool = Executors.newFixedThreadPool(Math.max(1, threads));
+    List<Callable<List<String>>> tasks = new ArrayList<>();
+    for (Path source : sources) {
+      tasks.add(() -> {
+        DiagnosticCollector<JavaFileObject> diagnostics = new DiagnosticCollector<>();
+        StandardJavaFileManager files = FILES.get();
+        MemoryOutput memory = new MemoryOutput(files);
+        JavacTask task = (JavacTask) COMPILER.get().getTask(null, memory, diagnostics,
+          options(classpath, release), null, files.getJavaFileObjects(source));
+        String relative = target.relativize(source).toString().replace('\\', '/');
+        List<String> lines = new ArrayList<>();
+        for (RawUses.Site site : RawUses.analyze(task).sites()) {
+          lines.add(relative + ":" + site.line() + " raw use of " + site.type());
+        }
+        return lines;
       });
     }
     List<String> all = new ArrayList<>();
@@ -540,10 +582,15 @@ public final class Verifier {
     JavaCompiler compiler = COMPILER.get();
     StandardJavaFileManager files = FILES.get();
     MemoryOutput memory = new MemoryOutput(files);
-    boolean ok = compiler.getTask(null, memory, diagnostics, options(classpath, release), null,
-      files.getJavaFileObjects(source)).call();
+    JavacTask task = (JavacTask) compiler.getTask(null, memory, diagnostics,
+      options(classpath, release), null, files.getJavaFileObjects(source));
+    // Our own raw-use check, not javac's -Xlint:rawtypes: a raw cast is a reifiable, checked
+    // conversion, so javac reports neither a rawtypes nor an unchecked warning for it.
+    int raw = RawUses.analyze(task).count();
+    task.generate();
+    boolean ok = diagnostics.getDiagnostics().stream()
+      .noneMatch(diagnostic -> diagnostic.getKind() == Diagnostic.Kind.ERROR);
     List<String> errors = new ArrayList<>();
-    int raw = 0;
     int redundantCasts = 0;
     int unchecked = 0;
     for (Diagnostic<? extends JavaFileObject> diagnostic : diagnostics.getDiagnostics()) {
@@ -559,10 +606,7 @@ public final class Verifier {
         continue;
       }
       String code = diagnostic.getCode();
-      if (code.startsWith("compiler.warn.raw.")) {
-        raw++;
-      }
-      else if (code.startsWith("compiler.warn.redundant.cast")) {
+      if (code.startsWith("compiler.warn.redundant.cast")) {
         redundantCasts++;
       }
       else if (code.startsWith("compiler.warn.unchecked")
