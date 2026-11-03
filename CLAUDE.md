@@ -35,6 +35,8 @@ allowed to change as the work does.
   available type is an erasure, a capture, or an unknown, print nothing. A raw or erased type changes
   the generic shape and can alter inference elsewhere, so producing one is a bug even where it
   compiles and even if the tree score rises.
+- **Never print `var`.** The generated source writes explicit types; `var` hides the recorded type and
+  is not a repair form.
 - **The compile gate is deterministic.** A file that fails to compile is repaired only by facts
   recorded in the class file or by static language rules, and never by compiling candidates and
   keeping one. A repair that would need a search loop is reported as blocked instead.
