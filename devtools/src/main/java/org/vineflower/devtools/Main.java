@@ -181,9 +181,10 @@ public final class Main {
           .measure(positional.get(0), Path.of(positional.get(1)), threads);
         long elapsed = (System.nanoTime() - started) / 1_000_000;
         System.out.printf(Locale.ROOT,
-          "sources %d  failed %d  raw %d  redundant-casts %d  redundant-double-casts %d  unchecked %d  in %dms%n",
+          "sources %d  failed %d  raw %d  redundant-casts %d  double-casts %d  redundant-double-casts %d  unchecked %d  in %dms%n",
           measured.sources(), measured.failed(), measured.metrics().raw(),
-          measured.metrics().redundantCasts(), measured.metrics().redundantDoubleCasts(),
+          measured.metrics().redundantCasts(), measured.metrics().doubleCasts(),
+          measured.metrics().redundantDoubleCasts(),
           measured.metrics().unchecked(), elapsed);
         if (rest.contains("--casts")) {
           for (String site : new Verifier(workspace, minecraft)
@@ -892,6 +893,8 @@ public final class Main {
         metrics   <version> <dir> [--threads N] [--casts] [--raw] [--lint-all]
                                              compile every source under a tree with the
                                              verifier's javac and sum its quality counters
+                                             (raw uses, redundant casts, double casts,
+                                             redundant double casts, unchecked)
         clean     [--trees] [--compile] [--downloads] [--all]
         reports   [--version V] [--limit N]   list past scores
         cache                                 show cache usage (file counts and sizes)

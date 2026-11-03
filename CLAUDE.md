@@ -139,8 +139,9 @@ devtools/cli diff      <version> <Class> [<Class>...] [--full] [--dump] [--dump-
 devtools/cli compile   <version> <Class>             compile that one class like the verifier does
 devtools/cli metrics   <version> <dir> [--threads N] [--casts] [--raw] [--lint-all]
                                              compile a whole source tree with the verifier'
-                                             javac and print the quality counters (raw, redundant
-                                             casts, redundant double casts, unchecked) without
+                                             javac and print the quality counters (raw uses,
+                                             redundant casts, double casts, redundant double
+                                             casts, unchecked) without
                                              comparing; raw uses of parameterized types are
                                              counted by our own attributed-tree checker (it sees
                                              raw casts, which javac's lint does not); a double cast
