@@ -3286,9 +3286,18 @@ public class InvocationExprent extends Exprent {
     // pin is therefore re-inferred; the printer's substitution of it is a guess, not evidence.
     Map<String, String> mergeable = ExprProcessor.mergeableVariables(signature, call.inferredUpperBound);
     Map<String, VarType> bindings = new HashMap<>();
-    if (!ExprProcessor.declaredTypeAccepts(signature.parameterTypes.get(index), value,
+    boolean accepts = ExprProcessor.declaredTypeAccepts(signature.parameterTypes.get(index), value,
       signature.typeParameters, bounds, scope, signature.returnType, bindings, mergeable,
-      call.inferredUpperBound)) {
+      call.inferredUpperBound);
+    if (!accepts) {
+      // A diamond creation's class variable is not one of the call's method variables, so the
+      // check above cannot bind it. javac infers it from the creation's target and capture-
+      // converts each wildcard argument, so a wildcard whose range contains the declared
+      // argument is exactly the instantiation the source's bare value has.
+      bindings.clear();
+      accepts = call.printsDiamond() && call.polyCaptureAccepts(signature.parameterTypes.get(index), value);
+    }
+    if (!accepts) {
       return false;
     }
     for (int i = 0; i < signature.parameterTypes.size(); i++) {
@@ -3316,7 +3325,8 @@ public class InvocationExprent extends Exprent {
       }
       if (!ExprProcessor.declaredTypeAccepts(signature.parameterTypes.get(i), siblingType,
         signature.typeParameters, bounds, scope, signature.returnType, bindings, mergeable,
-        call.inferredUpperBound)) {
+        call.inferredUpperBound)
+        && !(call.printsDiamond() && call.polyCaptureAccepts(signature.parameterTypes.get(i), siblingType))) {
         return false;
       }
     }
@@ -3336,6 +3346,82 @@ public class InvocationExprent extends Exprent {
       }
     }
     return true;
+  }
+
+  /**
+   * Whether this constructor call prints as a diamond creation (`new G<>(...)`): its class type
+   * arguments are then inferred by javac from the creation's target, and each wildcard argument
+   * is a capture that inference can equate with the target's instantiation.
+   */
+  private boolean printsDiamond() {
+    return functype == Type.INIT && genericArgs.size() == 1 && genericArgs.get(0) == GenericType.DUMMY_VAR;
+  }
+
+  /**
+   * Whether capture conversion of {@code value} can satisfy {@code declared} at a diamond
+   * creation: the value {@code G<? extends A>} against a declared {@code G<B>} is acceptable
+   * when {@code B} lies in the wildcard's range ({@code B <: A}), because the creation's own
+   * class variable can be equated with the capture; {@code ? super A} needs {@code A <: B}.
+   * A proper argument must be the declared type itself.
+   */
+  private boolean polyCaptureAccepts(VarType declared, VarType value) {
+    if (!(declared instanceof GenericType declaredType) || !(value instanceof GenericType valueType)
+      || declaredType.getWildcard() != GenericType.WILDCARD_NO
+      || valueType.getWildcard() != GenericType.WILDCARD_NO
+      || declaredType.type != CodeType.OBJECT || valueType.type != CodeType.OBJECT
+      || declaredType.value == null || !declaredType.value.equals(valueType.value)
+      || declaredType.arrayDim != valueType.arrayDim
+      || declaredType.getArguments().size() != valueType.getArguments().size()) {
+      return false;
+    }
+    for (int i = 0; i < declaredType.getArguments().size(); i++) {
+      VarType declaredArgument = concreteDiamondArgument(declaredType.getArguments().get(i));
+      VarType valueArgument = valueType.getArguments().get(i);
+      if (valueArgument instanceof GenericType wildcard
+        && wildcard.getWildcard() == GenericType.WILDCARD_EXTENDS) {
+        if (!argumentWithin(declaredArgument, GenericType.withWildcard(wildcard, GenericType.WILDCARD_NO))) {
+          return false;
+        }
+      }
+      else if (valueArgument instanceof GenericType wildcard
+        && wildcard.getWildcard() == GenericType.WILDCARD_SUPER) {
+        if (!argumentWithin(GenericType.withWildcard(wildcard, GenericType.WILDCARD_NO), declaredArgument)) {
+          return false;
+        }
+      }
+      else if (!sameTypeExact(declaredType.getArguments().get(i), valueArgument)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * A declared argument that is the diamond creation's own variable stands for the instantiation
+   * the printer solved from the creation's target; javac infers the same from the same target.
+   */
+  private VarType concreteDiamondArgument(VarType argument) {
+    if (argument != null && argument.type == CodeType.GENVAR) {
+      VarType concrete = genericsMap.get(argument);
+      if (concrete != null && !GenericType.DUMMY_VAR.equals(concrete)) {
+        return concrete;
+      }
+    }
+    return argument;
+  }
+
+  /** Whether {@code contained} is a subtype of {@code container}, judged on recorded classes. */
+  private static boolean argumentWithin(VarType contained, VarType container) {
+    if (sameTypeExact(contained, container)) {
+      return true;
+    }
+    if (contained == null || container == null
+      || contained.type != CodeType.OBJECT || container.type != CodeType.OBJECT
+      || contained.value == null || container.value == null
+      || contained.isGeneric() || container.isGeneric()) {
+      return false;
+    }
+    return DecompilerContext.getStructContext().instanceOf(contained.value, container.value);
   }
 
   /**

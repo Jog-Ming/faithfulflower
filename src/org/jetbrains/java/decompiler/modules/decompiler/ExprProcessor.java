@@ -1731,6 +1731,20 @@ public class ExprProcessor implements CodeConstants {
     } else {
       rightType = exprent.getInferredExprType(leftType);
     }
+    // A lambda's own parameter is implicitly typed by the non-wildcard parameterization of its
+    // functional target: a wildcard in an input position stands for its bound. Only where that
+    // bound is the very class the context expects is the recorded wildcard the target's
+    // spelling of this value; elsewhere it is the range that selects the cast guiding the
+    // enclosing inference, and the recorded form stays.
+    if (InvocationExprent.inArgument()
+        && exprent instanceof VarExprent lambdaVar && lambdaVar.hasLambdaParameterType()
+        && rightType instanceof GenericType wildcardRight
+        && wildcardRight.getWildcard() != GenericType.WILDCARD_NO
+        && wildcardRight.value != null
+        && leftType != null && leftType.type == CodeType.OBJECT
+        && wildcardRight.value.equals(leftType.value)) {
+      rightType = GenericType.withWildcard(wildcardRight, GenericType.WILDCARD_NO);
+    }
     // A local whose table row records exactly the target type needs no cast: the printer's own
     // inference fell back to an erasure or a wildcard the source never wrote.
     if (exprent instanceof VarExprent recordedVar) {
@@ -2066,6 +2080,16 @@ public class ExprProcessor implements CodeConstants {
       // An argument whose declared parameter already takes the field's recorded type under this
       // argument's own instantiation needs no conversion.
       && !(InvocationExprent.inArgument() && InvocationExprent.currentArgumentAcceptsDeclared(rightType, exprent.getNamedGenerics()))
+      // A target that already accepts the field's recorded type needs no conversion either: the
+      // value assigns through its supertype view (`ImmutableList<? extends X>` to
+      // `Collection<? extends X>`) or its wildcard lies inside the target's
+      // (`ResourceKey<? extends Registry<T>>` to `ResourceKey<? extends Registry<? extends T>>`).
+      // The bound cast is the printer's showing; the source assigned the field bare. A target
+      // that is exactly the field's own recorded type proves nothing: the parameter's variable
+      // was substituted from this value itself, and the bound cast is what guides the call's
+      // inference there.
+      && !(rightType instanceof GenericType recordedFieldType && !recordedFieldType.equalsExact(leftType)
+        && GenericType.isAssignable(rightType, leftType, exprent.getNamedGenerics()))
       && rightType instanceof GenericType fieldType && fieldType.getWildcard() == GenericType.WILDCARD_NO
       && fieldType.type == CodeType.OBJECT && fieldType.arrayDim == 0 && fieldType.getArguments().size() == 1
       && fieldType.getArguments().get(0) instanceof GenericType boundWildcard

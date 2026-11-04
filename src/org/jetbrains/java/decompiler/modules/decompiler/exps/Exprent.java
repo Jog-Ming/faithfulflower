@@ -379,17 +379,23 @@ public abstract class Exprent implements IMatchable {
     MethodWrapper method = (MethodWrapper)DecompilerContext.getContextProperty(DecompilerContext.CURRENT_METHOD_WRAPPER);
 
     while (true) {
-      GenericClassDescriptor cls = class_ == null ? null : class_.classStruct.getSignature();
-      if (cls != null) {
-        for (int x = 0; x < cls.fparameters.size(); x++) {
-          ret.put(GenericType.parse("T" + cls.fparameters.get(x) + ";"), cls.fbounds.get(x));
-        }
-      }
-
+      // A type variable shadows one of the same name in an enclosing scope: the method's
+      // declaration shadows the class's, and an inner class's shadows an enclosing class's.
+      // The declaration nearest the printed point supplies the bound, so the first put wins.
       GenericMethodDescriptor mtd = method == null ? null : method.methodStruct.getSignature();
       if (mtd != null) {
         for (int x = 0; x < mtd.typeParameters.size(); x++) {
-          ret.put(GenericType.parse("T" + mtd.typeParameters.get(x) + ";"), mtd.typeParameterBounds.get(x));
+          ret.putIfAbsent(GenericType.parse("T" + mtd.typeParameters.get(x) + ";"), mtd.typeParameterBounds.get(x));
+        }
+      }
+
+      // A lambda has no class of its own: its ClassNode reuses the host class's type parameters,
+      // and their bounds are not recorded there. Only the enclosing source scope supplies them.
+      GenericClassDescriptor cls = class_ == null || class_.type == ClassNode.Type.LAMBDA
+        ? null : class_.classStruct.getSignature();
+      if (cls != null) {
+        for (int x = 0; x < cls.fparameters.size(); x++) {
+          ret.putIfAbsent(GenericType.parse("T" + cls.fparameters.get(x) + ";"), cls.fbounds.get(x));
         }
       }
       if (class_ == null || class_.parent == null || class_.parent.getWrapper() == null) {

@@ -2323,8 +2323,10 @@ public class NewExprent extends Exprent {
         }
       }
       for (VarType argument : generic.getArguments()) {
-        // A null argument is the unbounded wildcard `?`: a capture no source can name.
-        if (argument == null || !nameableLambdaParameterType(argument)) {
+        // A null argument is the unbounded wildcard `?`. It is exactly what the functional
+        // target declares, and a wildcard type argument is legal source: the lambda's
+        // parameter body sees `MemoryModuleType<?>`, not a capture it cannot name.
+        if (argument != null && !nameableLambdaParameterType(argument)) {
           return false;
         }
       }
