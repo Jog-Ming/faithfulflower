@@ -92,6 +92,9 @@ public class InvocationExprent extends Exprent {
   /** A witness this call prints that an unqualified name cannot carry: print the class too. */
   private boolean witnessQualifier = false;
   private VarType remappedInstType = null;
+  // The instantiation a receiver cast introduces when the call's result cannot reach the context
+  // target through one cast. Printed state, set by ExprProcessor around this expression's print.
+  private VarType receiverCastTarget = null;
   /** The line the call's own token sits on, when the printer of a constructor knows it. */
   private int callerOpeningLine = -1;
   /**
@@ -2290,6 +2293,11 @@ public class InvocationExprent extends Exprent {
             appendInstCast(buf, receiverCaptureCast(cl), res);
           } else if (rightType.equals(VarType.VARTYPE_OBJECT) && !leftType.equals(rightType) && (instNode != null && instNode.type != ClassNode.Type.ANONYMOUS)) {
             appendInstCast(buf, leftType, res);
+          } else if (receiverCastTarget != null) {
+            // The call's result cannot be converted to the context target directly; instantiating
+            // the receiver's class variable with the wildcard widens the result instead, and the
+            // two-step conversion is spent on the receiver, where it erases to the same class.
+            appendInstCast(buf, receiverCastTarget, res);
           } else if (remappedInstType != null) {
             // If we have a remap inst type, do a cast
             appendInstCast(buf, remappedInstType, res);
@@ -5327,6 +5335,15 @@ public class InvocationExprent extends Exprent {
 
   public void setInstance(Exprent instance) {
     this.instance = instance;
+  }
+
+  /** The instantiation a receiver cast prints instead of a cast on the call's result. */
+  public void setReceiverCastTarget(VarType receiverCastTarget) {
+    this.receiverCastTarget = receiverCastTarget;
+  }
+
+  public void clearReceiverCastTarget() {
+    this.receiverCastTarget = null;
   }
 
   public boolean isStatic() {

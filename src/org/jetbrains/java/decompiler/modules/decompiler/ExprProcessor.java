@@ -1822,17 +1822,21 @@ public class ExprProcessor implements CodeConstants {
     VarType doubleCastTarget = leftType;
     VarType doubleCastInner = null;
     VarType wildcardOnlyCast = null;
+    VarType receiverCastTarget = null;
     if (doCastGenerics && !castAlways && !doCast && !doCastNull && !doCastNarrowing
       && provablyInconvertible(leftType, rightType)) {
       if (InvocationExprent.inArgument()) {
         doCastGenerics = false;
       } else {
-        doubleCastInner = uncheckedDoubleCastInner(leftType, rightType);
-        if (doubleCastInner != null) {
-          doubleCast = true;
-          doubleCastTarget = leftType;
-        } else {
-          castRaw = true;
+        receiverCastTarget = doubleCastReceiverCast(exprent, leftType, rightType);
+        if (receiverCastTarget == null) {
+          doubleCastInner = uncheckedDoubleCastInner(leftType, rightType);
+          if (doubleCastInner != null) {
+            doubleCast = true;
+            doubleCastTarget = leftType;
+          } else {
+            castRaw = true;
+          }
         }
       }
     }
@@ -1874,7 +1878,8 @@ public class ExprProcessor implements CodeConstants {
     // compiled widened to a wildcard instantiation first (an unchecked cast javac accepts), and
     // that two-step form falls back to the raw erasure when no intermediate exists. All steps
     // erase to the same class, so the class file is unchanged.
-    if (doCastGenerics && !castRaw && !doubleCast && parameterizedCastIllegal(leftType, rightType)) {
+    if (doCastGenerics && !castRaw && !doubleCast && receiverCastTarget == null
+      && parameterizedCastIllegal(leftType, rightType)) {
       doubleCastInner = uncheckedDoubleCastInner(leftType, rightType);
       if (doubleCastInner != null) {
         doubleCast = true;
@@ -2123,7 +2128,18 @@ public class ExprProcessor implements CodeConstants {
       }
     }
 
-    buffer.append(exprent.toJava(indent));
+    if (cast && receiverCastTarget != null && exprent instanceof InvocationExprent receiverCall) {
+      // The two-step conversion is carried by the receiver instead of the result: the value the
+      // call sees is the same erased receiver, so this prints byte-identical code.
+      receiverCall.setReceiverCastTarget(receiverCastTarget);
+      try {
+        buffer.append(exprent.toJava(indent));
+      } finally {
+        receiverCall.clearReceiverCastTarget();
+      }
+    } else {
+      buffer.append(exprent.toJava(indent));
+    }
 
     if (quote) {
       buffer.append(')');
@@ -2198,6 +2214,149 @@ public class ExprProcessor implements CodeConstants {
     VarType wildcard = GenericType.withWildcard(bound, GenericType.WILDCARD_EXTENDS);
     return new GenericType(CodeType.OBJECT, 0, target.value, null,
       Collections.singletonList(wildcard), GenericType.WILDCARD_NO);
+  }
+
+  /**
+   * The receiver instantiation that lets a call's result reach the context target through a single
+   * cast, or null when the receiver is not the value the second step would have to widen.
+   *
+   * <p>A class variable the method returns in a result position, mentioned by no parameter, ties
+   * the result's instantiation to the receiver's: the recorded receiver type fixes the variable,
+   * and the call's recorded return is exactly that substitution. The double cast would widen the
+   * result's argument to its upper bound and cast that to the target; instantiating the receiver's
+   * variable with the same wildcard makes the call itself return the widened type, so the source's
+   * second conversion disappears. Both casts erase to the receiver's own class, so the class file
+   * is unchanged.
+   */
+  private static @Nullable VarType doubleCastReceiverCast(Exprent exprent, VarType leftType, VarType rightType) {
+    if (leftType == null || rightType == null
+      || !(exprent instanceof InvocationExprent call) || call.isStatic() || call.getInstance() == null
+      || !(call.getInstance() instanceof FieldExprent || call.getInstance() instanceof VarExprent)) {
+      return null;
+    }
+    StructClass receiverClass = DecompilerContext.getStructContext().getClass(call.getClassname());
+    if (receiverClass == null || receiverClass.getSignature() == null
+      || receiverClass.getSignature().fparameters.isEmpty()) {
+      return null;
+    }
+    StructMethod method = call.getDesc();
+    if (method == null || method.getSignature() == null) {
+      return null;
+    }
+    GenericMethodDescriptor signature = method.getSignature();
+    VarType declaredReturn = signature.returnType;
+    if (!(declaredReturn instanceof GenericType returned) || declaredReturn.type != CodeType.OBJECT
+      || declaredReturn.arrayDim != 0 || returned.getWildcard() != GenericType.WILDCARD_NO
+      || declaredReturn.value == null || leftType.value == null
+      || !declaredReturn.value.equals(leftType.value)) {
+      return null;
+    }
+    // The variable must link the receiver to the result directly: exactly one result argument is
+    // a type variable of the receiver's class.
+    int index = -1;
+    for (int i = 0; i < returned.getArguments().size(); i++) {
+      VarType argument = returned.getArguments().get(i);
+      if (plainTypeVariable(argument) && receiverClass.getSignature().fparameters.contains(argument.value)) {
+        if (index >= 0) {
+          return null;
+        }
+        index = i;
+      }
+    }
+    if (index < 0) {
+      return null;
+    }
+    String variable = returned.getArguments().get(index).value;
+    int classIndex = receiverClass.getSignature().fparameters.indexOf(variable);
+    if (classIndex < 0) {
+      return null;
+    }
+    // A parameter that mentions the variable constrains it from the call's argument list; the
+    // receiver would then not be the only source of its instantiation.
+    for (VarType parameter : signature.parameterTypes) {
+      if (mentionsVariable(parameter, variable)) {
+        return null;
+      }
+    }
+    VarType receiverType = call.getInstance().getInferredExprType(null);
+    if (!(receiverType instanceof GenericType receiver) || receiverType.type != CodeType.OBJECT
+      || receiverType.arrayDim != 0 || !call.getClassname().equals(receiverType.value)
+      || receiver.getArguments().size() != receiverClass.getSignature().fparameters.size()) {
+      return null;
+    }
+    VarType receiverArgument = receiver.getArguments().get(classIndex);
+    if (receiverArgument == null) {
+      return null; // an unbounded wildcard leaves nothing to widen
+    }
+    Map<VarType, VarType> toReceiver = new HashMap<>();
+    toReceiver.put(GenericType.parse("T" + variable + ";"), receiverArgument);
+    if (!sameType(declaredReturn.remap(toReceiver), rightType)) {
+      return null;
+    }
+    // The double cast's intermediate is the result widened by one wildcard; the same wildcard on
+    // the receiver's variable is the widening the source actually wrote.
+    VarType intermediate = uncheckedDoubleCastInner(leftType, rightType);
+    if (!(intermediate instanceof GenericType intermediateType)
+      || intermediateType.getArguments().size() != 1) {
+      return null;
+    }
+    VarType wildcard = intermediateType.getArguments().get(0);
+    List<VarType> castArguments = new ArrayList<>(receiver.getArguments());
+    castArguments.set(classIndex, wildcard);
+    VarType cast = new GenericType(CodeType.OBJECT, 0, receiverType.value, receiver.getParent(),
+      castArguments, receiver.getWildcard());
+    if (!isNameableCastInstantiation(cast, exprent.getNamedGenerics())
+      || !(cast instanceof GenericType castType)) {
+      return null;
+    }
+    // The source cast must be a widening, never a narrowing: every argument either keeps its
+    // instantiation or is a wildcard that contains it.
+    return instantiationContains(castType, receiver) ? cast : null;
+  }
+
+  /** Whether every type argument of {@code outer} contains the same position of {@code inner}. */
+  private static boolean instantiationContains(GenericType outer, GenericType inner) {
+    if (outer.value == null || !outer.value.equals(inner.value)
+      || outer.getWildcard() != GenericType.WILDCARD_NO || inner.getWildcard() != GenericType.WILDCARD_NO
+      || outer.getArguments().size() != inner.getArguments().size()) {
+      return false;
+    }
+    for (int i = 0; i < outer.getArguments().size(); i++) {
+      VarType outerArgument = outer.getArguments().get(i);
+      VarType innerArgument = inner.getArguments().get(i);
+      if (outerArgument == null) {
+        continue; // an unbounded wildcard contains every instantiation
+      }
+      if (outerArgument instanceof GenericType wildcard
+        && wildcard.getWildcard() == GenericType.WILDCARD_EXTENDS) {
+        if (!boundContainsTarget(GenericType.withWildcard(wildcard, GenericType.WILDCARD_NO), innerArgument)) {
+          return false;
+        }
+        continue;
+      }
+      if (!sameType(outerArgument, innerArgument)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /** Whether the type mentions the named type variable at or below this position. */
+  private static boolean mentionsVariable(VarType type, String variable) {
+    if (type == null) {
+      return false;
+    }
+    if (type.type == CodeType.GENVAR && variable.equals(type.value)) {
+      return true;
+    }
+    if (type instanceof GenericType generic) {
+      for (VarType argument : generic.getArguments()) {
+        if (mentionsVariable(argument, variable)) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   /**
