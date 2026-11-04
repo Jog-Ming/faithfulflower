@@ -2843,6 +2843,169 @@ public class InvocationExprent extends Exprent {
   }
 
   /**
+   * Whether the argument being printed fills a bare type variable that the printer substituted by
+   * exactly {@code target}, with the parameter erasing to Object. A variable of the called method
+   * itself is re-inferred by javac from the arguments. A class type variable is fixed by the
+   * receiver's instantiation; only a genuine substitution (the receiver's type names another type
+   * in that position) is a recorded fact of the source, while an identity entry carries none.
+   */
+  public static boolean currentParameterIsSubstitutedVariable(VarType target) {
+    InvocationExprent call = ARGUMENT_CALL.get();
+    Integer index = ARGUMENT_INDEX.get();
+    if (call == null || index == null || call.desc == null || call.desc.getSignature() == null
+      || call.descriptor == null || target == null) {
+      return false;
+    }
+    GenericMethodDescriptor signature = call.desc.getSignature();
+    if (signature.parameterTypes.size() != call.descriptor.params.length
+      || index < 0 || index >= signature.parameterTypes.size()) {
+      return false;
+    }
+    VarType declared = signature.parameterTypes.get(index);
+    if (declared == null || declared.type != CodeType.GENVAR || declared.arrayDim != 0
+      || !call.descriptor.params[index].equals(VarType.VARTYPE_OBJECT)) {
+      return false;
+    }
+    VarType printerSubstitution = call.genericsMap.get(GenericType.parse("T" + declared.value + ";"));
+    if (!sameTypeExact(printerSubstitution, target)) {
+      return false;
+    }
+    return signature.typeParameters.contains(declared.value) || !sameTypeExact(printerSubstitution, declared);
+  }
+
+  private static boolean sameTypeExact(VarType left, VarType right) {
+    if (left == right) {
+      return true;
+    }
+    if (left == null || right == null) {
+      return false;
+    }
+    if (left instanceof GenericType generic) {
+      return generic.equalsExact(right);
+    }
+    if (right instanceof GenericType generic) {
+      return generic.equalsExact(left);
+    }
+    return left.equals(right);
+  }
+
+  /**
+   * Whether the type mentions one of the called method's variables that the printer left
+   * unsolved. Its printed name is then whatever the caller's scope happens to call it, which is
+   * a different variable; an expression the printer casts to it pins the call's inference to the
+   * wrong one.
+   */
+  private static boolean mentionsUnsubstitutedVariable(VarType type, Map<VarType, VarType> generics,
+                                                       List<String> variables) {
+    if (type == null) {
+      return false;
+    }
+    if (type.type == CodeType.GENVAR) {
+      for (String variable : variables) {
+        if (variable.equals(type.value)) {
+          return !generics.containsKey(GenericType.parse("T" + variable + ";"));
+        }
+      }
+      return false;
+    }
+    if (type instanceof GenericType generic) {
+      for (VarType argument : generic.getArguments()) {
+        if (mentionsUnsubstitutedVariable(argument, generics, variables)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /** The declared parameter type with the called method's solved variables substituted. */
+  private static VarType substituteCalleeVariables(VarType declared, Map<VarType, VarType> generics,
+                                                   List<String> variables) {
+    if (declared == null || generics == null || generics.isEmpty()) {
+      return declared;
+    }
+    Map<VarType, VarType> substitution = new HashMap<>();
+    for (String variable : variables) {
+      VarType key = GenericType.parse("T" + variable + ";");
+      VarType value = generics.get(key);
+      if (value != null) {
+        substitution.put(key, value);
+      }
+    }
+    return substitution.isEmpty() ? declared : declared.remap(substitution);
+  }
+
+  /**
+   * Whether the value's recorded type already fits the declared parameter type of the argument
+   * being printed, with the called method's own type variables instantiated by this argument and
+   * by the other arguments' recorded types. A variable this argument binds is checked again
+   * against every sibling: a sibling that names the same variable at another type proves the
+   * cast was pinning it, and the source wrote it. A null value cannot be judged.
+   */
+  public static boolean currentArgumentAcceptsDeclared(VarType value, Map<VarType, List<VarType>> named) {
+    InvocationExprent call = ARGUMENT_CALL.get();
+    Integer index = ARGUMENT_INDEX.get();
+    if (call == null || index == null || call.desc == null || call.desc.getSignature() == null || value == null) {
+      return false;
+    }
+    GenericMethodDescriptor signature = call.desc.getSignature();
+    if (signature.parameterTypes.size() != call.descriptor.params.length
+      || call.lstParameters.size() != signature.parameterTypes.size()
+      || index < 0 || index >= signature.parameterTypes.size()) {
+      return false;
+    }
+    Map<String, List<VarType>> bounds = new HashMap<>();
+    for (int i = 0; i < signature.typeParameters.size(); i++) {
+      bounds.put(signature.typeParameters.get(i),
+        i < signature.typeParameterBounds.size() ? signature.typeParameterBounds.get(i) : List.of(VarType.VARTYPE_OBJECT));
+    }
+    Map<VarType, List<VarType>> scope = named == null ? Map.of() : named;
+    Map<String, VarType> bindings = new HashMap<>();
+    if (!ExprProcessor.declaredTypeAccepts(signature.parameterTypes.get(index), value,
+      signature.typeParameters, bounds, scope, signature.returnType, bindings)) {
+      return false;
+    }
+    for (int i = 0; i < signature.parameterTypes.size(); i++) {
+      if (i == index) {
+        continue;
+      }
+      Exprent sibling = call.lstParameters.get(i);
+      // A lambda or method reference is typed by the parameter itself, not by a recorded type.
+      if (sibling instanceof NewExprent creation
+        && (creation.isLambda() || creation.isMethodReference())) {
+        continue;
+      }
+      VarType siblingType = sibling.getInferredExprType(null);
+      if (siblingType == null) {
+        continue;
+      }
+      // A sibling printed against one of the called method's variables the printer could not
+      // instantiate carries a cast to that variable. The printed name is whatever the caller's
+      // scope calls it - a different variable - so the sibling alone fixes the inference, and
+      // this argument's cast is what kept the two in step.
+      VarType substitutedSibling = substituteCalleeVariables(signature.parameterTypes.get(i), call.genericsMap,
+        signature.typeParameters);
+      if (mentionsUnsubstitutedVariable(substitutedSibling, call.genericsMap, signature.typeParameters)) {
+        return false;
+      }
+      if (!ExprProcessor.declaredTypeAccepts(signature.parameterTypes.get(i), siblingType,
+        signature.typeParameters, bounds, scope, signature.returnType, bindings)) {
+        return false;
+      }
+    }
+    // The printer's own substitution is what every other argument and the result are printed
+    // against. A variable the call needs at another type conflicts with what this argument
+    // implies, and only the source's cast could have resolved it.
+    for (Map.Entry<String, VarType> binding : bindings.entrySet()) {
+      VarType substituted = call.genericsMap.get(GenericType.parse("T" + binding.getKey() + ";"));
+      if (substituted != null && !ExprProcessor.substitutionCompatible(binding.getValue(), substituted)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
    * Whether the call whose argument is being printed leaves its parameter's type variable to
    * this argument alone: no sibling parameter mentions it, so javac infers it from the value's
    * own recorded type and the source needed no cast there.

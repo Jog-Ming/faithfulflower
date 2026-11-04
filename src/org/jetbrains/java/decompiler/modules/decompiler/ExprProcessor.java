@@ -1961,6 +1961,12 @@ public class ExprProcessor implements CodeConstants {
     VarType fieldBoundTarget = null;
     if (!castAlways && !doCast && !doCastGenerics && !castRaw && !doCastNull && !doCastNarrowing && !doubleCast
       && exprent instanceof FieldExprent
+      // A target that is not itself generic accepts the field as it is; casting to a bound
+      // instantiation there converts nothing.
+      && leftType != null && leftType.isGeneric()
+      // An argument whose declared parameter already takes the field's recorded type under this
+      // argument's own instantiation needs no conversion.
+      && !(InvocationExprent.inArgument() && InvocationExprent.currentArgumentAcceptsDeclared(rightType, exprent.getNamedGenerics()))
       && rightType instanceof GenericType fieldType && fieldType.getWildcard() == GenericType.WILDCARD_NO
       && fieldType.type == CodeType.OBJECT && fieldType.arrayDim == 0 && fieldType.getArguments().size() == 1
       && fieldType.getArguments().get(0) instanceof GenericType boundWildcard
@@ -1983,6 +1989,45 @@ public class ExprProcessor implements CodeConstants {
       && narrowTernary.narrowConstantArms(leftType)) {
       doCast = false;
       narrowTernaryCast = true;
+    }
+
+    // An argument that is an untyped lambda parameter of the lambda being printed: its tracked
+    // type is the synthetic body method's erased slot (Object), not a type the source wrote.
+    // When the declared parameter is a bare type variable that the printer substituted by exactly
+    // this cast target, and the parameter erases to Object, the cast converts nothing: javac
+    // infers the variable and the untyped parameter from this same call context, and the cast is
+    // the printer's own substitution showing. The called method's own variables are re-inferred
+    // from the arguments; a class variable counts only when the receiver's recorded instantiation
+    // genuinely substitutes it (see currentParameterIsSubstitutedVariable). An overload-choice
+    // cast selects the overload, and the parameter's own erasure is what it works around; both are
+    // excluded.
+    if (!castAlways && InvocationExprent.inArgument()
+      && exprent instanceof VarExprent lambdaParameter
+      && lambdaParameter.hasLambdaParameterType()
+      && sameType(lambdaParameter.getLambdaParameterType(), VarType.VARTYPE_OBJECT)
+      && leftType != null && leftType.type == CodeType.GENVAR && leftType.arrayDim == 0
+      && InvocationExprent.currentParameterIsSubstitutedVariable(leftType)) {
+      doCast = false;
+      doCastGenerics = false;
+      doubleCast = false;
+      wildcardOnlyCast = null;
+      castRaw = false;
+      fieldBoundCast = false;
+    }
+
+    // In an argument list the parameter type is not fixed by the source: javac instantiates the
+    // called method's own variables from the arguments and the context. When the value's recorded
+    // type already fits the declared parameter under such an instantiation, every generic-cast
+    // reason above is the printer's own substitution showing, and the source passed the value
+    // bare. An overload-choice cast is excluded: it selects the overload, not the variable.
+    if (!castAlways && InvocationExprent.inArgument()
+      && (doCastGenerics || doubleCast || wildcardOnlyCast != null || castRaw || fieldBoundCast)
+      && InvocationExprent.currentArgumentAcceptsDeclared(rightType, exprent.getNamedGenerics())) {
+      doCastGenerics = false;
+      doubleCast = false;
+      wildcardOnlyCast = null;
+      castRaw = false;
+      fieldBoundCast = false;
     }
 
     // An overload-choice cast on a variable the table records at the parameter's own primitive
@@ -3144,6 +3189,212 @@ public class ExprProcessor implements CodeConstants {
       && named.containsKey(leftBase)
       && !leftBase.equals(rightBase)
       && rightBase.equals(VarType.VARTYPE_OBJECT);
+  }
+
+  /**
+   * Whether a value of the recorded type {@code value} already fits the declared parameter type
+   * {@code declared}, with the called method's own type variables instantiated by this argument.
+   * A free variable binds to a proper (non-wildcard) argument inside its bound; a variable the
+   * method returns bare also binds to a wildcard's bound, since javac captures the wildcard and
+   * the call's result - the variable itself - stays within the caller's target. Positions that
+   * cannot be judged (a lower-bounded wildcard, a class with a different parameterization) reject.
+   */
+  public static boolean declaredTypeAccepts(VarType declared, VarType value,
+                                            List<String> variables, Map<String, List<VarType>> bounds,
+                                            Map<VarType, List<VarType>> named,
+                                            VarType returnType, Map<String, VarType> bindings) {
+    if (declared == null || declared.equals(VarType.VARTYPE_OBJECT)) {
+      // An unbounded wildcard argument position, and Object, accept any value.
+      return true;
+    }
+    if (value == null) {
+      // An unbounded wildcard value instantiates nothing by itself.
+      return false;
+    }
+    if (declared.arrayDim > 0 || value.arrayDim > 0) {
+      // An array position compares its element types; a variable inside the element instantiates
+      // per element, not as the whole array.
+      if (declared.arrayDim != value.arrayDim) {
+        return false;
+      }
+      return declaredTypeAccepts(declared.resizeArrayDim(0), value.resizeArrayDim(0),
+        variables, bounds, named, returnType, bindings);
+    }
+    if (declared instanceof GenericType declaredGeneric
+      && declaredGeneric.getWildcard() != GenericType.WILDCARD_NO) {
+      VarType base = GenericType.withWildcard(declaredGeneric, GenericType.WILDCARD_NO);
+      if (declaredGeneric.getWildcard() == GenericType.WILDCARD_UNBOUND) {
+        return true;
+      }
+      if (declaredGeneric.getWildcard() == GenericType.WILDCARD_SUPER) {
+        // A lower-bounded position accepts no captured value.
+        return false;
+      }
+      if (value instanceof GenericType valueGeneric
+        && valueGeneric.getWildcard() != GenericType.WILDCARD_NO) {
+        if (valueGeneric.getWildcard() != GenericType.WILDCARD_EXTENDS) {
+          return false;
+        }
+        value = GenericType.withWildcard(valueGeneric, GenericType.WILDCARD_NO);
+      }
+      return declaredTypeAccepts(base, value, variables, bounds, named, returnType, bindings);
+    }
+    if (declared.type == CodeType.GENVAR) {
+      String name = declared.value;
+      if (variables.contains(name)) {
+        if (bindings.containsKey(name)) {
+          return bindingCompatible(bindings.get(name), value, named);
+        }
+        boolean wildcard = value instanceof GenericType genericValue
+          && genericValue.getWildcard() != GenericType.WILDCARD_NO;
+        VarType bound = value;
+        if (wildcard) {
+          boolean returnedBare = returnType instanceof GenericType returned
+            && returned.getWildcard() == GenericType.WILDCARD_NO && returned.type == CodeType.GENVAR
+            && name.equals(returned.value);
+          if (!returnedBare) {
+            return false;
+          }
+          bound = value instanceof GenericType genericValue
+            && genericValue.getWildcard() == GenericType.WILDCARD_EXTENDS
+            ? GenericType.withWildcard(genericValue, GenericType.WILDCARD_NO) : VarType.VARTYPE_OBJECT;
+        }
+        if (!withinDeclaredBound(bound, name, bounds, named)) {
+          return false;
+        }
+        bindings.put(name, value);
+        return true;
+      }
+      return sameType(declared, value);
+    }
+    if (!(declared instanceof GenericType declaredGeneric) || declaredGeneric.value == null) {
+      if (sameType(declared, value)) {
+        return true;
+      }
+      return declared.type == CodeType.OBJECT && value.type == CodeType.OBJECT
+        && declared.value != null && value.value != null && declared.arrayDim == value.arrayDim
+        && DecompilerContext.getStructContext().instanceOf(value.value, declared.value);
+    }
+    if (!(value instanceof GenericType valueGeneric)
+      || valueGeneric.getWildcard() != GenericType.WILDCARD_NO
+      || !declaredGeneric.value.equals(valueGeneric.value)
+      || declaredGeneric.arrayDim != valueGeneric.arrayDim
+      || declaredGeneric.getArguments().size() != valueGeneric.getArguments().size()) {
+      return false;
+    }
+    for (int i = 0; i < declaredGeneric.getArguments().size(); i++) {
+      if (!declaredTypeAccepts(declaredGeneric.getArguments().get(i), valueGeneric.getArguments().get(i),
+        variables, bounds, named, returnType, bindings)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Whether a second occurrence of an already bound variable is compatible with the first: the
+   * same type, a type variable on either side whose recorded bounds contain the other, or a
+   * wildcard whose bound is the other.
+   */
+  private static boolean bindingCompatible(VarType binding, VarType value, Map<VarType, List<VarType>> named) {
+    if (sameType(binding, value)) {
+      return true;
+    }
+    if (binding == null || value == null) {
+      return false;
+    }
+    if (binding instanceof GenericType genericBinding && genericBinding.getWildcard() != GenericType.WILDCARD_NO) {
+      VarType bound = genericBinding.getWildcard() == GenericType.WILDCARD_EXTENDS
+        ? GenericType.withWildcard(genericBinding, GenericType.WILDCARD_NO) : VarType.VARTYPE_OBJECT;
+      return bindingCompatible(bound, value, named);
+    }
+    if (value instanceof GenericType genericValue && genericValue.getWildcard() != GenericType.WILDCARD_NO) {
+      VarType bound = genericValue.getWildcard() == GenericType.WILDCARD_EXTENDS
+        ? GenericType.withWildcard(genericValue, GenericType.WILDCARD_NO) : VarType.VARTYPE_OBJECT;
+      return bindingCompatible(binding, bound, named);
+    }
+    if (value.type == CodeType.GENVAR) {
+      List<VarType> limits = named.get(value);
+      if (limits != null) {
+        for (VarType limit : limits) {
+          if (limit != null && sameType(limit, binding)) {
+            return true;
+          }
+        }
+      }
+    }
+    if (binding.type == CodeType.GENVAR) {
+      List<VarType> limits = named.get(binding);
+      if (limits != null) {
+        for (VarType limit : limits) {
+          if (limit != null && sameType(limit, value)) {
+            return true;
+          }
+        }
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Whether the printer's own substitution for a bound variable can stand beside the binding the
+   * argument implies. A variable binding is re-inferred by javac and agrees with anything; a
+   * proper binding agrees with the same type or Object; the one conflict javac cannot resolve is
+   * a proper value the rest of the call needs at another type.
+   */
+  public static boolean substitutionCompatible(VarType binding, VarType substituted) {
+    if (sameType(binding, substituted)) {
+      return true;
+    }
+    if (binding == null || substituted == null) {
+      return true;
+    }
+    if (binding instanceof GenericType genericBinding && genericBinding.getWildcard() != GenericType.WILDCARD_NO) {
+      VarType bound = genericBinding.getWildcard() == GenericType.WILDCARD_EXTENDS
+        ? GenericType.withWildcard(genericBinding, GenericType.WILDCARD_NO) : VarType.VARTYPE_OBJECT;
+      return substitutionCompatible(bound, substituted);
+    }
+    if (binding.type == CodeType.GENVAR) {
+      // javac re-infers the variable from this argument; the substitution is the printer's guess.
+      return true;
+    }
+    // A proper value fixes the variable exactly: the call's result is an instantiation with that
+    // argument, and the context that asked for another one does not accept a subtype of it.
+    return substituted.equals(VarType.VARTYPE_OBJECT);
+  }
+
+  private static boolean withinDeclaredBound(VarType value, String variable, Map<String, List<VarType>> bounds,
+                                             Map<VarType, List<VarType>> named) {
+    List<VarType> limits = bounds.get(variable);
+    if (limits == null || limits.isEmpty()) {
+      return true;
+    }
+    for (VarType limit : limits) {
+      if (limit == null || limit.equals(VarType.VARTYPE_OBJECT)) {
+        return true;
+      }
+      if (sameType(value, limit)) {
+        return true;
+      }
+      if (value != null && value.type == CodeType.OBJECT && limit.type == CodeType.OBJECT
+        && value.value != null && limit.value != null && value.arrayDim == limit.arrayDim
+        && DecompilerContext.getStructContext().instanceOf(value.value, limit.value)) {
+        return true;
+      }
+      // A value that is itself a type variable of the caller satisfies the bound through its own
+      // recorded bounds: each of them names the variable's upper limits at the call site.
+      if (value != null && value.type == CodeType.GENVAR) {
+        List<VarType> valueBounds = named.get(value);
+        if (valueBounds != null) {
+          for (VarType valueBound : valueBounds) {
+            if (valueBound != null && sameType(valueBound, limit)) {
+              return true;
+            }
+          }
+        }
+      }
+    }
+    return false;
   }
 
   private static boolean shouldGenericTypesCast(Map<VarType, List<VarType>> named, VarType leftType, VarType rightType,
