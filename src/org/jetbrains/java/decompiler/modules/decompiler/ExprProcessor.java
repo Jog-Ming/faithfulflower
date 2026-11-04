@@ -1634,6 +1634,65 @@ public class ExprProcessor implements CodeConstants {
     return left.equals(right);
   }
 
+  /**
+   * Whether the expression is a generic call whose own type variable appears only in the return
+   * type and whose inferred type is exactly that variable's erasure (or its array). No argument
+   * constrains such a variable, so javac infers it from the context target alone; a source that
+   * compiled passed the call bare into that target. A variable that also sits in a parameter
+   * (Arrays.copyOf's {@code Class<? extends T[]>}) is inferred from the argument and excluded.
+   */
+  private static boolean targetTypedFreeReturn(Exprent exprent, VarType rightType) {
+    if (!(exprent instanceof InvocationExprent call) || rightType == null) {
+      return false;
+    }
+    StructMethod method = call.getDesc();
+    GenericMethodDescriptor signature = method == null ? null : method.getSignature();
+    if (signature == null || signature.typeParameters.isEmpty()) {
+      return false;
+    }
+    VarType declaredReturn = signature.returnType;
+    if (!(declaredReturn instanceof GenericType returnGeneric) || returnGeneric.type != CodeType.GENVAR
+      || returnGeneric.getWildcard() != GenericType.WILDCARD_NO || returnGeneric.value == null
+      || !signature.typeParameters.contains(returnGeneric.value)) {
+      return false;
+    }
+    for (VarType parameter : signature.parameterTypes) {
+      if (mentionsTypeVariable(parameter, returnGeneric.value)) {
+        return false;
+      }
+    }
+    int index = signature.typeParameters.indexOf(returnGeneric.value);
+    VarType bound = index < signature.typeParameterBounds.size()
+      && !signature.typeParameterBounds.get(index).isEmpty()
+      ? signature.typeParameterBounds.get(index).get(0) : VarType.VARTYPE_OBJECT;
+    VarType erasedBase = erasedBound(bound);
+    if (erasedBase == null || erasedBase.value == null) {
+      return false;
+    }
+    VarType erasedReturn = new VarType(erasedBase.type, erasedBase.arrayDim + returnGeneric.arrayDim, erasedBase.value);
+    return sameErasedType(rightType, erasedReturn);
+  }
+
+  /** The erasure of a declared bound: its class without type arguments. */
+  private static @Nullable VarType erasedBound(VarType bound) {
+    if (bound == null) {
+      return VarType.VARTYPE_OBJECT;
+    }
+    if (bound.type == CodeType.GENVAR) {
+      // A bound naming another variable erases to that variable's own bound; Object is the safe
+      // stand-in because a match only ever widens to the target.
+      return VarType.VARTYPE_OBJECT;
+    }
+    return new VarType(bound.type, bound.arrayDim, bound.value);
+  }
+
+  /** Equality of the erasure: type and array dimension, ignoring generic arguments. */
+  private static boolean sameErasedType(VarType value, VarType expected) {
+    return value != null && expected != null
+      && value.type == expected.type && value.arrayDim == expected.arrayDim
+      && value.value != null && value.value.equals(expected.value);
+  }
+
   public static boolean getCastedExprent(Exprent exprent,
                                          VarType leftType,
                                          TextBuffer buffer,
@@ -1679,6 +1738,14 @@ public class ExprProcessor implements CodeConstants {
       if (recorded != null && sameType(recorded, leftType)) {
         rightType = leftType;
       }
+    }
+    // A generic call whose own type variable appears only in its return type has no argument to
+    // infer it from: javac types that variable from the context target alone. When the printer's
+    // inference left the variable at its erasure, every cast to the target is the printer's;
+    // passing the call bare is the form the source wrote, and javac re-infers the variable from
+    // the target.
+    if (leftType != null && targetTypedFreeReturn(exprent, rightType)) {
+      rightType = leftType;
     }
     if (exprent instanceof SwitchExprent switchExprent) {
       // The switch is poly in this context; the arms are printed against this target.
