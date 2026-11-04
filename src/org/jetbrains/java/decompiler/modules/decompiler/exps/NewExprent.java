@@ -1885,16 +1885,57 @@ public class NewExprent extends Exprent {
     // A varargs call's array is the compiler's: the source wrote the elements, and the class
     // file records the same allocation either way. A bare initializer names the component on
     // its declaration, never on the creation.
-    if (isVarArgParam || directArrayInit) {
+    if (isVarArgParam) {
       return false;
     }
-    if (newType.arrayDim == 0 || !(upperBound instanceof GenericType target)
-      || target.type != CodeType.OBJECT || target.arrayDim != newType.arrayDim
-      || target.value == null || !target.value.equals(newType.value)
-      || target.getWildcard() != GenericType.WILDCARD_NO || !nameableArrayComponent(target)) {
+    if (!directArrayInit && newType.arrayDim > 0 && upperBound instanceof GenericType target
+      && target.type == CodeType.OBJECT && target.arrayDim == newType.arrayDim
+      && target.value != null && target.value.equals(newType.value)
+      && target.getWildcard() == GenericType.WILDCARD_NO && nameableArrayComponent(target)) {
+      arrayComponentTarget = target.resizeArrayDim(0);
+      return true;
+    }
+    return recordTypeVariableArrayComponent(upperBound);
+  }
+
+  /**
+   * The component of an array the context types as a type variable's array: the instruction names
+   * only the erased class, and the variable's recorded bound erases to exactly that class. A
+   * source cannot write a concrete instantiation there (a generic array creation is legal only
+   * over a reifiable component) and a bare class name would be a raw type, so the only form the
+   * source could name is the all-wildcard one, which the recorded target cannot spell.
+   */
+  private boolean recordTypeVariableArrayComponent(VarType upperBound) {
+    if (newType.arrayDim == 0 || upperBound == null || upperBound.arrayDim != newType.arrayDim
+      || upperBound.type != CodeType.GENVAR) {
       return false;
     }
-    arrayComponentTarget = target.resizeArrayDim(0);
+    VarType variable = upperBound.resizeArrayDim(0);
+    Map<VarType, List<VarType>> named = getNamedGenerics();
+    if (!Exprent.isTypeVariableNameable(variable, named)) {
+      return false;
+    }
+    List<VarType> bounds = named.get(variable);
+    if (bounds == null || bounds.isEmpty()) {
+      return false;
+    }
+    // The erasure of a type variable is its first bound: the class bound, or the first interface
+    // bound when the class bound is empty.
+    VarType bound = bounds.get(0);
+    if (bound == null || bound.type != CodeType.OBJECT || bound.arrayDim != 0
+      || bound.value == null || !bound.value.equals(newType.value)) {
+      return false;
+    }
+    StructClass node = DecompilerContext.getStructContext().getClass(newType.value);
+    if (node == null || node.getSignature() == null || node.getSignature().fparameters.isEmpty()) {
+      return false;
+    }
+    List<VarType> arguments = new ArrayList<>(node.getSignature().fparameters.size());
+    for (int i = 0; i < node.getSignature().fparameters.size(); i++) {
+      arguments.add(null); // the unbounded wildcard
+    }
+    arrayComponentTarget = new GenericType(CodeType.OBJECT, 0, newType.value, null, arguments,
+      GenericType.WILDCARD_NO);
     return true;
   }
 
