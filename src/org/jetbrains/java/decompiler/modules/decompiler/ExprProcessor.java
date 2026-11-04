@@ -2093,15 +2093,23 @@ public class ExprProcessor implements CodeConstants {
     // called method's own variables from the arguments and the context. When the value's recorded
     // type already fits the declared parameter under such an instantiation, every generic-cast
     // reason above is the printer's own substitution showing, and the source passed the value
-    // bare. An overload-choice cast is excluded: it selects the overload, not the variable.
+    // bare. The same holds for a cast to a bare type variable of the called method, which javac
+    // re-infers from the argument list. An overload-choice cast is excluded: it selects the
+    // overload, not the variable.
+    boolean inferenceTarget = doCast && InvocationExprent.inArgument()
+      && InvocationExprent.currentParameterTargetIsInferenceOnly(leftType);
     if (!castAlways && InvocationExprent.inArgument()
-      && (doCastGenerics || doubleCast || wildcardOnlyCast != null || castRaw || fieldBoundCast)
+      && (doCastGenerics || doubleCast || wildcardOnlyCast != null || castRaw || fieldBoundCast
+          || inferenceTarget)
       && InvocationExprent.currentArgumentAcceptsDeclared(rightType, exprent.getNamedGenerics())) {
       doCastGenerics = false;
       doubleCast = false;
       wildcardOnlyCast = null;
       castRaw = false;
       fieldBoundCast = false;
+      if (inferenceTarget) {
+        doCast = false;
+      }
     }
 
     // An overload-choice cast on a variable the table records at the parameter's own primitive
@@ -2197,17 +2205,28 @@ public class ExprProcessor implements CodeConstants {
       }
     }
 
-    if (cast && receiverCastTarget != null && exprent instanceof InvocationExprent receiverCall) {
-      // The two-step conversion is carried by the receiver instead of the result: the value the
-      // call sees is the same erased receiver, so this prints byte-identical code.
-      receiverCall.setReceiverCastTarget(receiverCastTarget);
-      try {
+    // A printed cast is not a poly context: the call inside it is inferred from its arguments
+    // alone, so the target recorded during this pass does not pin its type variables.
+    if (cast && exprent instanceof InvocationExprent castCall) {
+      castCall.setPrintedUnderCast(true);
+    }
+    try {
+      if (cast && receiverCastTarget != null && exprent instanceof InvocationExprent receiverCall) {
+        // The two-step conversion is carried by the receiver instead of the result: the value the
+        // call sees is the same erased receiver, so this prints byte-identical code.
+        receiverCall.setReceiverCastTarget(receiverCastTarget);
+        try {
+          buffer.append(exprent.toJava(indent));
+        } finally {
+          receiverCall.clearReceiverCastTarget();
+        }
+      } else {
         buffer.append(exprent.toJava(indent));
-      } finally {
-        receiverCall.clearReceiverCastTarget();
       }
-    } else {
-      buffer.append(exprent.toJava(indent));
+    } finally {
+      if (cast && exprent instanceof InvocationExprent castCall) {
+        castCall.setPrintedUnderCast(false);
+      }
     }
 
     if (quote) {
@@ -3555,6 +3574,79 @@ public class ExprProcessor implements CodeConstants {
       }
     }
     return true;
+  }
+
+  /**
+   * Whether the recorded target accepts javac's own inference of {@code variable} everywhere the
+   * result type carries it. A target position that names a proper instantiation is what the
+   * source's cast produced; an unbounded wildcard (also its null argument form), Object, or an
+   * all-wildcard instantiation {@code G<?>} leaves the variable to inference.
+   */
+  public static boolean targetAcceptsReinference(VarType result, VarType target, String variable) {
+    return result != null && target != null
+      && acceptedTargetShape(result, target, variable) != null;
+  }
+
+  /** The shape the target accepts at this position, or null when it pins the variable. */
+  private static @Nullable String acceptedTargetShape(VarType result, VarType target, String variable) {
+    if (result == null) {
+      return null;
+    }
+    if (result.arrayDim > 0 || target != null && target.arrayDim > 0) {
+      if (target == null || result.arrayDim != target.arrayDim) {
+        return null;
+      }
+      return acceptedTargetShape(result.resizeArrayDim(0), target.resizeArrayDim(0), variable);
+    }
+    if (result.type == CodeType.GENVAR && variable.equals(result.value)
+      && (!(result instanceof GenericType generic) || generic.getWildcard() == GenericType.WILDCARD_NO)) {
+      // The variable itself sits at this position: an unbounded target wildcard (also its null
+      // argument form) or Object accepts whatever javac infers.
+      return acceptsAnyType(target);
+    }
+    if (target == null) {
+      return null;
+    }
+    if (result instanceof GenericType resultGeneric && target instanceof GenericType targetGeneric
+      && resultGeneric.getWildcard() == GenericType.WILDCARD_NO
+      && targetGeneric.getWildcard() == GenericType.WILDCARD_NO
+      && resultGeneric.value != null && resultGeneric.value.equals(targetGeneric.value)
+      && resultGeneric.getArguments().size() == targetGeneric.getArguments().size()) {
+      String accepted = null;
+      for (int i = 0; i < resultGeneric.getArguments().size(); i++) {
+        VarType resultArgument = resultGeneric.getArguments().get(i);
+        if (!mentionsTypeVariable(resultArgument, variable)) {
+          continue;
+        }
+        String shape = acceptedTargetShape(resultArgument, targetGeneric.getArguments().get(i), variable);
+        if (shape == null || accepted != null && !accepted.equals(shape)) {
+          return null;
+        }
+        accepted = shape;
+      }
+      return accepted;
+    }
+    return null;
+  }
+
+  /**
+   * The shape of a target position that accepts a re-inferred type: an unbounded wildcard (also
+   * the null argument form), Object, or {@code G<?>} over an unbounded class.
+   */
+  private static @Nullable String acceptsAnyType(VarType target) {
+    if (target == null || target.equals(VarType.VARTYPE_OBJECT)) {
+      return "";
+    }
+    if (target instanceof GenericType generic) {
+      if (generic.getWildcard() == GenericType.WILDCARD_UNBOUND) {
+        return "";
+      }
+      if (generic.getWildcard() == GenericType.WILDCARD_NO && isAllWildcardInstantiation(generic)
+        && generic.value != null && unboundedClassParameters(generic.value)) {
+        return generic.value;
+      }
+    }
+    return null;
   }
 
   /**

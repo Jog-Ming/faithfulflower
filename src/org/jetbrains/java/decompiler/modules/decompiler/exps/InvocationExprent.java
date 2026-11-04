@@ -110,6 +110,12 @@ public class InvocationExprent extends Exprent {
    */
   private int callerTextLine = -1;
   public boolean forceGenericQualfication = false;
+  /**
+   * Whether the printer wraps this call's result in a cast. A cast is not a poly context: the
+   * target the inference recorded for this call is then the printer's, not the source's, and
+   * javac infers the call from its arguments alone.
+   */
+  private boolean printedUnderCast = false;
   private final NullableConcurrentHashMap<VarType, VarType> genericsMap = new NullableConcurrentHashMap<>();
   /**
    * Class variables the arguments solved. The receiver's own wildcard can bind a variable to the
@@ -772,6 +778,10 @@ public class InvocationExprent extends Exprent {
       }
     }
     return inferred;
+  }
+
+  public void setPrintedUnderCast(boolean printedUnderCast) {
+    this.printedUnderCast = printedUnderCast;
   }
 
   private VarType inferExprType(VarType upperBound) {
@@ -2881,6 +2891,48 @@ public class InvocationExprent extends Exprent {
     return signature.typeParameters.contains(declared.value) || !sameTypeExact(printerSubstitution, declared);
   }
 
+  /**
+   * Whether the argument being printed fills a parameter that is the called method's own bare
+   * type variable, so javac infers that variable from the argument list again. The printed target
+   * may be the printer's substitution of the variable by a caller type of the same name; a cast
+   * to it converts nothing the source had to write. When the call's recorded result carries the
+   * variable, only a recorded target that leaves every occurrence to javac's own inference
+   * (an unbounded wildcard or a {@code G<?>} position) proves the cast was the printer's; a
+   * target naming a proper instantiation is what the source's cast produced.
+   */
+  public static boolean currentParameterTargetIsInferenceOnly(VarType target) {
+    InvocationExprent call = ARGUMENT_CALL.get();
+    Integer index = ARGUMENT_INDEX.get();
+    if (call == null || index == null || call.desc == null || call.desc.getSignature() == null
+      || call.descriptor == null || target == null) {
+      return false;
+    }
+    GenericMethodDescriptor signature = call.desc.getSignature();
+    if (signature.parameterTypes.size() != call.descriptor.params.length
+      || index < 0 || index >= signature.parameterTypes.size()) {
+      return false;
+    }
+    VarType declared = signature.parameterTypes.get(index);
+    if (declared == null || declared.type != CodeType.GENVAR || declared.arrayDim != 0
+      || !signature.typeParameters.contains(declared.value)) {
+      return false;
+    }
+    if (target.type != CodeType.GENVAR || target.arrayDim != 0) {
+      return false;
+    }
+    if (signature.returnType == null
+      || !mentionsTypeVariable(signature.returnType, List.of(declared.value))) {
+      // The call's result does not carry the variable; nothing in the context can pin it.
+      return true;
+    }
+    // The result carries it: only a recorded target that leaves every occurrence to inference
+    // proves the cast was the printer's substitution. A target position naming a proper
+    // instantiation is what the source's cast produced.
+    return call.inferredUpperBound != null
+      && ExprProcessor.targetAcceptsReinference(signature.returnType, call.inferredUpperBound,
+        declared.value);
+  }
+
   private static boolean sameTypeExact(VarType left, VarType right) {
     if (left == right) {
       return true;
@@ -2970,7 +3022,8 @@ public class InvocationExprent extends Exprent {
     Map<VarType, List<VarType>> scope = named == null ? Map.of() : named;
     Map<String, VarType> bindings = new HashMap<>();
     if (!ExprProcessor.declaredTypeAccepts(signature.parameterTypes.get(index), value,
-      signature.typeParameters, bounds, scope, signature.returnType, bindings, call.inferredUpperBound)) {
+      signature.typeParameters, bounds, scope, signature.returnType, bindings,
+      call.inferredUpperBound)) {
       return false;
     }
     for (int i = 0; i < signature.parameterTypes.size(); i++) {
@@ -2989,24 +3042,29 @@ public class InvocationExprent extends Exprent {
       }
       // A sibling printed against one of the called method's variables the printer could not
       // instantiate carries a cast to that variable. The printed name is whatever the caller's
-      // scope calls it - a different variable - so the sibling alone fixes the inference, and
-      // this argument's cast is what kept the two in step.
+      // scope calls it - a different variable - so the sibling alone proves nothing about this
+      // argument's instantiations, and the binding below judges it independently.
       VarType substitutedSibling = substituteCalleeVariables(signature.parameterTypes.get(i), call.genericsMap,
         signature.typeParameters);
       if (mentionsUnsubstitutedVariable(substitutedSibling, call.genericsMap, signature.typeParameters)) {
-        return false;
+        continue;
       }
       if (!ExprProcessor.declaredTypeAccepts(signature.parameterTypes.get(i), siblingType,
-        signature.typeParameters, bounds, scope, signature.returnType, bindings, call.inferredUpperBound)) {
+        signature.typeParameters, bounds, scope, signature.returnType, bindings,
+        call.inferredUpperBound)) {
         return false;
       }
     }
     // The printer's own substitution is what every other argument and the result are printed
     // against. A variable the call needs at another type conflicts with what this argument
-    // implies, and only the source's cast could have resolved it.
+    // implies, and only the source's cast could have resolved it. No substitution at all is no
+    // evidence: the printer left the callee's variable open.
     for (Map.Entry<String, VarType> binding : bindings.entrySet()) {
       VarType substituted = call.genericsMap.get(GenericType.parse("T" + binding.getKey() + ";"));
-      if (substituted != null && !ExprProcessor.substitutionCompatible(binding.getValue(), substituted)) {
+      if (substituted == null) {
+        continue;
+      }
+      if (!ExprProcessor.substitutionCompatible(binding.getValue(), substituted)) {
         return false;
       }
     }
@@ -3918,6 +3976,11 @@ public class InvocationExprent extends Exprent {
 
           VarType rawType = desc.getSignature().parameterTypes.get(y++);
           targetMayInfer[x] = mentionsTypeVariable(rawType, desc.getSignature().typeParameters);
+          // A value whose own record carries no instantiation (a raw class or a wildcard form)
+          // constrains no callee variable. Its printed parameter type is the printer's own
+          // inference; javac accepts the bare value as an unchecked conversion and infers the
+          // call again. The raw descriptor stays the target.
+          boolean rawOpen = rawArgumentLeavesParameterOpen(x, rawType, desc.getSignature());
           VarType type = rawType.remap(hierarchyMap).remap(genericsMap);
           // A name that is in scope at the call site may be the caller's own variable of the same
           // name (the callee's signature and the caller often share letters); the source may have
@@ -3973,7 +4036,7 @@ public class InvocationExprent extends Exprent {
           boolean lambdaCarrier = type != null && containsLambda(lstParameters.get(x))
             && argumentClassIsParameterClass(type, lstParameters.get(x))
             && namesNameableOrCalleeTypeParameters(type, namedGens, desc.getSignature().typeParameters);
-          if (type != null && (lambdaTarget || lambdaCarrier
+          if (type != null && !rawOpen && (lambdaTarget || lambdaCarrier
               || !(type.isGeneric() && ((GenericType)type).hasUnknownGenericType(namedGens)))) {
             types[x] = type;
           }
@@ -4438,6 +4501,153 @@ public class InvocationExprent extends Exprent {
       return true; // no class bound to compare, or an erased shape this check does not cover
     }
     return DecompilerContext.getStructContext().instanceOf(callerBound.value, parameter.value);
+  }
+
+  /**
+   * Whether a recorded type carries no instantiation: a raw generic class or a form whose type
+   * arguments are wildcards only. Such a value fixes no type variable; javac converts it to the
+   * parameterized parameter unchecked, exactly as the source wrote it.
+   */
+  private static boolean noConcreteInstantiation(VarType type) {
+    if (type == null) {
+      return true;
+    }
+    if (!(type instanceof GenericType generic)) {
+      return true; // the erased descriptor: no Signature was recorded
+    }
+    if (generic.getWildcard() != GenericType.WILDCARD_NO) {
+      return true;
+    }
+    for (VarType argument : generic.getArguments()) {
+      if (argument == null) {
+        continue;
+      }
+      // Only an unbounded wildcard argument carries no evidence. A type variable, a bounded
+      // wildcard or a nested instantiation is a recorded constraint.
+      if (!(argument instanceof GenericType wildcard)
+        || wildcard.getWildcard() != GenericType.WILDCARD_UNBOUND) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * The type a value records independently of this call's context: a local's table signature, a
+   * method's declared return, or a field's own Signature. A bare descriptor with no Signature
+   * stays the erased class.
+   */
+  private static VarType recordedValueType(Exprent exprent) {
+    if (exprent instanceof VarExprent var) {
+      return var.getInferredExprType(null);
+    }
+    if (exprent instanceof InvocationExprent call) {
+      StructMethod method = call.getDesc();
+      if (method != null && method.getSignature() != null && method.getSignature().returnType != null) {
+        return method.getSignature().returnType;
+      }
+      return exprent.getExprType();
+    }
+    if (exprent instanceof FieldExprent field) {
+      StructClass cls = DecompilerContext.getStructContext().getClass(field.getClassname());
+      String descriptor = field.getDescriptor().descriptorString;
+      while (cls != null) {
+        StructField found = cls.getField(field.getName(), descriptor);
+        if (found != null) {
+          return found.getSignature() != null ? found.getSignature().type : exprent.getExprType();
+        }
+        cls = cls.superClass == null ? null
+          : DecompilerContext.getStructContext().getClass((String) cls.superClass.value);
+      }
+      return exprent.getExprType();
+    }
+    return exprent.getExprType();
+  }
+
+  /** Whether the value's own record is a generic class or a generic form with no instantiation. */
+  private static boolean rawRecordedValue(Exprent exprent) {
+    if (exprent == null || exprent instanceof NewExprent creation
+      && (creation.isLambda() || creation.isMethodReference())) {
+      return false;
+    }
+    VarType recorded = recordedValueType(exprent);
+    if (recorded == null || recorded.type != CodeType.OBJECT || recorded.arrayDim != 0
+      || !noConcreteInstantiation(recorded)) {
+      return false;
+    }
+    StructClass cls = recorded.value == null ? null
+      : DecompilerContext.getStructContext().getClass(recorded.value);
+    return cls != null && cls.getSignature() != null && !cls.getSignature().fparameters.isEmpty();
+  }
+
+  /**
+   * Whether the argument at {@code index} records no instantiation and leaves the declared
+   * parameter's own type variables to javac: no non-lambda sibling's recorded type binds one of
+   * them, and the call's recorded result does not carry them where the target names them. The
+   * printed parameter instantiation is then the printer's inference, and the source passed the
+   * value bare.
+   */
+  private boolean rawArgumentLeavesParameterOpen(int index, VarType declaredParameter,
+                                                 GenericMethodDescriptor signature) {
+    if (signature == null || signature.typeParameters.isEmpty() || declaredParameter == null
+      || !(declaredParameter instanceof GenericType declaredGeneric)
+      || declaredGeneric.getArguments().isEmpty()
+      || index < 0 || index >= lstParameters.size()
+      || !rawRecordedValue(lstParameters.get(index))) {
+      return false;
+    }
+    List<String> mentioned = new ArrayList<>();
+    for (String variable : signature.typeParameters) {
+      if (mentionsTypeVariable(declaredParameter, List.of(variable))) {
+        mentioned.add(variable);
+      }
+    }
+    if (mentioned.isEmpty()) {
+      return false;
+    }
+    // The call's recorded result carrying a variable the target names keeps the cast: it may be
+    // what pinned the variable through the context. A cast the printer wraps around this call
+    // removes the target from the source, so the recorded one no longer pins anything.
+    if (inferredUpperBound != null && signature.returnType != null && !printedUnderCast) {
+      mentioned.removeIf(variable -> mentionsTypeVariable(signature.returnType, List.of(variable))
+        && !ExprProcessor.targetAcceptsReinference(signature.returnType, inferredUpperBound, variable));
+    }
+    if (mentioned.isEmpty()) {
+      return false;
+    }
+    // A non-lambda sibling whose recorded type fixes one of the variables leaves the argument
+    // list in charge; javac infers from that sibling, not from this value.
+    Map<String, List<VarType>> bounds = new HashMap<>();
+    for (int i = 0; i < signature.typeParameters.size(); i++) {
+      bounds.put(signature.typeParameters.get(i),
+        i < signature.typeParameterBounds.size() ? signature.typeParameterBounds.get(i)
+          : List.of(VarType.VARTYPE_OBJECT));
+    }
+    Map<VarType, List<VarType>> scope = getNamedGenerics();
+    for (int i = 0; i < signature.parameterTypes.size() && i < lstParameters.size(); i++) {
+      if (i == index) {
+        continue;
+      }
+      Exprent sibling = lstParameters.get(i);
+      if (sibling instanceof NewExprent creation
+        && (creation.isLambda() || creation.isMethodReference())) {
+        continue;
+      }
+      VarType siblingType = sibling.getInferredExprType(null);
+      if (siblingType == null) {
+        continue;
+      }
+      Map<String, VarType> bindings = new HashMap<>();
+      if (ExprProcessor.declaredTypeAccepts(signature.parameterTypes.get(i), siblingType,
+        signature.typeParameters, bounds, scope, signature.returnType, bindings, inferredUpperBound)) {
+        for (String variable : mentioned) {
+          if (bindings.get(variable) != null) {
+            return false;
+          }
+        }
+      }
+    }
+    return true;
   }
 
   private static void collectUnboundTypeParameters(VarType type, List<String> typeParameters,
