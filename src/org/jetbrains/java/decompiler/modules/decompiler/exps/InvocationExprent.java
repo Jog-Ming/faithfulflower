@@ -3223,6 +3223,40 @@ public class InvocationExprent extends Exprent {
   }
 
   /**
+   * Whether the declared parameter of the argument being printed names only type variables the
+   * call's other arguments fixed. A raw value there is the source's implicit unchecked
+   * conversion, which can be written explicitly as a cast to the complete instantiation; the
+   * template fixes that cast's type arguments. A variable the arguments leave open, or one this
+   * same raw argument would have to fix, disqualifies the site.
+   */
+  public static boolean currentArgumentParameterFixedByCall() {
+    InvocationExprent call = ARGUMENT_CALL.get();
+    Integer index = ARGUMENT_INDEX.get();
+    if (call == null || index == null || call.desc == null || call.desc.getSignature() == null) {
+      return false;
+    }
+    GenericMethodDescriptor signature = call.desc.getSignature();
+    if (index < 0 || index >= signature.parameterTypes.size()
+      || signature.parameterTypes.size() != call.lstParameters.size()) {
+      return false;
+    }
+    VarType parameter = signature.parameterTypes.get(index);
+    boolean mentions = false;
+    for (String fp : signature.typeParameters) {
+      VarType variable = GenericType.parse("T" + fp + ";");
+      if (!mentionsTypeVariable(parameter, variable)) {
+        continue;
+      }
+      mentions = true;
+      VarType solved = call.genericsMap.get(variable);
+      if (solved == null || GenericType.DUMMY_VAR.equals(solved) || hasUnboundVariable(solved)) {
+        return false;
+      }
+    }
+    return mentions;
+  }
+
+  /**
    * Whether the value's recorded type already fits the declared parameter type of the argument
    * being printed, with the called method's own type variables instantiated by this argument and
    * by the other arguments' recorded types. A variable this argument binds is checked again

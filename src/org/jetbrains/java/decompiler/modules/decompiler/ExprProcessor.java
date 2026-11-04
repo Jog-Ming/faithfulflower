@@ -2152,6 +2152,25 @@ public class ExprProcessor implements CodeConstants {
       cast = true;
     }
 
+    // A raw generic argument passed to a parameterized parameter whose variables the call's
+    // other arguments fix: the source's implicit unchecked conversion can be written explicitly
+    // as a cast to the complete instantiation, which turns the call's own unchecked conversion
+    // into one checked argument. Only a complete, nameable instantiation is printed; an erased,
+    // wildcard or unresolved argument disqualifies the site.
+    if (!cast && !castAlways && InvocationExprent.inArgument()
+      && (exprent instanceof VarExprent || exprent instanceof FieldExprent)
+      && rightType != null && rightType.type == CodeType.OBJECT && rightType.arrayDim == 0
+      && !rightType.isGeneric() && rightType.value != null
+      && leftType instanceof GenericType argumentTarget && argumentTarget.type == CodeType.OBJECT
+      && argumentTarget.arrayDim == 0 && argumentTarget.getWildcard() == GenericType.WILDCARD_NO
+      && !argumentTarget.getArguments().isEmpty()
+      && rightType.value.equals(argumentTarget.value)
+      && !hasWildcard(leftType) && !hasRawTypeArgument(leftType)
+      && isNameableCastInstantiation(leftType, exprent.getNamedGenerics())
+      && InvocationExprent.currentArgumentParameterFixedByCall()) {
+      cast = true;
+    }
+
     if (castNull == NullCastType.DONT_CAST_AT_ALL && rightType.type == CodeType.NULL) {
       cast = castAlways;
     }
