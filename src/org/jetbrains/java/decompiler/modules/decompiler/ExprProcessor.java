@@ -1967,8 +1967,10 @@ public class ExprProcessor implements CodeConstants {
     if (!castAlways && !doCast && !doCastGenerics && !castRaw && !doCastNull && !doCastNarrowing && !doubleCast
       && exprent instanceof FieldExprent
       // A target that is not itself generic accepts the field as it is; casting to a bound
-      // instantiation there converts nothing.
-      && leftType != null && leftType.isGeneric()
+      // instantiation there converts nothing. A wildcard target (`? extends MapCodec<? extends
+      // T>`, a lambda's SAM return) is not a parameterized type either: the wildcard accepts the
+      // field's own instantiation, so there is no conversion to print.
+      && leftType instanceof GenericType targetGeneric && targetGeneric.getWildcard() == GenericType.WILDCARD_NO
       // An argument whose declared parameter already takes the field's recorded type under this
       // argument's own instantiation needs no conversion.
       && !(InvocationExprent.inArgument() && InvocationExprent.currentArgumentAcceptsDeclared(rightType, exprent.getNamedGenerics()))
