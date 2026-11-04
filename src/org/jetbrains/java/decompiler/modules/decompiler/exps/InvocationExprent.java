@@ -3020,9 +3020,13 @@ public class InvocationExprent extends Exprent {
         i < signature.typeParameterBounds.size() ? signature.typeParameterBounds.get(i) : List.of(VarType.VARTYPE_OBJECT));
     }
     Map<VarType, List<VarType>> scope = named == null ? Map.of() : named;
+    // At an input position javac infers the call's type variables, taking the common supertype
+    // when two arguments instantiate one differently. A variable the recorded target does not
+    // pin is therefore re-inferred; the printer's substitution of it is a guess, not evidence.
+    Map<String, String> mergeable = ExprProcessor.mergeableVariables(signature, call.inferredUpperBound);
     Map<String, VarType> bindings = new HashMap<>();
     if (!ExprProcessor.declaredTypeAccepts(signature.parameterTypes.get(index), value,
-      signature.typeParameters, bounds, scope, signature.returnType, bindings,
+      signature.typeParameters, bounds, scope, signature.returnType, bindings, mergeable,
       call.inferredUpperBound)) {
       return false;
     }
@@ -3050,7 +3054,7 @@ public class InvocationExprent extends Exprent {
         continue;
       }
       if (!ExprProcessor.declaredTypeAccepts(signature.parameterTypes.get(i), siblingType,
-        signature.typeParameters, bounds, scope, signature.returnType, bindings,
+        signature.typeParameters, bounds, scope, signature.returnType, bindings, mergeable,
         call.inferredUpperBound)) {
         return false;
       }
@@ -3058,10 +3062,12 @@ public class InvocationExprent extends Exprent {
     // The printer's own substitution is what every other argument and the result are printed
     // against. A variable the call needs at another type conflicts with what this argument
     // implies, and only the source's cast could have resolved it. No substitution at all is no
-    // evidence: the printer left the callee's variable open.
+    // evidence: the printer left the callee's variable open. A variable the recorded target
+    // leaves to inference is re-inferred by javac, so the printer's guess for it conflicts with
+    // nothing.
     for (Map.Entry<String, VarType> binding : bindings.entrySet()) {
       VarType substituted = call.genericsMap.get(GenericType.parse("T" + binding.getKey() + ";"));
-      if (substituted == null) {
+      if (substituted == null || mergeable.containsKey(binding.getKey())) {
         continue;
       }
       if (!ExprProcessor.substitutionCompatible(binding.getValue(), substituted)) {

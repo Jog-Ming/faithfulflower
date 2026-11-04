@@ -3454,7 +3454,21 @@ public class ExprProcessor implements CodeConstants {
                                             VarType returnType, Map<String, VarType> bindings,
                                             VarType target) {
     return declaredTypeAccepts(declared, value, variables, bounds, named, returnType, bindings,
-      VarType.VARTYPE_OBJECT, target);
+      Map.of(), VarType.VARTYPE_OBJECT, target);
+  }
+
+  /**
+   * The form with the variables javac may re-infer at an input position. See
+   * {@link #mergeableVariables}: a second occurrence of such a variable is accepted at another
+   * instantiation when the target leaves the variable to inference.
+   */
+  public static boolean declaredTypeAccepts(VarType declared, VarType value,
+                                            List<String> variables, Map<String, List<VarType>> bounds,
+                                            Map<VarType, List<VarType>> named,
+                                            VarType returnType, Map<String, VarType> bindings,
+                                            Map<String, String> mergeable, VarType target) {
+    return declaredTypeAccepts(declared, value, variables, bounds, named, returnType, bindings,
+      mergeable, VarType.VARTYPE_OBJECT, target);
   }
 
   /**
@@ -3466,6 +3480,7 @@ public class ExprProcessor implements CodeConstants {
                                              List<String> variables, Map<String, List<VarType>> bounds,
                                              Map<VarType, List<VarType>> named,
                                              VarType returnType, Map<String, VarType> bindings,
+                                             Map<String, String> mergeable,
                                              VarType captureBound, VarType target) {
     if (declared == null || declared.equals(VarType.VARTYPE_OBJECT)) {
       // An unbounded wildcard argument position, and Object, accept any value.
@@ -3497,7 +3512,7 @@ public class ExprProcessor implements CodeConstants {
         return false;
       }
       return declaredTypeAccepts(declared.resizeArrayDim(0), value.resizeArrayDim(0),
-        variables, bounds, named, returnType, bindings, captureBound, target);
+        variables, bounds, named, returnType, bindings, mergeable, captureBound, target);
     }
     if (declared instanceof GenericType declaredGeneric
       && declaredGeneric.getWildcard() != GenericType.WILDCARD_NO) {
@@ -3517,13 +3532,14 @@ public class ExprProcessor implements CodeConstants {
         value = GenericType.withWildcard(valueGeneric, GenericType.WILDCARD_NO);
       }
       return declaredTypeAccepts(base, value, variables, bounds, named, returnType, bindings,
-        captureBound, target);
+        mergeable, captureBound, target);
     }
     if (declared.type == CodeType.GENVAR) {
       String name = declared.value;
       if (variables.contains(name)) {
         if (bindings.containsKey(name)) {
-          return bindingCompatible(bindings.get(name), value, named);
+          return mergeableAccepts(mergeable, name, bindings.get(name), value)
+            || bindingCompatible(bindings.get(name), value, named);
         }
         boolean wildcard = value instanceof GenericType genericValue
           && genericValue.getWildcard() != GenericType.WILDCARD_NO;
@@ -3568,7 +3584,7 @@ public class ExprProcessor implements CodeConstants {
     }
     for (int i = 0; i < declaredGeneric.getArguments().size(); i++) {
       if (!declaredTypeAccepts(declaredGeneric.getArguments().get(i), valueGeneric.getArguments().get(i),
-        variables, bounds, named, returnType, bindings,
+        variables, bounds, named, returnType, bindings, mergeable,
         classParameterBound(declaredGeneric.value, i), target)) {
         return false;
       }
@@ -3647,6 +3663,56 @@ public class ExprProcessor implements CodeConstants {
       }
     }
     return null;
+  }
+
+  /**
+   * The type variables of the called method whose instantiation the call's recorded target does
+   * not pin, mapped to the shape the target accepts there: the empty string for a position that
+   * accepts any type (an unbounded wildcard or Object), or the class name of an all-wildcard
+   * instantiation ({@code G<?>}). javac re-infers these from the argument list; a second argument
+   * at another instantiation is then the common supertype javac itself computes, not a conversion
+   * the source had to cast. A variable the result does not carry is excluded: another argument may
+   * have bound it invariantly, and the target proves nothing about re-inferring it.
+   */
+  public static Map<String, String> mergeableVariables(GenericMethodDescriptor signature, VarType target) {
+    if (signature == null || signature.typeParameters.isEmpty() || signature.returnType == null
+      || target == null) {
+      return Map.of();
+    }
+    Map<String, String> result = new HashMap<>();
+    for (String variable : signature.typeParameters) {
+      if (!mentionsTypeVariable(signature.returnType, variable)) {
+        // The result does not carry it: another argument may bind it invariantly, and the target
+        // proves nothing about whether javac can re-infer it from a common supertype.
+        continue;
+      }
+      String shape = acceptedTargetShape(signature.returnType, target, variable);
+      if (shape != null) {
+        result.put(variable, shape);
+      }
+    }
+    return result;
+  }
+
+  /** Whether a second binding may replace the first at a position the target leaves open. */
+  private static boolean mergeableAccepts(Map<String, String> mergeable, String name, VarType bound,
+                                          VarType value) {
+    String shape = mergeable == null ? null : mergeable.get(name);
+    if (shape == null) {
+      return false;
+    }
+    if (shape.isEmpty()) {
+      return true;
+    }
+    // The target accepts G<?>: two instantiations of that same class have a common supertype
+    // (G<? extends lub>) the target accepts.
+    return isInstantiationOf(bound, shape) && isInstantiationOf(value, shape);
+  }
+
+  private static boolean isInstantiationOf(VarType type, String className) {
+    return type instanceof GenericType generic && generic.getWildcard() == GenericType.WILDCARD_NO
+      && generic.type == CodeType.OBJECT && className.equals(generic.value)
+      && !generic.getArguments().isEmpty();
   }
 
   /**
