@@ -1712,6 +1712,99 @@ public class NewExprent extends Exprent {
     return methodReference;
   }
 
+  /**
+   * Whether every return in the lambda's body is one of the lambda's own parameters, unchanged
+   * (an identity function). Such a body is typed by the target that flows through its parameter,
+   * so it carries no type of its own either.
+   */
+  public boolean returnsOnlyOwnParameters() {
+    if (!lambda) {
+      return false;
+    }
+    ClassNode node = DecompilerContext.getClassProcessor().getMapRootClasses().get(newType.value);
+    if (node == null || node.lambdaInformation == null) {
+      return false;
+    }
+    ClassWrapper wrapper = node.getWrapper();
+    if (wrapper == null) {
+      return false;
+    }
+    MethodWrapper mt = wrapper.getMethodWrapper(node.lambdaInformation.content_method_name,
+      node.lambdaInformation.content_method_descriptor);
+    if (mt == null || mt.root == null) {
+      return false;
+    }
+    MethodDescriptor content = MethodDescriptor.parseDescriptor(node.lambdaInformation.content_method_descriptor);
+    MethodDescriptor sam = MethodDescriptor.parseDescriptor(node.lambdaInformation.method_descriptor);
+    int slot = node.lambdaInformation.is_content_method_static ? 0 : 1;
+    int firstParameter = content.params.length - sam.params.length;
+    Set<VarVersionPair> parameters = new HashSet<>();
+    for (int i = 0; i < content.params.length; i++) {
+      if (i >= firstParameter) {
+        parameters.add(new VarVersionPair(slot, 0));
+      }
+      slot += content.params[i].stackSize;
+    }
+    boolean any = false;
+    for (StatEdge edge : mt.root.getDummyExit().getAllPredecessorEdges()) {
+      List<Exprent> exprents = edge.getSource().getExprents();
+      if (exprents == null || exprents.isEmpty() || !(exprents.get(exprents.size() - 1) instanceof ExitExprent exit)
+        || exit.getExitType() != ExitExprent.Type.RETURN) {
+        continue;
+      }
+      Exprent value = exit.getValue();
+      while (value instanceof FunctionExprent cast && cast.getFuncType() == FunctionExprent.FunctionType.CAST
+        && !cast.getLstOperands().isEmpty()) {
+        value = cast.getLstOperands().get(0);
+      }
+      if (!(value instanceof VarExprent variable) || !parameters.contains(variable.getVarVersionPair())) {
+        return false;
+      }
+      any = true;
+    }
+    return any;
+  }
+
+  /**
+   * Whether the lambda's body returns a functional value (a lambda or a method reference). Such a
+   * body has no type of its own and can only be typed by the functional target, so the call
+   * site's target must not be withheld from it.
+   */
+  public boolean returnsFunctionalValue() {
+    if (!lambda) {
+      return false;
+    }
+    ClassNode node = DecompilerContext.getClassProcessor().getMapRootClasses().get(newType.value);
+    if (node == null || node.lambdaInformation == null) {
+      return false;
+    }
+    ClassWrapper wrapper = node.getWrapper();
+    if (wrapper == null) {
+      return false;
+    }
+    MethodWrapper mt = wrapper.getMethodWrapper(node.lambdaInformation.content_method_name,
+      node.lambdaInformation.content_method_descriptor);
+    if (mt == null || mt.root == null) {
+      return false;
+    }
+    for (StatEdge edge : mt.root.getDummyExit().getAllPredecessorEdges()) {
+      List<Exprent> exprents = edge.getSource().getExprents();
+      if (exprents == null || exprents.isEmpty() || !(exprents.get(exprents.size() - 1) instanceof ExitExprent exit)
+        || exit.getExitType() != ExitExprent.Type.RETURN) {
+        continue;
+      }
+      Exprent value = exit.getValue();
+      while (value instanceof FunctionExprent cast && cast.getFuncType() == FunctionExprent.FunctionType.CAST
+        && !cast.getLstOperands().isEmpty()) {
+        value = cast.getLstOperands().get(0);
+      }
+      if (value instanceof NewExprent created && created.isLambda()) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   /** The functional interface type this lambda was inferred against, if any. */
   public VarType getInferredLambdaType() {
     return inferredLambdaType;

@@ -192,10 +192,10 @@ public class SwitchExprent extends Exprent {
           // Every result expression of a poly switch is in an assignment context: the target
           // types the arm, including casts nested in it (a cast inside a concatenation, a call
           // whose type variables only the target fixes). Infer it there so the recorded
-          // checkcast at the erasure boundary is judged before the arm prints.
-          if (target != null) {
-            content.getInferredExprType(target);
-          }
+          // checkcast at the erasure boundary is judged before the arm prints. A bare switch
+          // printed inside the source's own result cast is standalone: the arm is inferred on
+          // its own recorded type, which is what lets a generic boundary checkcast drop.
+          content.getInferredExprType(target);
 
           if (content instanceof ConstExprent && !Objects.equals(content.getExprType(), VarType.VARTYPE_NULL)) {
             ((ConstExprent)content).setConstType(this.type);
@@ -331,6 +331,12 @@ public class SwitchExprent extends Exprent {
         continue;
       }
       Exprent content = yield.getContent();
+      // A call whose recorded arguments pin its type variable to a class the target rejects
+      // cannot be an arm of a bare poly switch: javac would reject that arm. The source cast
+      // the switch's result instead, so the switch is not poly in this context.
+      if (armNeedsTargetCast(content, target)) {
+        return false;
+      }
       if (nullCase) {
         // An arm cast to the switch's own erasure is javac's coercion for a bare switch; the
         // printer strips it, so the arm is judged by the value it prints.
@@ -372,6 +378,28 @@ public class SwitchExprent extends Exprent {
       }
     }
     return true;
+  }
+
+  /**
+   * Whether any simple arm of this switch needs a cast to the target: the call's recorded
+   * arguments pin its type variable to a class the target's bounded wildcard rejects. Such a
+   * switch cannot be printed bare against that target; the source cast the switch's result and
+   * let javac type every arm standalone.
+   */
+  public boolean armsNeedTargetCast(VarType target) {
+    if (target == null) {
+      return false;
+    }
+    for (Statement stat : backing.getCaseStatements()) {
+      List<Exprent> exprents = stat.getExprents();
+      if (exprents == null || exprents.size() != 1 || !(exprents.get(0) instanceof YieldExprent yield)) {
+        continue;
+      }
+      if (armNeedsTargetCast(yield.getContent(), target)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**

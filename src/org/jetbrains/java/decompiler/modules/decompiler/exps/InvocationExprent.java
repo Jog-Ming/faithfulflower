@@ -89,6 +89,13 @@ public class InvocationExprent extends Exprent {
   private List<PooledConstant> bootstrapArguments;
   private final List<VarType> genericArgs = new ArrayList<>();
   private VarType inferredUpperBound;
+  /**
+   * Whether the last inference dropped a target mapping for a variable this call's own functional
+   * argument types from its body. The source then cast the call's result to the target.
+   */
+  private boolean droppedTargetVariable = false;
+  /** The variables whose target mapping was dropped, to tell a body-solved result from an open one. */
+  private final java.util.Set<VarType> droppedVariables = new java.util.HashSet<>();
   /** A witness this call prints that an unqualified name cannot carry: print the class too. */
   private boolean witnessQualifier = false;
   private VarType remappedInstType = null;
@@ -765,6 +772,20 @@ public class InvocationExprent extends Exprent {
   @Override
   public VarType getInferredExprType(VarType upperBound) {
     VarType inferred = inferExprType(upperBound);
+    if (droppedTargetVariable) {
+      // The target was withheld from a variable the call's own functional argument types. When
+      // the argument then solves it, the call's standalone type is the target and the source
+      // needed no cast; only a variable left open forces the cast.
+      boolean open = false;
+      for (VarType variable : droppedVariables) {
+        VarType solved = genericsMap.get(variable);
+        if (solved == null || GenericType.DUMMY_VAR.equals(solved)) {
+          open = true;
+          break;
+        }
+      }
+      droppedTargetVariable = open;
+    }
     // An unbounded wildcard is the inference's own unresolved capture, not a type the class file
     // records. A call chained on another call has a type its own and the receiver's signatures and
     // recorded inputs fix; when that type is exactly the context target, the source wrote the
@@ -782,6 +803,23 @@ public class InvocationExprent extends Exprent {
 
   public void setPrintedUnderCast(boolean printedUnderCast) {
     this.printedUnderCast = printedUnderCast;
+  }
+
+  /**
+   * Re-infers this call with no context target, as the source's cast context does, so a witness
+   * or a variable the target had seeded cannot print under the cast.
+   */
+  public void reinferUnderCast() {
+    VarType prior = inferredUpperBound;
+    boolean priorPrinted = printedUnderCast;
+    inferredUpperBound = null;
+    printedUnderCast = true;
+    try {
+      inferExprType(null);
+    } finally {
+      inferredUpperBound = prior;
+      printedUnderCast = priorPrinted;
+    }
   }
 
   private VarType inferExprType(VarType upperBound) {
@@ -816,6 +854,8 @@ public class InvocationExprent extends Exprent {
     genericArgs.clear();
     genericsMap.clear();
     argumentBindings.clear();
+    droppedTargetVariable = false;
+    droppedVariables.clear();
     resultIsDeclaredReturn = isDeclaredReturnTarget(upperBound);
     this.remappedInstType = null;
     this.witnessQualifier = false;
@@ -908,6 +948,25 @@ public class InvocationExprent extends Exprent {
           }
         }
 
+        // A chain whose receiver is recorded with an unbounded wildcard keeps the context target
+        // out of the callee's variables its own functional argument can solve. The receiver's
+        // instantiation already carries the value's type (a LoadingCache<Key<?, ?>, DataResult<?>>
+        // field read by getUnchecked is a DataResult<?>), and the lambda's body types the result;
+        // javac's inference leaves the variable at the body's type and the source cast the whole
+        // chain to the target. Seeding the variable from the target would type the lambda's
+        // returns by the target instead and put an unchecked cast inside every branch.
+        boolean openReceiverChain = !isNew && instance != null && !isStatic;
+        if (openReceiverChain) {
+          VarType receiverRecorded = recordedInstantiation(instance, 3);
+          openReceiverChain = receiverRecorded != null && hasDirectUnboundedWildcard(receiverRecorded)
+            && lstParameters.stream().anyMatch(InvocationExprent::containsBodyTypedLambda)
+            && lstParameters.stream().noneMatch(InvocationExprent::containsFunctionalReturningLambda)
+            && lstParameters.stream().noneMatch(InvocationExprent::containsIdentityLambda);
+        }
+        final boolean openReceiver = openReceiverChain;
+        List<VarType> declaredParameters = desc.getSignature() != null
+          ? desc.getSignature().parameterTypes : Collections.emptyList();
+
         // if possible, collect mappings from the ub
         // these mappings will be used to help 'fill in the blanks' when creating the ub types for the instance/params
         if (upperBound != null && !upperBound.equals(VarType.VARTYPE_OBJECT) && (upperBound.type != CodeType.GENVAR || named.containsKey(upperBound))) {
@@ -925,12 +984,22 @@ public class InvocationExprent extends Exprent {
           // Don't capture as a real upper bound unless the upperbound is an object or a likewise generic.
           // FunctionExprent needs to inform its children about the type that it has, so it'll cause conflict here.
           if (r.type == CodeType.GENVAR && (upperBound.typeFamily == TypeFamily.OBJECT || upperBound.isGeneric())) {
-            upperBoundsMap.put(r.resizeArrayDim(0), upperBound.resizeArrayDim(Math.max(upperBound.arrayDim - r.arrayDim, 0)));
+            if (!(openReceiver && parameterMentions(r, declaredParameters))) {
+              upperBoundsMap.put(r.resizeArrayDim(0), upperBound.resizeArrayDim(Math.max(upperBound.arrayDim - r.arrayDim, 0)));
+            } else {
+              droppedTargetVariable = true;
+              droppedVariables.add(r.resizeArrayDim(0));
+            }
           }
           else {
             gatherGenerics(ub, r, tempMap);
             tempMap.forEach((from, to) -> {
               if (!genericsMap.containsKey(from)) {
+                if (openReceiver && parameterMentions(from, declaredParameters)) {
+                  droppedTargetVariable = true;
+                  droppedVariables.add(from.resizeArrayDim(0));
+                  return; // the functional argument's body solves it; the target does not
+                }
                 if (to != null && (to.type != CodeType.GENVAR || named.containsKey(to))) {
                   boolean ok = true;
 
@@ -990,7 +1059,8 @@ public class InvocationExprent extends Exprent {
         // this is important for the creation of instance/param UBs
         // leaving a type 'T' because we have no mapping for it is bad; it is taken as we expect the result to be 'T'
         // really though, we have no idea what 'T' is supposed to be and this is an attempt to make that clear
-        fparams.stream().map(p -> "T" + p + ";").map(GenericType::parse).filter(t -> !upperBoundsMap.containsKey(t)).forEach(t -> upperBoundsMap.put(t, GenericType.DUMMY_VAR));
+        fparams.stream().map(p -> "T" + p + ";").map(GenericType::parse).filter(t -> !upperBoundsMap.containsKey(t))
+          .forEach(t -> upperBoundsMap.put(t, GenericType.DUMMY_VAR));
         if (mthCls.getSignature() != null) {
           mthCls.getSignature().fparameters.stream().map(p -> "T" + p + ";").map(GenericType::parse).filter(t -> !upperBoundsMap.containsKey(t)).forEach(t -> upperBoundsMap.put(t, GenericType.DUMMY_VAR));
         }
@@ -1262,6 +1332,22 @@ public class InvocationExprent extends Exprent {
                     });
                   }
                   recordFunctionalTarget(parameter, receiverBindings != null);
+                }
+                if (openReceiver) {
+                  // The callee's own variable in the SAM return is not a source target here: the
+                  // chain's receiver is a wildcard instantiation and javac types the functional
+                  // argument from its body. An unbounded wildcard leaves the position open so the
+                  // body's recorded return becomes the argument's type.
+                  for (String fp : fparams) {
+                    VarType variable = GenericType.parse("T" + fp + ";");
+                    if (!parameterMentions(variable, declaredParameters)) {
+                      continue;
+                    }
+                    VarType present = combined.get(variable);
+                    if (present == null || GenericType.DUMMY_VAR.equals(present)) {
+                      combined.put(variable, null);
+                    }
+                  }
                 }
                 VarType paramUB = paramType.remap(hierarchyMap).remap(combined);
 
@@ -1869,6 +1955,119 @@ public class InvocationExprent extends Exprent {
   private static boolean mentionsAnyOfTypeVariables(VarType type, Set<VarType> variables) {
     for (VarType variable : variables) {
       if (mentionsTypeVariable(type, variable)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Whether the last inference dropped a target mapping because the receiver is a wildcard
+   * instantiation and this call's functional argument types the variable from its own body.
+   * The call's result then does not carry the target, and the source cast it.
+   */
+  public boolean droppedTargetVariable() {
+    return droppedTargetVariable;
+  }
+
+  /** Whether this call will print an explicit type witness, which fixes its type on the spot. */
+  public boolean printsWitness() {
+    return !genericArgs.isEmpty() || lambdaBodyWitness != null;
+  }
+
+  /**
+   * Whether the witness this call will print for a dropped variable is that same variable, not a
+   * type the caller can name: the printer's projection of the target onto the callee's own name.
+   * Such a witness cannot type the call, so the target's cast is what the source wrote.
+   */
+  public boolean witnessRepeatsDroppedVariable() {
+    List<VarType> args = !genericArgs.isEmpty() ? genericArgs
+      : lambdaBodyWitness != null ? lambdaBodyWitness : null;
+    if (args == null || desc == null || desc.getSignature() == null) {
+      return false;
+    }
+    List<String> fparams = desc.getSignature().typeParameters;
+    for (VarType variable : droppedVariables) {
+      int index = fparams.indexOf(variable.value);
+      if (index < 0 || index >= args.size()) {
+        continue;
+      }
+      VarType value = args.get(index);
+      if (value != null && value.type == CodeType.GENVAR && Objects.equals(value.value, variable.value)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** Whether any argument carries a lambda whose body is typed on its own, not by a functional target. */
+  private static boolean containsBodyTypedLambda(Exprent expr) {
+    if (expr instanceof NewExprent created && created.isLambda() && !created.isMethodReference()
+      && !created.returnsFunctionalValue() && !created.returnsOnlyOwnParameters()) {
+      return true;
+    }
+    for (Exprent inner : expr.getAllExprents(true, true)) {
+      if (inner instanceof NewExprent created && created.isLambda() && !created.isMethodReference()
+        && !created.returnsFunctionalValue() && !created.returnsOnlyOwnParameters()) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** Whether any argument carries an identity lambda (its body is only its own parameter). */
+  private static boolean containsIdentityLambda(Exprent expr) {
+    if (expr instanceof NewExprent created && created.isLambda() && !created.isMethodReference()
+      && created.returnsOnlyOwnParameters()) {
+      return true;
+    }
+    for (Exprent inner : expr.getAllExprents(true, true)) {
+      if (inner instanceof NewExprent created && created.isLambda() && !created.isMethodReference()
+        && created.returnsOnlyOwnParameters()) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** Whether any argument carries a lambda whose body returns a functional value. */
+  private static boolean containsFunctionalReturningLambda(Exprent expr) {
+    if (expr instanceof NewExprent created && created.isLambda() && !created.isMethodReference()
+      && created.returnsFunctionalValue()) {
+      return true;
+    }
+    for (Exprent inner : expr.getAllExprents(true, true)) {
+      if (inner instanceof NewExprent created && created.isLambda() && !created.isMethodReference()
+        && created.returnsFunctionalValue()) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Whether one of the type's direct arguments is an unbounded wildcard: the receiver's element
+   * type is a capture, not a type the chain's own signature can carry.
+   */
+  private static boolean hasDirectUnboundedWildcard(VarType type) {
+    if (!(type instanceof GenericType generic) || generic.getWildcard() != GenericType.WILDCARD_NO) {
+      return false;
+    }
+    for (VarType argument : generic.getArguments()) {
+      if (argument == null) {
+        return true;
+      }
+      if (argument instanceof GenericType nested && nested.getWildcard() == GenericType.WILDCARD_UNBOUND) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** Whether any declared parameter type mentions the variable. */
+  private static boolean parameterMentions(VarType variable, List<VarType> parameterTypes) {
+    for (VarType parameter : parameterTypes) {
+      if (mentionsTypeVariable(parameter, variable)) {
         return true;
       }
     }

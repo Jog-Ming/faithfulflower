@@ -1747,10 +1747,13 @@ public class ExprProcessor implements CodeConstants {
     if (leftType != null && targetTypedFreeReturn(exprent, rightType)) {
       rightType = leftType;
     }
-    if (exprent instanceof SwitchExprent switchExprent) {
-      // The switch is poly in this context; the arms are printed against this target.
-      switchExprent.setPrintTarget(leftType);
-    }
+    // The inference just dropped a target mapping this call's own functional argument types from
+    // its body (a chain on a wildcard receiver): the target did not type the call, and the
+    // source cast its result.
+    boolean functionalBodyTargetDropped = exprent instanceof InvocationExprent openCall
+      && openCall.droppedTargetVariable();
+    // A switch expression's target is handed to the arms only when no outer cast is printed:
+    // then the switch is poly in this context and the arms are printed against this target.
     exprent = narrowGenericCastType(exprent, leftType);
 
     // A cast around a context-independent value whose recorded type is exactly the context
@@ -2123,12 +2126,30 @@ public class ExprProcessor implements CodeConstants {
       || fieldBoundCast) && !exactRecordedType;
 
     // A switch expression is poly: javac types every arm from the context target and emits no
-    // cast after the merge, so an outer cast is the printer's. The target was handed to the
-    // switch above. A `case null` does not on its own decide the merge's type, but the target
-    // still types every arm: when each simple arm provably fits it, the merge is the target and
-    // the source needed no cast.
-    if (exprent instanceof SwitchExprent switchCast && switchCast.simpleArmsFitTarget(leftType)) {
-      cast = false;
+    // cast after the merge, so an outer cast is the printer's. A `case null` does not on its own
+    // decide the merge's type, but the target still types every arm: when each simple arm
+    // provably fits it, the merge is the target and the source needed no cast. When an arm's
+    // recorded arguments pin its variable to a class the target rejects, no poly switch can
+    // typecheck; the source cast the switch's result instead, so that cast is the source's and
+    // the arms print standalone.
+    if (exprent instanceof SwitchExprent switchCast) {
+      if (switchCast.simpleArmsFitTarget(leftType)) {
+        cast = false;
+      } else if (leftType != null && switchCast.armsNeedTargetCast(leftType)) {
+        cast = true;
+      }
+    }
+
+    // A call chain whose receiver records an unbounded wildcard and whose functional argument
+    // types the call's variable from its own body: the target never pinned that variable, and
+    // javac (in the source's cast context) infers the chain standalone. When the call prints no
+    // witness (or only the callee's own unresolved name, the printer's projection of the target
+    // onto it), the source could not have typed it here and cast the result instead; print that
+    // one cast outside the chain.
+    if (!cast && leftType != null && functionalBodyTargetDropped
+      && exprent instanceof InvocationExprent openCall
+      && (!openCall.printsWitness() || openCall.witnessRepeatsDroppedVariable())) {
+      cast = true;
     }
 
     if (castNull == NullCastType.DONT_CAST_AT_ALL && rightType.type == CodeType.NULL) {
@@ -2209,6 +2230,16 @@ public class ExprProcessor implements CodeConstants {
     // alone, so the target recorded during this pass does not pin its type variables.
     if (cast && exprent instanceof InvocationExprent castCall) {
       castCall.setPrintedUnderCast(true);
+      if (functionalBodyTargetDropped) {
+        // The witness the target-derived pass proved is the callee's own unresolved variable,
+        // not a type the source named: infer the call standalone, as the cast context does.
+        castCall.reinferUnderCast();
+      }
+    }
+    // A switch is handed the target only when it prints bare and poly; inside a printed cast
+    // javac types it standalone, and the cast converts the merged result.
+    if (exprent instanceof SwitchExprent switchTarget) {
+      switchTarget.setPrintTarget(cast ? null : leftType);
     }
     try {
       if (cast && receiverCastTarget != null && exprent instanceof InvocationExprent receiverCall) {
