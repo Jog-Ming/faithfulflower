@@ -2163,7 +2163,7 @@ public class NewExprent extends Exprent {
   }
 
   /** Whether an array of this type is a legal creation: every argument, at every level, is `?`. */
-  private static boolean reifiableArrayComponent(VarType type) {
+  public static boolean reifiableArrayComponent(VarType type) {
     if (!(type instanceof GenericType generic)) {
       return true;
     }
@@ -2182,7 +2182,7 @@ public class NewExprent extends Exprent {
   }
 
   /** The same component with every type argument replaced by the unbounded wildcard. */
-  private static VarType wildcardArrayComponent(VarType type) {
+  public static VarType wildcardArrayComponent(VarType type) {
     if (!(type instanceof GenericType generic)) {
       return type;
     }
@@ -2212,6 +2212,44 @@ public class NewExprent extends Exprent {
     return target instanceof GenericType generic && generic.type == CodeType.OBJECT
       && generic.value != null && generic.value.equals(newType.value)
       && generic.arrayDim == newType.arrayDim && generic.arrayDim > 0;
+  }
+
+  /**
+   * The array type an array-constructor lambda ({@code X[]::new}) prints. The synthetic method
+   * records only the erased component, while the call-site target names its instantiation; when
+   * that component is not reifiable, the only legal creation names it with an unbounded wildcard
+   * in every argument position ({@code X<?>[]::new}), and the source cast the call's result back
+   * to the target. Returns null when the erased form already is the target's form.
+   */
+  public static VarType printedArrayConstructorType(VarType functionalReturn, VarType erased) {
+    if (!(functionalReturn instanceof GenericType target) || target.type != CodeType.OBJECT
+      || target.arrayDim != 1 || target.value == null || erased == null
+      || erased.arrayDim != 1 || !target.value.equals(erased.value)) {
+      return null;
+    }
+    VarType component = target.decreaseArrayDim();
+    if (reifiableArrayComponent(component) || !component.isGeneric()) {
+      return null;
+    }
+    return ((GenericType) wildcardArrayComponent(component)).resizeArrayDim(1);
+  }
+
+  /**
+   * Whether this array-constructor lambda prints a wildcard component for {@code target}: the
+   * call it feeds then returns the wildcard array, which is not assignable to a target whose own
+   * component is not reifiable, so the source cast the call's result.
+   */
+  public boolean printsWildcardArrayConstructorFor(VarType target) {
+    if (!(target instanceof GenericType targetType) || targetType.arrayDim != 1) {
+      return false;
+    }
+    VarType functional = getFunctionalReturnType();
+    if (!(functional instanceof GenericType expected) || expected.arrayDim != 1
+      || expected.value == null || !expected.value.equals(targetType.value)) {
+      return false;
+    }
+    return printedArrayConstructorType(functional, target) != null
+      && !reifiableArrayComponent(targetType.decreaseArrayDim());
   }
 
   /**

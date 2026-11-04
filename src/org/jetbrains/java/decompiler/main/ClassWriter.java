@@ -299,7 +299,13 @@ public class ClassWriter implements StatementWriter {
                         lambdaSlot += md_content.params[i].stackSize;
                       }
                       if (sizeVar.getIndex() == lambdaSlot) {
-                        VarType returnType = md_lambda.ret;
+                        // The synthetic method records only the erased component; the call's
+                        // target names its instantiation, and a component that is not reifiable
+                        // can only be created in the all-wildcard form `X<?>[]::new`.
+                        VarType returnType = NewExprent.printedArrayConstructorType(functionalReturn, md_lambda.ret);
+                        if (returnType == null) {
+                          returnType = md_lambda.ret;
+                        }
                         buffer.appendCastTypeName(returnType);
                         buffer.append("::new");
                         written = true;

@@ -1815,6 +1815,28 @@ public class ExprProcessor implements CodeConstants {
       && value.arrayDim == leftType.arrayDim && !sameType(leftType, rightType)) {
       doCastGenerics = true;
     }
+    // The same conversion through an array-constructor argument: when the call's target
+    // component is not reifiable, the lambda prints `X<?>[]::new` and the call returns the
+    // wildcard array, which is not assignable to the recorded target (arrays are invariant
+    // over non-reifiable components). The source cast the call's result.
+    InvocationExprent arrayConstructorCall = null;
+    if (exprent instanceof InvocationExprent directCall) {
+      arrayConstructorCall = directCall;
+    } else if (exprent instanceof FunctionExprent castWrapper
+      && castWrapper.getFuncType() == FunctionType.CAST
+      && !castWrapper.getLstOperands().isEmpty()
+      && castWrapper.getLstOperands().get(0) instanceof InvocationExprent wrappedCall) {
+      arrayConstructorCall = wrappedCall;
+    }
+    if (!doCastGenerics && arrayConstructorCall != null) {
+      for (Exprent parameter : arrayConstructorCall.getLstParameters()) {
+        if (parameter instanceof NewExprent arrayConstructor
+          && arrayConstructor.printsWildcardArrayConstructorFor(leftType)) {
+          doCastGenerics = true;
+          break;
+        }
+      }
+    }
     // Inference substituted the upper bound into the call's type, so the wildcard the method
     // declared has vanished; the original source had to cast that capture away, and javac elides
     // the checkcast because the erasures match.
