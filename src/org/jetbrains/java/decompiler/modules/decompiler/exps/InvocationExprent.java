@@ -2970,7 +2970,7 @@ public class InvocationExprent extends Exprent {
     Map<VarType, List<VarType>> scope = named == null ? Map.of() : named;
     Map<String, VarType> bindings = new HashMap<>();
     if (!ExprProcessor.declaredTypeAccepts(signature.parameterTypes.get(index), value,
-      signature.typeParameters, bounds, scope, signature.returnType, bindings)) {
+      signature.typeParameters, bounds, scope, signature.returnType, bindings, call.inferredUpperBound)) {
       return false;
     }
     for (int i = 0; i < signature.parameterTypes.size(); i++) {
@@ -2997,7 +2997,7 @@ public class InvocationExprent extends Exprent {
         return false;
       }
       if (!ExprProcessor.declaredTypeAccepts(signature.parameterTypes.get(i), siblingType,
-        signature.typeParameters, bounds, scope, signature.returnType, bindings)) {
+        signature.typeParameters, bounds, scope, signature.returnType, bindings, call.inferredUpperBound)) {
         return false;
       }
     }

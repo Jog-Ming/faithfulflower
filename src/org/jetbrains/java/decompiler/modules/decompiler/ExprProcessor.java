@@ -3355,22 +3355,54 @@ public class ExprProcessor implements CodeConstants {
   /**
    * Whether a value of the recorded type {@code value} already fits the declared parameter type
    * {@code declared}, with the called method's own type variables instantiated by this argument.
-   * A free variable binds to a proper (non-wildcard) argument inside its bound; a variable the
-   * method returns bare also binds to a wildcard's bound, since javac captures the wildcard and
-   * the call's result - the variable itself - stays within the caller's target. Positions that
-   * cannot be judged (a lower-bounded wildcard, a class with a different parameterization) reject.
+   * A free variable binds to a proper (non-wildcard) argument inside its bound; a wildcard value
+   * binds to its capture when the capture's upper bound lies within the variable's declared bound
+   * and the call's result still fits the context target. Positions that cannot be judged (a
+   * lower-bounded wildcard, a class with a different parameterization) reject.
+   *
+   * @param target the type the call's result is printed against, or null when unknown
    */
   public static boolean declaredTypeAccepts(VarType declared, VarType value,
                                             List<String> variables, Map<String, List<VarType>> bounds,
                                             Map<VarType, List<VarType>> named,
-                                            VarType returnType, Map<String, VarType> bindings) {
+                                            VarType returnType, Map<String, VarType> bindings,
+                                            VarType target) {
+    return declaredTypeAccepts(declared, value, variables, bounds, named, returnType, bindings,
+      VarType.VARTYPE_OBJECT, target);
+  }
+
+  /**
+   * The recursive form: {@code captureBound} is the upper bound of the class parameter whose
+   * argument position the value occupies, which is the upper bound javac gives a wildcard's
+   * capture there.
+   */
+  private static boolean declaredTypeAccepts(VarType declared, VarType value,
+                                             List<String> variables, Map<String, List<VarType>> bounds,
+                                             Map<VarType, List<VarType>> named,
+                                             VarType returnType, Map<String, VarType> bindings,
+                                             VarType captureBound, VarType target) {
     if (declared == null || declared.equals(VarType.VARTYPE_OBJECT)) {
       // An unbounded wildcard argument position, and Object, accept any value.
       return true;
     }
     if (value == null) {
-      // An unbounded wildcard value instantiates nothing by itself.
-      return false;
+      // An unbounded wildcard value instantiates nothing by itself. javac captures it with the
+      // class parameter's upper bound; a free method variable binds to that capture when the
+      // variable's declared bound accepts the capture's bound and the call's result still fits
+      // the context. Every other position rejects.
+      if (declared.type != CodeType.GENVAR || declared.arrayDim != 0
+        || declared instanceof GenericType declaredWildcard
+        && declaredWildcard.getWildcard() != GenericType.WILDCARD_NO
+        || !variables.contains(declared.value) || bindings.containsKey(declared.value)) {
+        return false;
+      }
+      VarType capture = captureBound == null ? VarType.VARTYPE_OBJECT : captureBound;
+      if (!withinDeclaredBound(capture, declared.value, bounds, named)
+        || !captureReturnFitsTarget(returnType, declared.value, capture, target, named)) {
+        return false;
+      }
+      bindings.put(declared.value, null);
+      return true;
     }
     if (declared.arrayDim > 0 || value.arrayDim > 0) {
       // An array position compares its element types; a variable inside the element instantiates
@@ -3379,7 +3411,7 @@ public class ExprProcessor implements CodeConstants {
         return false;
       }
       return declaredTypeAccepts(declared.resizeArrayDim(0), value.resizeArrayDim(0),
-        variables, bounds, named, returnType, bindings);
+        variables, bounds, named, returnType, bindings, captureBound, target);
     }
     if (declared instanceof GenericType declaredGeneric
       && declaredGeneric.getWildcard() != GenericType.WILDCARD_NO) {
@@ -3398,7 +3430,8 @@ public class ExprProcessor implements CodeConstants {
         }
         value = GenericType.withWildcard(valueGeneric, GenericType.WILDCARD_NO);
       }
-      return declaredTypeAccepts(base, value, variables, bounds, named, returnType, bindings);
+      return declaredTypeAccepts(base, value, variables, bounds, named, returnType, bindings,
+        captureBound, target);
     }
     if (declared.type == CodeType.GENVAR) {
       String name = declared.value;
@@ -3410,15 +3443,19 @@ public class ExprProcessor implements CodeConstants {
           && genericValue.getWildcard() != GenericType.WILDCARD_NO;
         VarType bound = value;
         if (wildcard) {
+          // The variable binds to the wildcard's capture. A bare return of the variable keeps the
+          // binder by definition; otherwise the call's result must still fit the context with the
+          // capture in place, which only a covariant or supertype position proves.
           boolean returnedBare = returnType instanceof GenericType returned
             && returned.getWildcard() == GenericType.WILDCARD_NO && returned.type == CodeType.GENVAR
             && name.equals(returned.value);
-          if (!returnedBare) {
-            return false;
-          }
-          bound = value instanceof GenericType genericValue
+          VarType capture = value instanceof GenericType genericValue
             && genericValue.getWildcard() == GenericType.WILDCARD_EXTENDS
             ? GenericType.withWildcard(genericValue, GenericType.WILDCARD_NO) : VarType.VARTYPE_OBJECT;
+          if (!returnedBare && !captureReturnFitsTarget(returnType, name, capture, target, named)) {
+            return false;
+          }
+          bound = capture;
         }
         if (!withinDeclaredBound(bound, name, bounds, named)) {
           return false;
@@ -3445,11 +3482,147 @@ public class ExprProcessor implements CodeConstants {
     }
     for (int i = 0; i < declaredGeneric.getArguments().size(); i++) {
       if (!declaredTypeAccepts(declaredGeneric.getArguments().get(i), valueGeneric.getArguments().get(i),
-        variables, bounds, named, returnType, bindings)) {
+        variables, bounds, named, returnType, bindings,
+        classParameterBound(declaredGeneric.value, i), target)) {
         return false;
       }
     }
     return true;
+  }
+
+  /**
+   * The first declared bound of the class's formal parameter at {@code index}. A wildcard value
+   * at that position captures with this upper bound: {@code ParticleType<?>} is a
+   * {@code ParticleType<capture of ? extends ParticleOptions>} because the class parameter is
+   * bounded there. An unknown class or parameter yields Object.
+   */
+  private static VarType classParameterBound(String className, int index) {
+    if (className == null || index < 0) {
+      return VarType.VARTYPE_OBJECT;
+    }
+    StructClass cls = DecompilerContext.getStructContext().getClass(className);
+    if (cls == null || cls.getSignature() == null
+      || index >= cls.getSignature().fparameters.size()) {
+      return VarType.VARTYPE_OBJECT;
+    }
+    List<VarType> classBounds = index < cls.getSignature().fbounds.size()
+      ? cls.getSignature().fbounds.get(index) : null;
+    if (classBounds == null || classBounds.isEmpty() || classBounds.get(0) == null) {
+      return VarType.VARTYPE_OBJECT;
+    }
+    return classBounds.get(0);
+  }
+
+  private static boolean mentionsTypeVariable(VarType type, String variable) {
+    if (type == null) {
+      return false;
+    }
+    if (type.type == CodeType.GENVAR) {
+      return variable.equals(type.value);
+    }
+    if (type instanceof GenericType generic) {
+      if (generic.getParent() != null && mentionsTypeVariable(generic.getParent(), variable)) {
+        return true;
+      }
+      for (VarType argument : generic.getArguments()) {
+        if (mentionsTypeVariable(argument, variable)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Whether a call whose return type names {@code variable} still fits the context target when
+   * javac binds that variable to a wildcard's capture. The capture is a fresh type variable whose
+   * upper bound is {@code captureBound}: it is assignable to a target position only through that
+   * bound - a covariant wildcard or a plain supertype position - never through an invariant one,
+   * where an unknown capture is not literally the target's type argument. A return type that does
+   * not name the variable is unaffected by the binding.
+   */
+  private static boolean captureReturnFitsTarget(VarType returnType, String variable, VarType captureBound,
+                                                 VarType target, Map<VarType, List<VarType>> named) {
+    if (!mentionsTypeVariable(returnType, variable)) {
+      return true;
+    }
+    if (target == null || target.equals(VarType.VARTYPE_VOID)) {
+      return false;
+    }
+    return captureFitsTarget(returnType, target, variable, captureBound, named);
+  }
+
+  private static boolean captureFitsTarget(VarType returnType, VarType target, String variable,
+                                           VarType captureBound, Map<VarType, List<VarType>> named) {
+    if (!mentionsTypeVariable(returnType, variable)) {
+      return true;
+    }
+    if (target == null) {
+      return false;
+    }
+    if (target.equals(VarType.VARTYPE_OBJECT)) {
+      return true;
+    }
+    if (target instanceof GenericType targetGeneric && targetGeneric.getWildcard() != GenericType.WILDCARD_NO) {
+      if (targetGeneric.getWildcard() != GenericType.WILDCARD_EXTENDS) {
+        // A lower bound asks for a supertype of a named type; an unknown capture proves nothing.
+        return false;
+      }
+      target = GenericType.withWildcard(targetGeneric, GenericType.WILDCARD_NO);
+    }
+    if (returnType.arrayDim > 0 || target.arrayDim > 0) {
+      return returnType.arrayDim == target.arrayDim
+        && captureFitsTarget(returnType.resizeArrayDim(0), target.resizeArrayDim(0), variable, captureBound, named);
+    }
+    if (returnType.type == CodeType.GENVAR) {
+      // The return type is the capture itself: it fits through the capture's upper bound.
+      return valueAssignableTo(captureBound, target, named);
+    }
+    if (!(returnType instanceof GenericType returnGeneric) || !(target instanceof GenericType targetGeneric)
+      || returnGeneric.value == null || !returnGeneric.value.equals(targetGeneric.value)) {
+      return false;
+    }
+    List<VarType> returnArguments = returnGeneric.getArguments();
+    List<VarType> targetArguments = targetGeneric.getArguments();
+    if (returnArguments.isEmpty() || targetArguments.isEmpty()) {
+      return returnArguments.isEmpty() || targetArguments.isEmpty();
+    }
+    if (returnArguments.size() != targetArguments.size()) {
+      return false;
+    }
+    for (int i = 0; i < returnArguments.size(); i++) {
+      if (!mentionsTypeVariable(returnArguments.get(i), variable)) {
+        continue;
+      }
+      VarType wanted = targetArguments.get(i);
+      if (wanted == null) {
+        // An unbounded wildcard position accepts any type.
+        continue;
+      }
+      int wantedWildcard = wanted instanceof GenericType wantedGeneric
+        ? wantedGeneric.getWildcard() : GenericType.WILDCARD_NO;
+      if (wantedWildcard == GenericType.WILDCARD_EXTENDS) {
+        if (!captureFitsTarget(returnArguments.get(i),
+          GenericType.withWildcard(wanted, GenericType.WILDCARD_NO), variable, captureBound, named)) {
+          return false;
+        }
+      } else {
+        // An invariant position, or a lower bound, never accepts an unknown capture.
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /** Whether {@code value} is assignable to {@code limit}, generic instantiations included. */
+  private static boolean valueAssignableTo(VarType value, VarType limit, Map<VarType, List<VarType>> named) {
+    if (value == null) {
+      return false;
+    }
+    if (limit == null) {
+      return true;
+    }
+    return GenericType.isAssignable(value, limit, named);
   }
 
   /**
