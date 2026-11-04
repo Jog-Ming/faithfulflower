@@ -305,12 +305,24 @@ public class NewExprent extends Exprent {
                   genericsMap.put(key, GenericType.parse("L" + methodCls.qualifiedName + ";"));
                 }
               }
-              else if (method.getSignature() != null || !desc.ret.equals(VarType.VARTYPE_OBJECT)) {
+              // An identity lambda's return carries no type of its own either: it is the type its
+              // own parameter has, which the functional target fixes. Its body must not decide
+              // the call's variable.
+              else if (method.getSignature() != null || !desc.ret.equals(VarType.VARTYPE_OBJECT)
+                || returnsBareOnlyOwnParameters()) {
                 VarType current = genericsMap.get(key);
                 VarType returnType = method.getSignature() != null ? method.getSignature().returnType.remap(instanceMap) : desc.ret;
                 StructClass retCls = returnType == null ? null : DecompilerContext.getStructContext().getClass(returnType.value);
 
-                if (!isMethodReference() && retCls != null && retCls.getSignature() != null && !retCls.getSignature().genericType.equalsExact(returnType)) {
+                // The recorded lambda descriptor returns Object only when the body converted
+                // nothing: a narrower descriptor is the source's own conversion (`(Record)l`),
+                // which the tree can lose and must not be replaced by the parameter's type.
+                boolean bareIdentity = returnsBareOnlyOwnParameters()
+                  && desc.ret.equals(VarType.VARTYPE_OBJECT);
+                if (!isMethodReference()
+                  && (bareIdentity
+                      || retCls != null && retCls.getSignature() != null
+                         && !retCls.getSignature().genericType.equalsExact(returnType))) {
                   VarType retUB = current != null && current.equals(returnType) ? current : returnType;
                   VarType realType = getLambdaReturnType(node, refMethod, retUB, genericsMap);
                   if (realType != null) {
@@ -1161,6 +1173,7 @@ public class NewExprent extends Exprent {
 
       if (mt != null && mt.root != null) {
         List<String> paramNames = new ArrayList<>();
+        Map<VarVersionPair, VarType> functionalParameters = new HashMap<>();
 
         MethodDescriptor md_content = MethodDescriptor.parseDescriptor(node.lambdaInformation.content_method_descriptor);
         MethodDescriptor md_lambda = MethodDescriptor.parseDescriptor(node.lambdaInformation.method_descriptor);
@@ -1174,6 +1187,7 @@ public class NewExprent extends Exprent {
             VarVersionPair vpp = new VarVersionPair(index, 0);
             VarType curType = mt.varproc.getVarType(vpp);
             VarType infType = desc.getSignature().parameterTypes.get(j++).remap(genericsMap);
+            functionalParameters.put(vpp, infType);
 
             if (infType != null && !infType.equals(VarType.VARTYPE_VOID)) {
               if (!curType.equals(infType) || (infType.isGeneric() && !((GenericType)infType).equalsExact(curType))) {
@@ -1197,6 +1211,25 @@ public class NewExprent extends Exprent {
             if (expr instanceof ExitExprent) {
               ExitExprent ex = (ExitExprent)expr;
               if (ex.getExitType() == ExitExprent.Type.RETURN) {
+                // An identity lambda returns one of its own parameters unchanged: its type is
+                // that parameter's functional type, and the body records nothing of its own. The
+                // wildcard the declared parameter type carries there stands for its bound. A
+                // cast of a parameter (`p -> (IntegerProperty)p`) has a type of its own and is
+                // not this shape.
+                if (ex.getValue() instanceof VarExprent variable) {
+                  VarType parameterType = stripReferenceWildcard(functionalParameters.get(variable.getVarVersionPair()));
+                  // Only a parameter type the caller can name settles the variable: an erased
+                  // Object slot or an unbound wildcard carries no information and must leave the
+                  // old inference in charge.
+                  boolean nameable = parameterType != null
+                    && (parameterType.type == CodeType.GENVAR && parameterType.value != null
+                        || parameterType.isGeneric() && ((GenericType) parameterType).value != null);
+                  if (nameable && !VarType.VARTYPE_OBJECT.equals(parameterType)
+                    && !GenericType.DUMMY_VAR.equals(parameterType)) {
+                    paramNames.forEach(inferredLambdaTypes::remove);
+                    return parameterType;
+                  }
+                }
                 VarType realRetType = ex.getValue().getInferredExprType(upperBound);
                 if (realRetType.isGeneric()) {
                   paramNames.forEach(inferredLambdaTypes::remove);
@@ -1715,9 +1748,23 @@ public class NewExprent extends Exprent {
   /**
    * Whether every return in the lambda's body is one of the lambda's own parameters, unchanged
    * (an identity function). Such a body is typed by the target that flows through its parameter,
-   * so it carries no type of its own either.
+   * so it carries no type of its own either. A cast of a parameter counts here: its conversion
+   * is still the target's, and the call's own print decisions treat it like a bare identity.
    */
   public boolean returnsOnlyOwnParameters() {
+    return returnsOnlyOwnParameters(true);
+  }
+
+  /**
+   * Whether every return is a bare parameter, not even a cast of one. Only this strict form may
+   * let the body's parameter type settle a called method's variable: a cast has a type of its
+   * own (`p -> (IntegerProperty)p`) and the source's conversion must stay.
+   */
+  private boolean returnsBareOnlyOwnParameters() {
+    return returnsOnlyOwnParameters(false);
+  }
+
+  private boolean returnsOnlyOwnParameters(boolean throughCasts) {
     if (!lambda) {
       return false;
     }
@@ -1732,6 +1779,12 @@ public class NewExprent extends Exprent {
     MethodWrapper mt = wrapper.getMethodWrapper(node.lambdaInformation.content_method_name,
       node.lambdaInformation.content_method_descriptor);
     if (mt == null || mt.root == null) {
+      return false;
+    }
+    if (!throughCasts && bodyHasCheckcast(mt)) {
+      // The body converted the value before returning it: the tree may have folded that checkcast
+      // into the returned variable's type, so the exprent alone cannot tell an identity from a
+      // cast. The instruction is the recorded fact.
       return false;
     }
     MethodDescriptor content = MethodDescriptor.parseDescriptor(node.lambdaInformation.content_method_descriptor);
@@ -1753,9 +1806,11 @@ public class NewExprent extends Exprent {
         continue;
       }
       Exprent value = exit.getValue();
-      while (value instanceof FunctionExprent cast && cast.getFuncType() == FunctionExprent.FunctionType.CAST
-        && !cast.getLstOperands().isEmpty()) {
-        value = cast.getLstOperands().get(0);
+      if (throughCasts) {
+        while (value instanceof FunctionExprent cast && cast.getFuncType() == FunctionExprent.FunctionType.CAST
+          && !cast.getLstOperands().isEmpty()) {
+          value = cast.getLstOperands().get(0);
+        }
       }
       if (!(value instanceof VarExprent variable) || !parameters.contains(variable.getVarVersionPair())) {
         return false;
@@ -1763,6 +1818,39 @@ public class NewExprent extends Exprent {
       any = true;
     }
     return any;
+  }
+
+  /** Whether the lambda's compiled body contains a checkcast, so it converts its value. */
+  private static boolean bodyHasCheckcast(MethodWrapper mt) {
+    StructMethod method = mt.methodStruct;
+    if (method == null) {
+      return true;
+    }
+    StructClass cl = DecompilerContext.getStructContext().getClass(method.getClassQualifiedName());
+    if (cl == null) {
+      return true;
+    }
+    boolean hadData = method.getInstructionSequence() != null;
+    try {
+      method.expandData(cl);
+      FullInstructionSequence seq = method.getInstructionSequence();
+      if (seq == null) {
+        return true;
+      }
+      for (int i = 0; i < seq.length(); i++) {
+        Instruction ins = seq.getInstr(i);
+        if (ins.opcode == CodeConstants.opc_checkcast) {
+          return true;
+        }
+      }
+      return false;
+    } catch (IOException e) {
+      return true;
+    } finally {
+      if (!hadData) {
+        method.releaseResources();
+      }
+    }
   }
 
   /**

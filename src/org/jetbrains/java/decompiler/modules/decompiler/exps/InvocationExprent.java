@@ -1970,6 +1970,34 @@ public class InvocationExprent extends Exprent {
     return droppedTargetVariable;
   }
 
+  /**
+   * Prints the type argument a recorded for-each cast proved for this call: its declared return
+   * is the call's own single type variable, and the cast's narrowed iterable type is that
+   * variable's instantiation. The call then infers to the narrowed type without the cast. Only
+   * a nameable instantiation qualifies; nothing is printed otherwise.
+   */
+  public boolean printForEachResultWitness(VarType type) {
+    if (type == null || (!type.isGeneric() && type.type != CodeType.OBJECT)) {
+      return false;
+    }
+    if (desc == null) {
+      StructClass cl = DecompilerContext.getStructContext().getClass(classname);
+      desc = cl != null ? cl.getMethodRecursive(name, stringDescriptor) : null;
+    }
+    if (desc == null || desc.getSignature() == null) {
+      return false;
+    }
+    List<String> typeParameters = desc.getSignature().typeParameters;
+    VarType declaredReturn = desc.getSignature().returnType;
+    if (typeParameters.size() != 1 || declaredReturn == null || declaredReturn.type != CodeType.GENVAR
+      || !typeParameters.get(0).equals(declaredReturn.value)) {
+      return false;
+    }
+    genericArgs.clear();
+    genericArgs.add(type);
+    return true;
+  }
+
   /** Whether this call will print an explicit type witness, which fixes its type on the spot. */
   public boolean printsWitness() {
     return !genericArgs.isEmpty() || lambdaBodyWitness != null;

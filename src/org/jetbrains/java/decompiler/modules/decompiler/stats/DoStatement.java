@@ -591,10 +591,9 @@ public class DoStatement extends Statement {
     // the operand's type is the same type as the cast's, so a source whose iterable already has
     // the narrowed type wrote no cast: the recorded checkcast is the erasure boundary's.
     // A call with a lambda argument has no independently inferred type: the lambda is poly and
-    // only the target types it, so javac could not have inferred the iterable's element type
-    // here. The source's own witness (a method type argument or a lambda's target) is what fixed
-    // it, and this recorded cast stands in for that witness; keep it. A call whose arguments fix
-    // its type (a collector) is inferred the same way with or without the target.
+    // only the target types it, so javac cannot infer the call's variable here on its own. The
+    // source's own witness is what fixed it, and the recorded cast's narrowed type is that
+    // witness; print it on the call and let the cast go.
     Exprent iterableValue = cast.getLstOperands().get(0);
     boolean targetDependent = iterableValue instanceof InvocationExprent invocation
       && invocation.getLstParameters().stream()
@@ -602,7 +601,12 @@ public class DoStatement extends Statement {
     // The narrowed type is also the call's target: a poly call's own inference (a lambda body)
     // needs it to type the arguments the cast would otherwise have to carry.
     VarType operandType = iterableValue.getInferredExprType(narrowed);
-    if (!targetDependent && isNameableForEachType(narrowed) && FunctionExprent.sameType(operandType, narrowed)) {
+    boolean drop = isNameableForEachType(narrowed) && FunctionExprent.sameType(operandType, narrowed);
+    if (drop && targetDependent && iterableValue instanceof InvocationExprent invocation
+      && !invocation.printForEachResultWitness(narrowed)) {
+      drop = false;
+    }
+    if (drop) {
       cast.setNeedsCast(false);
       cast.setCompilerCast(true);
     } else {
