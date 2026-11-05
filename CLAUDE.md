@@ -128,7 +128,8 @@ it before continuing.
 - **Priority: raw > unchecked > double.** Fix raw uses first, then unchecked sites, then double
   casts. Redundant casts and redundant double casts are never an acceptable residue: both must end
   at zero. A double cast that is load-bearing may remain, and **adding a double cast is allowed
-  when it is the form a raw fix needs** — the verifier still decides whether it is load-bearing.
+  when it is the form a raw or unchecked fix needs** — the verifier still decides whether it is
+  load-bearing.
 - **Shards are files, disjoint between agents.** Give each agent the site list of its files, the
   rules above and the GT tree; agents edit only their files and report every changed line.
 - **Every round re-examines the whole residue.** Do not narrow a round to the files that changed in
@@ -137,8 +138,8 @@ it before continuing.
 - **Allowed rewrites**: delete a cast whose declared parameter or target already accepts the value;
   write an implicit raw→parameterized conversion as an explicit cast (2 diagnostics → 1); hoist
   branch, arm and ternary casts to the result (N → 1); replace a cast with a type witness or a
-  diamond; move a nested cast's widening to the receiver; add a double cast where a raw fix needs
-  it.
+  diamond; move a nested cast's widening to the receiver; add a double cast where a raw or
+  unchecked fix needs it.
 - **Forbidden**: `@SuppressWarnings`; printing a raw or erased type, or `var`; intersection-type
   casts (`(X & I)`) that merely silence javac; deleting a load-bearing cast so the source stops
   compiling; pure parenthesis or formatting workarounds.
