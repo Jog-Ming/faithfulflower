@@ -1266,7 +1266,7 @@ public class ClassWriter implements StatementWriter {
         StructMethod mt = methods.get(i);
         int line = ordered ? methodLine(mt) : -1;
         boolean enumBlock = false;
-        if (ordered && !"off".equals(System.getenv("NEUROFLOWER_ENUMBLOCK"))
+        if (ordered && !"off".equals(System.getenv("FAITHFULFLOWER_ENUMBLOCK"))
             && CodeConstants.CLINIT_NAME.equals(mt.getName())) {
           int block = staticBlockLine(wrapper, cl);
           if (block >= 0) {
@@ -1549,7 +1549,7 @@ public class ClassWriter implements StatementWriter {
             }
           }
           // Mirrors the clamp below with the values it would read, before any cap changes them.
-          String blockCtorMode = System.getenv("NEUROFLOWER_CTORLINE");
+          String blockCtorMode = System.getenv("FAITHFULFLOWER_CTORLINE");
           boolean blockScoped = "all".equals(blockCtorMode)
             || endsWithLiftedInitializer(wrapper.getMethodWrapper(plan.get(blockAt)[1]), wrapper);
           boolean blockRealLine = !"off".equals(blockCtorMode) && blockScoped
@@ -1579,7 +1579,7 @@ public class ClassWriter implements StatementWriter {
         // A constructor or static block re-inlines the fields' initializers, so its first line
         // belongs to a field that was lifted out of it. It must stay after every field, unless it
         // is an enum's static block that provably precedes them.
-        String ctorMode = System.getenv("NEUROFLOWER_CTORLINE");
+        String ctorMode = System.getenv("FAITHFULFLOWER_CTORLINE");
         boolean ctorLine = !"off".equals(ctorMode);
         int firstField = Integer.MAX_VALUE;
         java.util.Set<Integer> fieldLineValues = new java.util.HashSet<>();
@@ -2742,9 +2742,9 @@ public class ClassWriter implements StatementWriter {
             if (RecordHelper.isHiddenRecordMethod(cl, mt, root)) {
               hideMethod = true;
             } else {
-              if (System.getenv("NEUROFLOWER_TREE_DEBUG") != null
-                  && (System.getenv("NEUROFLOWER_TREE_DEBUG").isEmpty()
-                      || System.getenv("NEUROFLOWER_TREE_DEBUG").equals(mt.getName()))) {
+              if (System.getenv("FAITHFULFLOWER_TREE_DEBUG") != null
+                  && (System.getenv("FAITHFULFLOWER_TREE_DEBUG").isEmpty()
+                      || System.getenv("FAITHFULFLOWER_TREE_DEBUG").equals(mt.getName()))) {
                 System.err.println("TREE " + mt.getName() + mt.getDescriptor());
                 dumpStat(root, 0);
               }
@@ -2997,7 +2997,7 @@ public class ClassWriter implements StatementWriter {
       || opcode == CodeConstants.opc_lstore || opcode == CodeConstants.opc_dstore ? 2 : 1;
   }
 
-  /** Developer aid: NEUROFLOWER_TREE_DEBUG=<method name> prints the statement tree before printing. */
+  /** Developer aid: FAITHFULFLOWER_TREE_DEBUG=<method name> prints the statement tree before printing. */
   private static void dumpStat(Statement stat, int depth) {
     StringBuilder line = new StringBuilder();
     for (int i = 0; i < depth; i++) {
@@ -3516,7 +3516,7 @@ public class ClassWriter implements StatementWriter {
       }
     }
     boolean explicit = !fieldLines.contains(lastLine);
-    if (System.getenv("NEUROFLOWER_CTOR_DEBUG") != null) {
+    if (System.getenv("FAITHFULFLOWER_CTOR_DEBUG") != null) {
       System.err.println("ctor " + method.getClassQualifiedName() + method.getDescriptor()
         + " lastPc " + lastPc + " lastLine " + lastLine + " fieldLines " + fieldLines
         + " explicit " + explicit);

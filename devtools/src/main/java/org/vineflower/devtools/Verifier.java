@@ -589,7 +589,7 @@ public final class Verifier {
     if (sites.isEmpty()) {
       return 0;
     }
-    Path dir = Files.createTempDirectory("neuroflower-double-cast");
+    Path dir = Files.createTempDirectory("faithfulflower-double-cast");
     int redundant = 0;
     try {
       String name = source.getFileName().toString();

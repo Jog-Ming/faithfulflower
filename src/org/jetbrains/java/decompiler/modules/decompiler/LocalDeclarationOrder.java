@@ -2674,7 +2674,7 @@ public final class LocalDeclarationOrder {
   }
 
   private static void debug(String method, VarExprent var, String message) {
-    if (System.getenv("NEUROFLOWER_DECLORDER") != null) {
+    if (System.getenv("FAITHFULFLOWER_DECLORDER") != null) {
       System.err.println("declorder " + method + " " + var.getName() + ": " + message);
     }
   }

@@ -488,7 +488,7 @@ public interface IFernflowerPreferences {
     defaults.put(PREFERRED_LINE_LENGTH, "100000");
     defaults.put(BANNER, "");
     // Point users towards reporting bugs if things don't decompile properly
-    defaults.put(ERROR_MESSAGE, "Please report this to the Vineflower issue tracker, at https://github.com/Vineflower/vineflower/issues with a copy of the class file (if you have the rights to distribute it!)");
+    defaults.put(ERROR_MESSAGE, "Please report this to the faithfulflower issue tracker, at https://github.com/Jog-Ming/faithfulflower/issues with a copy of the class file (if you have the rights to distribute it!)");
     defaults.put(UNIT_TEST_MODE, "0");
     defaults.put(DUMP_ORIGINAL_LINES, "0");
     defaults.put(DEBUG_MARKER_EXCEPTIONS, "0");

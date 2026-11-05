@@ -455,7 +455,7 @@ public class SwitchStatement extends Statement {
       && !isPhantom() && (caseGuards.stream().noneMatch(Objects::nonNull) || isPattern())
       && defaultBreakJump < 0 && defaultBody.isEmpty() && joinArm == null && updateArm == null
       && caseJoinArm == null && spilled.isEmpty();
-    if (System.getenv("NEUROFLOWER_SWITCH_DEBUG") != null) {
+    if (System.getenv("FAITHFULFLOWER_SWITCH_DEBUG") != null) {
       SwitchInstruction at = switchInstruction();
       System.err.println("arrow gate " + (RoundTrip.currentMethod() == null ? "?" : RoundTrip.currentMethod().getName())
         + " at=" + (at == null ? -1 : at.startOffset)
@@ -562,7 +562,7 @@ public class SwitchStatement extends Statement {
           if (jump >= 0 && rowEndsAt(armRows.get(i), jump)
               && !declaredScopePast(armRows.get(i), jump, patternSlots)) {
             witness = true;
-          } else if (System.getenv("NEUROFLOWER_SWITCH_DEBUG") != null) {
+          } else if (System.getenv("FAITHFULFLOWER_SWITCH_DEBUG") != null) {
             System.err.println("arrow braced arm " + i + " no witness jump=" + jump);
           }
         } else if (!arrowRuleExpression(arm) && !arrowDefaultBlocks.contains(arm)) {
@@ -593,7 +593,7 @@ public class SwitchStatement extends Statement {
           witness = true;
         }
       }
-      if (System.getenv("NEUROFLOWER_SWITCH_DEBUG") != null) {
+      if (System.getenv("FAITHFULFLOWER_SWITCH_DEBUG") != null) {
         System.err.println("arrow final switch=" + arrowSwitch + " witness=" + witness);
       }
       arrowSwitch = arrowSwitch && witness;
@@ -1185,7 +1185,7 @@ public class SwitchStatement extends Statement {
 
   /** True when the selector's type is a String: the lowering created the switch's temporaries. */
   private static void arrowRefuse(String why) {
-    if (System.getenv("NEUROFLOWER_SWITCH_DEBUG") != null) {
+    if (System.getenv("FAITHFULFLOWER_SWITCH_DEBUG") != null) {
       System.err.println("arrow refused: " + why);
     }
   }
@@ -2136,7 +2136,7 @@ public class SwitchStatement extends Statement {
     for (int i = 0; i < size; i++) {
       order.add(i);
     }
-    boolean debugSwitch = System.getenv("NEUROFLOWER_SWITCH_DEBUG") != null;
+    boolean debugSwitch = System.getenv("FAITHFULFLOWER_SWITCH_DEBUG") != null;
     if (debugSwitch) {
       System.err.println("switch order called size=" + size + " option="
         + RoundTrip.selector("rt-switch-order"));
@@ -2175,7 +2175,7 @@ public class SwitchStatement extends Statement {
       }
       int line = table.findLineNumber(entryOffset(i));
       if (line < 0) {
-        if (System.getenv("NEUROFLOWER_SWITCH_DEBUG") != null) {
+        if (System.getenv("FAITHFULFLOWER_SWITCH_DEBUG") != null) {
           System.err.println("switch order skipped, line " + line + " case " + i + " of " + size);
         }
         return order;
@@ -2189,7 +2189,7 @@ public class SwitchStatement extends Statement {
     // statement the source wrote after the whole switch — a lambda's tail return, say — onto a
     // group, and the written order is then not one this printer can reproduce.
     if (!spansRunForward(order, table, switchEnd)) {
-      if (System.getenv("NEUROFLOWER_SWITCH_DEBUG") != null) {
+      if (System.getenv("FAITHFULFLOWER_SWITCH_DEBUG") != null) {
         System.err.println("switch order spans overlap " + method.getName() + method.getDescriptor()
           + " lines " + java.util.Arrays.toString(lines) + " -> " + order);
       }
@@ -2199,7 +2199,7 @@ public class SwitchStatement extends Statement {
       }
       return unchanged;
     }
-    if (System.getenv("NEUROFLOWER_SWITCH_DEBUG") != null) {
+    if (System.getenv("FAITHFULFLOWER_SWITCH_DEBUG") != null) {
       System.err.println("switch order " + method.getName() + method.getDescriptor() + " lines "
         + java.util.Arrays.toString(lines) + " -> " + order);
     }

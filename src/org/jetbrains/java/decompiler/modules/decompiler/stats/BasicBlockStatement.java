@@ -88,7 +88,7 @@ public final class BasicBlockStatement extends Statement {
       tb.appendIndent(indent).append("label").append(id).append(':').append("// $VF: Invalid label!").appendLineSeparator();
     }
 
-    if ("off".equals(System.getenv("NEUROFLOWER_BLOCKSCOPES"))) {
+    if ("off".equals(System.getenv("FAITHFULFLOWER_BLOCKSCOPES"))) {
       tb.append(ExprProcessor.listToJava(exprents, indent));
       return tb;
     }

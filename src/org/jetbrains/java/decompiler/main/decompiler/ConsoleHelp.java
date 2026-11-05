@@ -13,7 +13,7 @@ import java.util.stream.Collectors;
 
 public class ConsoleHelp {
   private static final String[] DEFAULT_HELP = {
-    "=== Vineflower Decompiler " + ConsoleDecompiler.version() + " ===",
+    "=== faithfulflower Decompiler " + ConsoleDecompiler.version() + " ===",
     "",
     "--- Command-line options ---",
     "-h, --help: Print this help screen",
@@ -107,7 +107,7 @@ public class ConsoleHelp {
   }
 
   static void printPlugins() {
-    System.out.println("=== Vineflower Decompiler " + ConsoleDecompiler.version() + " ===");
+    System.out.println("=== faithfulflower Decompiler " + ConsoleDecompiler.version() + " ===");
     System.out.println();
 
     PluginContext ctx = new PluginContext();

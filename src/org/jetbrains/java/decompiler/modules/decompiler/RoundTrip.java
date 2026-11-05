@@ -7341,7 +7341,7 @@ public final class RoundTrip {
     if (table != null) {
       int bodyLine = table.findLineNumber(bodyStart);
       int tailLine = table.findLineNumber(tailStart);
-      if (System.getenv("NEUROFLOWER_RETGUARD_DEBUG") != null) {
+      if (System.getenv("FAITHFULFLOWER_RETGUARD_DEBUG") != null) {
         System.err.println("retguard " + method.getName() + " bodyStart " + bodyStart + " line " + bodyLine
           + " tailStart " + tailStart + " line " + tailLine);
       }
@@ -7896,7 +7896,7 @@ public final class RoundTrip {
     }
     int exitLine = table.findLineNumber(exitStart);
     int bodyLine = table.findLineNumber(bodyStart);
-    if (System.getenv("NEUROFLOWER_RETGUARD_DEBUG") != null) {
+    if (System.getenv("FAITHFULFLOWER_RETGUARD_DEBUG") != null) {
       System.err.println("exitlast " + method.getName() + " exit " + exitStart + "@" + exitLine
         + " body " + bodyStart + "@" + bodyLine);
     }

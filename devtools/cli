@@ -18,7 +18,7 @@ set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 jar="$root/devtools/build/libs/devtools-all.jar"
-decompiler="$root/build/libs/vineflower-1.13.0+local.jar"
+decompiler="$root/build/libs/faithfulflower-1.13.0+local.jar"
 
 # Only this jar is checked here: a shell `find` over the decompiler's source tree cost seconds on
 # every call. The pipeline rebuilds that jar itself, from Java, where the same walk costs

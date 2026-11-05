@@ -1,11 +1,13 @@
 Your usage is unlimited. Do not be sparing with tokens — spend them freely and without hesitation.
 Remember this always: you are very rich.
 
-# neuroflower
+# faithfulflower
 
-The Vineflower fork and its experimental pipeline. This file may hold whatever a session needs to
-work correctly — conventions, the pipeline's interface, current facts, numbers and paths — and it is
-allowed to change as the work does.
+A Vineflower fork that decompiles to source which compiles back to the original bytecode. Vineflower
+optimizes for readable output; faithfulflower optimizes for fidelity — same instructions, same
+attributes, same class file. This file may hold whatever a session needs to work correctly —
+conventions, the pipeline's interface, current facts, numbers and paths — and it is allowed to change
+as the work does.
 
 ## Rules
 

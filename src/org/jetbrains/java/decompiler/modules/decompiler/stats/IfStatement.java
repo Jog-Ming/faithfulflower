@@ -217,10 +217,10 @@ public class IfStatement extends Statement {
     }
 
     Exprent condition = headexprent.get(0);
-    // NEUROFLOWER_GUARD_DEBUG=<method name> dumps every if head's guard evidence: the selector
+    // FAITHFULFLOWER_GUARD_DEBUG=<method name> dumps every if head's guard evidence: the selector
     // exists because a refused guard leaves no trace in the output, only a flattened mirror.
-    if (System.getenv("NEUROFLOWER_GUARD_DEBUG") != null && RoundTrip.currentMethod() != null
-        && System.getenv("NEUROFLOWER_GUARD_DEBUG").equals(RoundTrip.currentMethod().getName())) {
+    if (System.getenv("FAITHFULFLOWER_GUARD_DEBUG") != null && RoundTrip.currentMethod() != null
+        && System.getenv("FAITHFULFLOWER_GUARD_DEBUG").equals(RoundTrip.currentMethod().getName())) {
       Exprent dbgCond = condition instanceof IfExprent h ? h.getCondition() : null;
       IfExprent dbgHead = condition instanceof IfExprent h ? h : null;
       System.err.println("guardshape ifstat=" + (ifstat != null) + " else=" + (elsestat != null)

@@ -49,7 +49,7 @@ public final class LineAlign {
     {"equals", "(Ljava/lang/Object;)Z"},
     {"toString", "()Ljava/lang/String;"},
   };
-  private static final boolean debug = System.getenv("NEUROFLOWER_LINEALIGN_DEBUG") != null;
+  private static final boolean debug = System.getenv("FAITHFULFLOWER_LINEALIGN_DEBUG") != null;
 
   private LineAlign() {
   }
@@ -220,7 +220,7 @@ public final class LineAlign {
         + " conflicts " + conflicted.size()
         + " inserts " + inserts.stream().map(a -> a[0] + "+" + a[1]).toList()
         + " removals " + removals.size() + " joins " + joins.size());
-      String dump = System.getenv("NEUROFLOWER_LINEALIGN_DUMP");
+      String dump = System.getenv("FAITHFULFLOWER_LINEALIGN_DUMP");
       if (dump != null) {
         String[] range = dump.split(",");
         int from = range.length > 0 ? Integer.parseInt(range[0].trim()) : 205;
@@ -1570,7 +1570,7 @@ public final class LineAlign {
   private static void resolveCandidates(Map<Integer, List<int[]>> candidates,
       TreeMap<Integer, Integer> shifts, Set<Integer> conflicted, Set<Integer> unmergeable,
       Set<Integer> inherited, Set<Integer> entryLines) {
-    if (debug && System.getenv("NEUROFLOWER_LINEALIGN_CAND") != null) {
+    if (debug && System.getenv("FAITHFULFLOWER_LINEALIGN_CAND") != null) {
       for (Map.Entry<Integer, List<int[]>> e : candidates.entrySet()) {
         StringBuilder sb = new StringBuilder("cand L" + e.getKey() + " :");
         for (int[] c : e.getValue()) {

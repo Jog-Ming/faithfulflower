@@ -53,7 +53,7 @@ public final class Workspace {
     if (override != null && !override.isBlank()) {
       return Path.of(override);
     }
-    return root.resolve("build/libs/vineflower-1.13.0+local.jar");
+    return root.resolve("build/libs/faithfulflower-1.13.0+local.jar");
   }
 
   public static String sha256(Path path) {

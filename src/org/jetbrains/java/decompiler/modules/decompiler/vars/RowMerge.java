@@ -129,7 +129,7 @@ public final class RowMerge {
       continuation = continuationRows(bySlot, rawStores, starts);
       continuationRoots = java.util.Collections.newSetFromMap(new IdentityHashMap<>());
       continuationRoots.addAll(continuation.values());
-      if (System.getenv("NEUROFLOWER_ROWMERGE") != null) {
+      if (System.getenv("FAITHFULFLOWER_ROWMERGE") != null) {
         dumpEvidence(mt, rows, rawStores, starts, continuation);
       }
     }
@@ -1194,7 +1194,7 @@ public final class RowMerge {
   }
 
   private static void debug(StructMethod mt, String message) {
-    if (System.getenv("NEUROFLOWER_ROWMERGE") != null) {
+    if (System.getenv("FAITHFULFLOWER_ROWMERGE") != null) {
       System.err.println("rowmerge " + (mt == null ? "?" : mt.getName() + mt.getDescriptor()) + ": " + message);
     }
   }
