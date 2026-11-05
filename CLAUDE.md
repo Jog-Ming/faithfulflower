@@ -125,11 +125,12 @@ touched. The verifier is the only judge: an edit counts only when the tree's `gr
 (`ClassFileTest.everyClassMatchesTheJar`) still passes byte-for-byte; restore any file that breaks
 it before continuing.
 
-- **Priority: raw > unchecked > double.** Fix raw uses first, then unchecked sites, then double
-  casts. Redundant casts and redundant double casts are never an acceptable residue: both must end
-  at zero. A double cast that is load-bearing may remain, and **adding a double cast is allowed
-  when it is the form a raw or unchecked fix needs** — the verifier still decides whether it is
-  load-bearing.
+- **Three single-metric passes per tree, in order: raw, then unchecked, then double.** A pass runs
+  to a fixed point — two consecutive rounds with no viable change — before the next one begins;
+  never mix metrics in one round. Redundant casts and redundant double casts are never an
+  acceptable residue: both must end at zero. Double is the lowest priority, so **adding a double
+  cast is allowed inside the raw or unchecked pass when that is the form the fix needs** — the
+  verifier still decides whether every layer is load-bearing.
 - **Shards are files, disjoint between agents.** Give each agent the site list of its files, the
   rules above and the GT tree; agents edit only their files and report every changed line.
 - **Every round re-examines the whole residue.** Do not narrow a round to the files that changed in
