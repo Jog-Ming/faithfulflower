@@ -17,9 +17,9 @@ and every other attribute.
 ## AI assistance and upstream
 
 faithfulflower is developed with AI assistance: research, implementation and measurement are
-carried out together with Claude (Anthropic's Claude Code). Every decompile is a deterministic
-Vineflower run followed by deterministic passes, and the verifier decides every change byte for
-byte.
+carried out together with Claude (Anthropic's Claude Code), and this README is written by AI. Every
+decompile is a deterministic Vineflower run followed by deterministic passes, and the verifier
+decides every change byte for byte.
 
 This work will not be merged back into Vineflower. The goal is different — faithfulness to the
 original bytecode rather than readable output — and upstream's AI use policy does not permit it.
