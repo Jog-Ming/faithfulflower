@@ -2217,6 +2217,26 @@ public class ExprProcessor implements CodeConstants {
       cast = true;
     }
 
+    // A raw generic argument whose parameter's variable no sibling mentions: javac can only
+    // infer that variable from this value, so the implicit unchecked conversion is the sole
+    // instantiation and no complete one can be named. The source's conversion is writable as a
+    // cast to the all-wildcard instantiation (`(G<?>) raw`), one checked conversion in place of
+    // the call's implicit one. The wildcard form must be nameable; the value's class must be
+    // the parameter's own class.
+    if (!cast && !castAlways && InvocationExprent.inArgument()
+      && InvocationExprent.isDirectArgument(exprent)
+      && (exprent instanceof VarExprent || exprent instanceof FieldExprent)
+      && rightType != null && rightType.type == CodeType.OBJECT && rightType.arrayDim == 0
+      && !rightType.isGeneric() && rightType.value != null
+      && (leftType == null || leftType.value == null || rightType.value.equals(leftType.value))
+      && InvocationExprent.currentArgumentVariableInferredFromValue()) {
+      VarType wildcard = wildcardArgumentInstantiation(rightType.value);
+      if (wildcard != null && isNameableCastInstantiation(wildcard, exprent.getNamedGenerics())) {
+        wildcardOnlyCast = wildcard;
+        cast = true;
+      }
+    }
+
     if (castNull == NullCastType.DONT_CAST_AT_ALL && rightType.type == CodeType.NULL) {
       cast = castAlways;
     }
@@ -2641,6 +2661,22 @@ public class ExprProcessor implements CodeConstants {
     }
     return new GenericType(CodeType.OBJECT, type.arrayDim, type.value, null,
       Collections.unmodifiableList(arguments), GenericType.WILDCARD_NO);
+  }
+
+  /**
+   * The all-wildcard instantiation of a generic class: the one checked form of a raw argument's
+   * conversion. Null when the class records no type parameters.
+   */
+  private static VarType wildcardArgumentInstantiation(String className) {
+    StructClass cls = DecompilerContext.getStructContext().getClass(className);
+    if (cls == null || cls.getSignature() == null || cls.getSignature().fparameters.isEmpty()) {
+      return null;
+    }
+    List<VarType> arguments = new ArrayList<>(cls.getSignature().fparameters.size());
+    for (int i = 0; i < cls.getSignature().fparameters.size(); i++) {
+      arguments.add(null);
+    }
+    return new GenericType(CodeType.OBJECT, 0, className, null, arguments, GenericType.WILDCARD_NO);
   }
 
   /**

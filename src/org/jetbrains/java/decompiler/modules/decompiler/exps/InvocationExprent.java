@@ -3458,6 +3458,99 @@ public class InvocationExprent extends Exprent {
   }
 
   /**
+   * Whether {@code exprent} is exactly the argument currently being printed, not a value nested
+   * inside a lambda or another argument's expression.
+   */
+  public static boolean isDirectArgument(Exprent exprent) {
+    InvocationExprent call = ARGUMENT_CALL.get();
+    Integer index = ARGUMENT_INDEX.get();
+    return call != null && index != null && index >= 0 && index < call.lstParameters.size()
+      && call.lstParameters.get(index) == exprent;
+  }
+
+  /**
+   * Whether this argument alone fixes its parameter's type variable: no sibling parameter
+   * mentions it, no other type variable's bound does either, and the call's result does not
+   * nest it. {@code setValue(Property<T>, V extends T)} infers T through a sibling's bound, and
+   * a result like {@code PendingTags<T>} needs T at a proper instantiation; in both cases no
+   * single wildcard instantiation can be named. A bare {@code T} result keeps the capture the
+   * wildcard argument produces, which is what the context sees anyway.
+   */
+  public static boolean currentArgumentVariableInferredFromValue() {
+    InvocationExprent call = ARGUMENT_CALL.get();
+    Integer index = ARGUMENT_INDEX.get();
+    if (call == null || index == null || call.desc == null || call.desc.getSignature() == null) {
+      return false;
+    }
+    GenericMethodDescriptor signature = call.desc.getSignature();
+    if (signature.typeParameters.isEmpty() || signature.parameterTypes.size() != call.descriptor.params.length
+      || index < 0 || index >= signature.parameterTypes.size()) {
+      return false;
+    }
+    List<String> mentioned = new ArrayList<>();
+    for (String name : signature.typeParameters) {
+      if (mentionsTypeVariable(signature.parameterTypes.get(index), List.of(name))) {
+        mentioned.add(name);
+      }
+    }
+    if (mentioned.isEmpty()) {
+      return false;
+    }
+    for (int i = 0; i < signature.parameterTypes.size(); i++) {
+      if (i != index && mentionsTypeVariable(signature.parameterTypes.get(i), mentioned)) {
+        return false;
+      }
+    }
+    for (int p = 0; p < signature.typeParameters.size(); p++) {
+      if (mentioned.contains(signature.typeParameters.get(p))
+        || p >= signature.typeParameterBounds.size()) {
+        continue;
+      }
+      for (VarType bound : signature.typeParameterBounds.get(p)) {
+        if (mentionsTypeVariable(bound, mentioned)) {
+          return false;
+        }
+      }
+    }
+    for (String name : mentioned) {
+      if (mentionsTypeVariable(signature.returnType, List.of(name))
+        && !isBareTypeVariable(signature.returnType, name)) {
+        return false;
+      }
+    }
+    // The all-wildcard instantiation must itself satisfy the parameter: every direct argument
+    // position must accept `?`, i.e. be a bare type variable (which then binds the capture) or
+    // an unbounded wildcard. A nested occurrence (`ResourceKey<? extends Registry<? extends T>>`)
+    // has a different shape, and the wildcard is not assignable there.
+    return acceptsWildcardInstantiation(signature.parameterTypes.get(index));
+  }
+
+  /** Whether every direct argument position of {@code declared} accepts an unbounded wildcard. */
+  private static boolean acceptsWildcardInstantiation(VarType declared) {
+    if (!(declared instanceof GenericType generic) || generic.getWildcard() != GenericType.WILDCARD_NO
+      || generic.getArguments().isEmpty()) {
+      return false;
+    }
+    for (VarType argument : generic.getArguments()) {
+      if (argument == null) {
+        continue;
+      }
+      if (argument.type != CodeType.GENVAR || argument.arrayDim != 0
+        || argument instanceof GenericType nested && nested.getWildcard() != GenericType.WILDCARD_NO) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /** Whether {@code type} is exactly the type variable {@code name}. */
+  private static boolean isBareTypeVariable(VarType type, String name) {
+    return type != null && type.type == CodeType.GENVAR && type.arrayDim == 0
+      && name.equals(type.value)
+      && (!(type instanceof GenericType generic) || generic.getWildcard() == GenericType.WILDCARD_NO);
+  }
+
+  /**
    * Whether the call whose argument is being printed lets its parameter's type variable widen to
    * the value's wildcard form: every sibling use of the variable is an input position of a
    * functional interface's method, whose capture the wildcard's subtype satisfies. A use in the
