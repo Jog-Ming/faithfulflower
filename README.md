@@ -15,6 +15,16 @@ and every other attribute.
   to the input — instead of being re-derived from bytecode.
 - There is no machine learning anywhere in the pipeline.
 
+## AI assistance and upstream
+
+faithfulflower is developed with AI assistance: research, implementation and measurement are
+carried out together with Claude (Anthropic's Claude Code). The decompiler itself contains no
+machine learning — every decompile is a deterministic Vineflower run followed by deterministic
+passes, and the verifier decides every change byte for byte.
+
+This work will not be merged back into Vineflower. The goal is different — faithfulness to the
+original bytecode rather than readable output — and upstream's AI use policy does not permit it.
+
 ## Status
 
 For Minecraft 1.21.11 and the 26.1, 26.2, 26.3 and 26.4 snapshot Java editions, every class
