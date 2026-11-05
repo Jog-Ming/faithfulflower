@@ -10,6 +10,7 @@ import org.jetbrains.java.decompiler.code.Instruction;
 import org.jetbrains.java.decompiler.code.InstructionSequence;
 import org.jetbrains.java.decompiler.code.MethodProperties;
 import org.jetbrains.java.decompiler.code.cfg.BasicBlock;
+import org.jetbrains.java.decompiler.main.ClassesProcessor.ClassNode;
 import org.jetbrains.java.decompiler.main.DecompilerContext;
 import org.jetbrains.java.decompiler.main.plugins.PluginContext;
 import org.jetbrains.java.decompiler.main.rels.ClassWrapper;
@@ -1693,6 +1694,43 @@ public class ExprProcessor implements CodeConstants {
       && value.value != null && value.value.equals(expected.value);
   }
 
+  /**
+   * Whether two instantiations of the same invariant generic class disagree at an argument
+   * position. Two different types never assign across an invariant position, so a source that
+   * compiled converted the value; a wildcard or a capture at a differing position is not that
+   * kind of difference (the source may have written the wildcard to widen the value), so only a
+   * position whose two sides are nameable types that differ counts.
+   */
+  public static boolean invariantInstantiationsDiffer(VarType parameter, VarType value) {
+    if (!(parameter instanceof GenericType parameterType) || !(value instanceof GenericType valueType)
+      || parameterType.getWildcard() != GenericType.WILDCARD_NO
+      || valueType.getWildcard() != GenericType.WILDCARD_NO
+      || parameter.type != CodeType.OBJECT || value.type != CodeType.OBJECT
+      || parameter.arrayDim != 0 || value.arrayDim != 0
+      || parameter.value == null || !parameter.value.equals(value.value)) {
+      return false;
+    }
+    List<VarType> parameterArguments = parameterType.getArguments();
+    List<VarType> valueArguments = valueType.getArguments();
+    if (parameterArguments.size() != valueArguments.size()) {
+      return false;
+    }
+    boolean differs = false;
+    for (int i = 0; i < parameterArguments.size(); i++) {
+      VarType left = parameterArguments.get(i);
+      VarType right = valueArguments.get(i);
+      if (sameType(left, right)) {
+        continue;
+      }
+      if (isWildcardArgument(left) || isWildcardArgument(right)
+        || hasWildcard(left) || hasWildcard(right)) {
+        return false;
+      }
+      differs = true;
+    }
+    return differs;
+  }
+
   public static boolean getCastedExprent(Exprent exprent,
                                          VarType leftType,
                                          TextBuffer buffer,
@@ -1918,13 +1956,37 @@ public class ExprProcessor implements CodeConstants {
       doCastGenerics = false;
     }
 
+    // A static generic factory chain whose result the printer already types exactly as the
+    // context target still prints a generic cast at every leaf argument the target's variable
+    // substitution contradicts the argument's recorded type at. Those casts are not conversions
+    // the class file records - their erasures already match - they are the printer showing the
+    // target's substitution. The source wrote one cast around the whole call instead: under it
+    // javac infers the chain from the arguments alone, every leaf takes its argument's recorded
+    // type, and the unbounded-wildcard intermediate makes the conversion unchecked. Print that
+    // cast and re-infer the chain standalone (the cast is not a poly context).
+    boolean hoistedResultCast = false;
+    if (!castAlways && !InvocationExprent.insideOwnArgumentList()
+      && !doCast && !doCastNull && !doCastNarrowing && !doCastGenerics
+      && exprent instanceof InvocationExprent resultCall
+      && resultCall.isStatic() && resultCall.isPolyCall()
+      && leftType instanceof GenericType resultTarget
+      && resultTarget.getWildcard() == GenericType.WILDCARD_NO && resultTarget.arrayDim == 0
+      && resultTarget.value != null
+      && rightType != null && sameErasedType(rightType, leftType)
+      && sameErasedType(resultCall.getDescriptor().ret, leftType)
+      && unboundedClassParameters(resultTarget.value)
+      && hoistCastInstantiationNameable(leftType, exprent.getNamedGenerics())
+      && resultCall.conflictingArgumentCasts() >= 2) {
+      hoistedResultCast = true;
+    }
+
     // An instantiation of X cannot be cast to another instantiation of X whose arguments are
     // provably distinct: javac rejects the conversion outright. In an argument list the printer
     // seeded a type variable from the call's own context and javac infers it again from the
     // value, which is what the original relied on; elsewhere the source widened the value to a
     // wildcard instantiation first, and that intermediate cast is an unchecked one javac accepts.
     boolean castRaw = false;
-    boolean doubleCast = false;
+    boolean doubleCast = hoistedResultCast;
     VarType doubleCastTarget = leftType;
     VarType doubleCastInner = null;
     VarType wildcardOnlyCast = null;
@@ -2340,7 +2402,7 @@ public class ExprProcessor implements CodeConstants {
     // alone, so the target recorded during this pass does not pin its type variables.
     if (cast && exprent instanceof InvocationExprent castCall) {
       castCall.setPrintedUnderCast(true);
-      if (functionalBodyTargetDropped) {
+      if (functionalBodyTargetDropped || hoistedResultCast) {
         // The witness the target-derived pass proved is the callee's own unresolved variable,
         // not a type the source named: infer the call standalone, as the cast context does.
         castCall.reinferUnderCast();
@@ -2949,6 +3011,82 @@ public class ExprProcessor implements CodeConstants {
       }
     }
     return !hasRawTypeArgument(type) && !invalidGenericInstantiation(type);
+  }
+
+  /**
+   * Whether the hoisted result cast may name this instantiation where it is printed. The type
+   * must be a recorded, complete instantiation with every argument nameable; the only difference
+   * from {@link #isNameableCastInstantiation} is that a type variable is looked up through a
+   * nested lambda's source chain, whose synthetic static methods do not declare the enclosing
+   * source method's parameters but whose text sits inside it.
+   */
+  private static boolean hoistCastInstantiationNameable(VarType type, Map<VarType, List<VarType>> named) {
+    if (!(type instanceof GenericType generic) || generic.getWildcard() != GenericType.WILDCARD_NO
+      || type.type != CodeType.OBJECT || type.arrayDim != 0 || type.value == null) {
+      return false;
+    }
+    StructClass cls = DecompilerContext.getStructContext().getClass(type.value);
+    if (cls == null || cls.getSignature() == null
+      || generic.getArguments().size() != cls.getSignature().fparameters.size()) {
+      return false;
+    }
+    for (VarType argument : generic.getArguments()) {
+      if (!hoistCastArgumentNameable(argument, named)) {
+        return false;
+      }
+    }
+    return !hasRawTypeArgument(type) && !invalidGenericInstantiation(type);
+  }
+
+  private static boolean hoistCastArgumentNameable(VarType type, Map<VarType, List<VarType>> named) {
+    if (type == null) {
+      return true; // the unbounded wildcard
+    }
+    if (type.type == CodeType.GENVAR) {
+      return hoistTypeVariableNameable(type.value, named);
+    }
+    if (type instanceof GenericType generic) {
+      for (VarType argument : generic.getArguments()) {
+        if (!hoistCastArgumentNameable(argument, named)) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Whether a type variable is nameable at the print point. A lambda body is a synthetic static
+   * method, but its source text sits in the enclosing method; a lambda nested in another lambda
+   * chains through the synthetic methods, so the declaring source method can be several levels up.
+   */
+  private static boolean hoistTypeVariableNameable(String name, Map<VarType, List<VarType>> named) {
+    if (name == null) {
+      return false;
+    }
+    VarType variable = GenericType.parse("T" + name + ";");
+    if (!named.containsKey(variable)) {
+      return false;
+    }
+    if (Exprent.isTypeVariableNameable(variable, named)) {
+      return true;
+    }
+    ClassNode current = DecompilerContext.getContextProperty(DecompilerContext.CURRENT_CLASS_NODE);
+    if (current == null || current.type != ClassNode.Type.LAMBDA) {
+      return false;
+    }
+    for (ClassNode node = current; node != null && node.parent != null; node = node.parent) {
+      String enclosing = node.sourceEnclosingMethod != null ? node.sourceEnclosingMethod : node.enclosingMethod;
+      if (enclosing == null || node.parent.getWrapper() == null) {
+        continue;
+      }
+      MethodWrapper host = node.parent.getWrapper().getMethods().getWithKey(enclosing);
+      if (host != null && host.methodStruct != null && host.methodStruct.getSignature() != null
+        && host.methodStruct.getSignature().typeParameters.contains(name)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private static boolean nameableCastArgument(VarType type, Map<VarType, List<VarType>> named) {

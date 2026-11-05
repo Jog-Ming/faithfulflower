@@ -822,6 +822,72 @@ public class InvocationExprent extends Exprent {
     }
   }
 
+  /**
+   * The number of argument positions in this call tree whose printed generic cast exists only
+   * because the recorded context target fixed a type variable of the call to an instantiation
+   * the argument's own record contradicts. A static factory chain pushes its target down through
+   * every nested call, so the leaves carry casts the source did not write; recursing through
+   * call arguments collects them all.
+   */
+  public int conflictingArgumentCasts() {
+    return conflictingArgumentCasts(new HashSet<>());
+  }
+
+  private int conflictingArgumentCasts(Set<InvocationExprent> seen) {
+    if (!seen.add(this) || desc == null || desc.getSignature() == null) {
+      return 0;
+    }
+    GenericMethodDescriptor signature = desc.getSignature();
+    if (lstParameters.size() != signature.parameterTypes.size()) {
+      // A synthetic or vararg parameter list is not modelled here; the site is not a plain
+      // one-to-one argument list and the count cannot be trusted.
+      return 0;
+    }
+    int count = 0;
+    for (int i = 0; i < lstParameters.size(); i++) {
+      Exprent argument = lstParameters.get(i);
+      if (argument instanceof InvocationExprent call) {
+        count += call.conflictingArgumentCasts(seen);
+      } else if (ExprProcessor.contextIndependentValue(argument)
+        && targetFixedVariableContradiction(signature, signature.parameterTypes.get(i), argument)) {
+        count++;
+      }
+    }
+    return count;
+  }
+
+  /**
+   * Whether the recorded context target fixed one of the called method's type variables to an
+   * instantiation that contradicts the argument's own recorded type at an invariant position.
+   * Such a cast is the printer's display of the target's substitution, not a conversion the
+   * source wrote: without the target javac infers the variable from the argument itself. A
+   * binding a sibling argument produced is not the target's, however: it is the printer's own
+   * inference from the argument list, and an enclosing cast would not remove it.
+   */
+  private boolean targetFixedVariableContradiction(GenericMethodDescriptor signature, VarType declared,
+                                                   Exprent argument) {
+    if (signature.returnType == null || inferredUpperBound == null) {
+      return false;
+    }
+    VarType parameter = declared.remap(genericsMap);
+    VarType recorded = argument.getInferredExprType(null);
+    if (!ExprProcessor.invariantInstantiationsDiffer(parameter, recorded)) {
+      return false;
+    }
+    Map<VarType, VarType> targetBindings = new HashMap<>();
+    gatherGenerics(inferredUpperBound, signature.returnType, targetBindings);
+    for (String variable : signature.typeParameters) {
+      VarType name = GenericType.parse("T" + variable + ";");
+      VarType printed = genericsMap.get(name);
+      if (!mentionsTypeVariable(declared, name) || printed == null
+        || !sameTypeExact(printed, targetBindings.get(name))) {
+        continue;
+      }
+      return true;
+    }
+    return false;
+  }
+
   private VarType inferExprType(VarType upperBound) {
     // Printing re-infers the same call with a different target than the one it was first inferred
     // against: an enclosing chain hands its receiver only its own still-open variables. Each pass
