@@ -26,9 +26,10 @@ original bytecode rather than readable output — and upstream's AI use policy d
 
 ## Status
 
-For Minecraft 1.21.11 and the 26.1, 26.2, 26.3 and 26.4 snapshot Java editions, every class
-decompiles, compiles and verifies identical (`fully == classes`, `missing == 0`), and the quality
-counters (raw uses, double casts, unchecked conversions) match the corresponding ground-truth tree.
+For Minecraft 1.21.11 and the 26.1, 26.2 and 26.3 releases plus 26.4 snapshots 1 through 5, every
+class decompiles, compiles and verifies identical (`fully == classes`, `missing == 0`), and the
+quality counters (raw uses, double casts, unchecked conversions) match the corresponding
+ground-truth tree.
 
 ## Use
 
