@@ -118,6 +118,36 @@ loop runs on, not a repair, and the family rules do not apply to it.
    token pair is what makes a blocked family actionable later; "the decompiler cannot do this" is
    not a report.
 
+## GT warning campaigns
+
+The ground-truth trees are optimized with subagents in file shards, before the decompiler output is
+touched. The verifier is the only judge: an edit counts only when the tree's `gradlew test`
+(`ClassFileTest.everyClassMatchesTheJar`) still passes byte-for-byte; restore any file that breaks
+it before continuing.
+
+- **Priority: raw > unchecked > double.** Fix raw uses first, then unchecked sites, then double
+  casts. Redundant casts and redundant double casts are never an acceptable residue: both must end
+  at zero. A double cast that is load-bearing may remain, and **adding a double cast is allowed
+  when it is the form a raw fix needs** — the verifier still decides whether it is load-bearing.
+- **Shards are files, disjoint between agents.** Give each agent the site list of its files, the
+  rules above and the GT tree; agents edit only their files and report every changed line.
+- **Every round re-examines the whole residue.** Do not narrow a round to the files that changed in
+  the previous one. A shard may be dropped only after two consecutive rounds produce no viable
+  change.
+- **Allowed rewrites**: delete a cast whose declared parameter or target already accepts the value;
+  write an implicit raw→parameterized conversion as an explicit cast (2 diagnostics → 1); hoist
+  branch, arm and ternary casts to the result (N → 1); replace a cast with a type witness or a
+  diamond; move a nested cast's widening to the receiver; add a double cast where a raw fix needs
+  it.
+- **Forbidden**: `@SuppressWarnings`; printing a raw or erased type, or `var`; intersection-type
+  casts (`(X & I)`) that merely silence javac; deleting a load-bearing cast so the source stops
+  compiling; pure parenthesis or formatting workarounds.
+- **Wave gate**: merge the shards, run `gradlew test` and `devtools/cli score <version> --tree
+  <GT>/src/main/java` with the campaign's listing flag; restore any file that lowers an attribute.
+  Keep partial batches from dead agents and verify them rather than discarding them.
+- Subagent briefs name only approval-free paths and commands; a step that would prompt the user is
+  skipped and recorded.
+
 ## devtools/cli
 
 The only entry point for the experiment pipeline. Each version runs in its own process and is
