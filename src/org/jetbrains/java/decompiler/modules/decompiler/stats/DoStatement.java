@@ -417,8 +417,7 @@ public class DoStatement extends Statement {
   private void appendLoopClose(TextBuffer buf, int indent) {
     int back = RoundTrip.backEdgeOffset(this);
     boolean own = false;
-    if (back >= 0 && !buf.hasBytecodeMapping(back) && RoundTrip.hasLineEntryAt(back)
-        && (!RoundTrip.printsTerminalJump(first) || RoundTrip.selector("loopjoinline"))) {
+    if (back >= 0 && !buf.hasBytecodeMapping(back) && RoundTrip.hasLineEntryAt(back)) {
       own = RoundTrip.armDeclaresOwnLocal(first, back);
       if (!own && buf.lastTokenChar() == '}') {
         buf.addBytecodeMappingAtLastToken(back);

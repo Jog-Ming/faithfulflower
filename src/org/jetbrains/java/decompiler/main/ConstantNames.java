@@ -2080,7 +2080,7 @@ public final class ConstantNames {
       // cannot have entered an entry the pool already holds below the reference.
       boolean ownNaming = owner.equals(cls.qualifiedName) && i < writeStart
         && (ownProven || ownChain
-            || (RoundTrip.selector("ownpair") && directUseAfterPair(firstUses, i)));
+            || directUseAfterPair(firstUses, i));
       if (classOperand(cls, indices, i)) {
         continue; // a reference below the pair entered this Class entry as its operand
       }
@@ -2329,8 +2329,7 @@ public final class ConstantNames {
         continue;
       }
       if (key != index + 2 && untrusted.contains(entry.getValue().methodKey())
-          && (key > index || (RoundTrip.selector("untrustedpair")
-              && valuesMethod(entry.getValue().methodKey())))) {
+          && (key > index || valuesMethod(entry.getValue().methodKey()))) {
         // The method's class-file position is not where it was generated (a synthetic lambda is
         // generated with its enclosing method, a record's generated methods after every source
         // method, an enum's synthesized {@code $values} after them), so its first use says
@@ -2847,11 +2846,11 @@ public final class ConstantNames {
           // The printer maps a quoted literal's content, one past the opening quote it adds, and
           // a constant initializer generates no code at all: such a literal may carry no point,
           // leaving the successor's printed point in the same initializer as the only record.
-          int anchor = RoundTrip.selector("valsite") && quoted(text, site.start())
+          int anchor = quoted(text, site.start())
             ? site.start() + 1 : site.start();
           long coordinate = siteCoordinate(rules.placement().spaces(), anchor);
           boolean atValue = coordinate == valueSite.naming();
-          if (!atValue && RoundTrip.selector("valsite") && coordinate == NO_COORDINATE
+          if (!atValue && coordinate == NO_COORDINATE
               && rules.placement().valueRecords().contains(entry.getKey())
               && pairedInitializer(text, rules.placement().spaces(), rules.placement().spans(),
               site.start(), valueSite.at())) {
@@ -2936,7 +2935,7 @@ public final class ConstantNames {
               continue; // before the previous entry's first use; the naming would move it
             }
           }
-          else if (RoundTrip.selector("valsite") && pair.successorKey() != null
+          else if (pair.successorKey() != null
               && rules.placement().valueRecords().contains(entry.getKey())
               && pairedInitializer(text, rules.placement().spaces(), rules.placement().spans(),
               site.start(), pair.successorAt())) {
@@ -3023,9 +3022,6 @@ public final class ConstantNames {
    * recorded and does not matter: naming any constant of the owner enters the same pair.
    */
   private static void bareSites(String text, List<int[]> spans, Rules rules, List<Site> sites) {
-    if (!org.jetbrains.java.decompiler.modules.decompiler.RoundTrip.selector("barepairs")) {
-      return;
-    }
     if (rules.placement().bares().isEmpty() || rules.placement().pairs() == null) {
       return;
     }
@@ -3233,7 +3229,7 @@ public final class ConstantNames {
    */
   private static Site nestedPrefixSite(String text, List<int[]> spans, String owner, Rules rules,
                                        StructClass cls, boolean last) {
-    if (!RoundTrip.selector("nestedprefix") || rules.earlyNested().isEmpty()
+    if (rules.earlyNested().isEmpty()
         || !nestOf(owner).equals(nestOf(cls.qualifiedName))) {
       return null; // the owner's simple name must be in scope at the site
     }
@@ -4176,7 +4172,7 @@ public final class ConstantNames {
    */
   private static void conditionOperandSites(String text, List<int[]> spans, Rules rules,
                                             List<Site> sites) {
-    if (!RoundTrip.selector("condoperand") || rules.placement().pairs() == null
+    if (rules.placement().pairs() == null
         || rules.placement().pairs().isEmpty()) {
       return;
     }
@@ -4520,11 +4516,9 @@ public final class ConstantNames {
           if (pair.lowerAt() >= 0 && start <= pair.lowerAt()) {
             continue;
           }
-          if (RoundTrip.selector("argorder")) {
-            long sitePoint = siteCoordinate(placement.spaces(), start);
-            if (sitePoint != NO_COORDINATE && sitePoint <= pair.after()) {
-              continue;
-            }
+          long sitePoint = siteCoordinate(placement.spaces(), start);
+          if (sitePoint != NO_COORDINATE && sitePoint <= pair.after()) {
+            continue;
           }
         }
         else {
@@ -4749,7 +4743,7 @@ public final class ConstantNames {
     long lower = sameRank && pair.successorKey() == null ? pair.after() : pair.lower();
     if (pair.open() >= 0 && sameRank) {
       boolean inArgs = position > pair.open() && position < pair.close();
-      if (inArgs && RoundTrip.selector("argorder")) {
+      if (inArgs) {
         // Arguments are generated left to right, so the last lower entry's use bounds a site in
         // the call's own argument list exactly as it bounds one before the call: a naming ahead
         // of that use would enter the owner's Class ahead of an entry the pair follows. The
@@ -7054,12 +7048,12 @@ public final class ConstantNames {
         long value = Long.parseLong(key.substring(bar + 1));
         return negative ? value == 0L : value == 0L || value == 1L;
       }
-      if (RoundTrip.selector("immediatefp") && key.startsWith(VariableType.FLOAT.name() + "|")) {
+      if (key.startsWith(VariableType.FLOAT.name() + "|")) {
         // javac has fconst_0..2: those fold to an immediate and enter no pool value.
         float value = Float.parseFloat(key.substring(bar + 1));
         return !negative && (value == 0.0F || value == 1.0F || value == 2.0F);
       }
-      if (RoundTrip.selector("immediatefp") && key.startsWith(VariableType.DOUBLE.name() + "|")) {
+      if (key.startsWith(VariableType.DOUBLE.name() + "|")) {
         double value = Double.parseDouble(key.substring(bar + 1));
         return !negative && (value == 0.0 || value == 1.0);
       }
@@ -7344,7 +7338,7 @@ public final class ConstantNames {
       || owner.equals("java/lang/runtime/ObjectMethods")
       || owner.equals("java/lang/runtime/SwitchBootstraps")
       || owner.startsWith("java/lang/constant/")
-        && !(RoundTrip.selector("constantdescs") && owner.equals("java/lang/constant/ConstantDescs"));
+        && !owner.equals("java/lang/constant/ConstantDescs");
   }
 
   private static void candidate(Map<String, List<Constant>> map, String key, Constant constant) {
@@ -8927,7 +8921,7 @@ public final class ConstantNames {
       ? null : placement.values().get(constant.owner());
     PairSite pair = placement == null || placement.pairs() == null
       ? null : placement.pairs().get(constant.owner());
-    if (!lexical && RoundTrip.selector("fieldchain") && pair != null && pair.nextClass() >= 0
+    if (!lexical && pair != null && pair.nextClass() >= 0
         && placement.prefix() != null && placement.prefix().contains(constant.owner())
         && !placement.earlyOwners().contains(constant.owner())) {
       // The pool opens with adjacent Class pairs, so javac entered this owner's name and the next
@@ -9894,7 +9888,7 @@ public final class ConstantNames {
     Integer ownIndex = indices.get(own.qualifiedName);
     Integer superIndex = own.superClass == null ? null : indices.get(own.superClass.getString());
     if (own.superClass != null && owner.equals(own.superClass.getString())
-        && !(RoundTrip.selector("superdead") && opensThePool(superIndex))
+        && !opensThePool(superIndex)
         && !opensThePool(ownIndex)) {
       // The superclass's Class entry is entered when the class is set up, before any folded
       // naming, and a constant use the generation resolves enters it at that code point; neither
@@ -10138,8 +10132,7 @@ public final class ConstantNames {
     // A type with no constant of its own can still have been named through an inherited one:
     // `Sub.INHERITED` resolves the subclass's Class entry and folds the field. The field's
     // accessibility is the declaring class's, and the qualifier is the named subclass.
-    for (InheritedConstant inherited : RoundTrip.selector("inheriteddead")
-        ? inheritedConstants(cls) : List.<InheritedConstant>of()) {
+    for (InheritedConstant inherited : inheritedConstants(cls)) {
       if (inherited.declaring() == cls || !(inherited.value() instanceof Number number)) {
         continue;
       }

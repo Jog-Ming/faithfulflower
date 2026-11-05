@@ -77,7 +77,7 @@ public final class RowMerge {
    *                 variables, synchronized monitors); they have no declaration to remove
    */
   public static void merge(VarProcessor varproc, RootStatement root, StructMethod mt, Set<Integer> implicit) {
-    if (!RoundTrip.selector("rowmerge") || varproc == null || root == null || mt == null || !varproc.hasLVT()) {
+    if (varproc == null || root == null || mt == null || !varproc.hasLVT()) {
       return;
     }
     StructLocalVariableTableAttribute table = mt.getLocalVariableAttr();

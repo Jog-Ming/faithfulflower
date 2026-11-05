@@ -173,8 +173,7 @@ public class SwitchExprent extends Exprent {
       // label whose binding the source wrote on the next line leaves the test on the case line
       // and puts the binding, the arrow and the body on the later one. A constant label carries
       // no test of its own, and its bitset names the comparison's instruction, not its text.
-      if (simple && RoundTrip.selector("arm-body-line")
-          && lastLabel instanceof FunctionExprent labelFunction
+      if (simple && lastLabel instanceof FunctionExprent labelFunction
           && labelFunction.getFuncType() == FunctionExprent.FunctionType.INSTANCEOF
           && RoundTrip.armBodyStartsLater(lastLabel)) {
         buf.appendLineSeparator().appendIndent(indent + 1);
@@ -250,7 +249,7 @@ public class SwitchExprent extends Exprent {
     for (int i = 0; i < count; i++) {
       order.add(i);
     }
-    if (!RoundTrip.selector("switchorder") || count < 2) {
+    if (count < 2) {
       return order;
     }
 
@@ -521,7 +520,7 @@ public class SwitchExprent extends Exprent {
    * coercion, not something the source wrote. Printing the value lets javac put it back.
    */
   private Exprent bareArmValue(Exprent content, VarType target) {
-    if (target == null || !RoundTrip.selector("switchbare") || !RoundTrip.isTypeVariableTarget(target)
+    if (target == null || !RoundTrip.isTypeVariableTarget(target)
         || !(content instanceof FunctionExprent cast)
         || cast.getFuncType() != FunctionExprent.FunctionType.CAST
         || cast.getLstOperands().isEmpty()

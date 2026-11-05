@@ -525,8 +525,7 @@ public class IfStatement extends Statement {
         // ends with it: a local whose last use is the arm's last instruction ends there whether
         // or not the source braced it, and the row order alone says which scope was nested. A
         // real block's rows are written ahead of every enclosing row that closes with the arm.
-        boolean braces = RoundTrip.selector("bareblock")
-            && RoundTrip.runWasBraced(ifstat, RoundTrip.lastEnd(ifstat));
+        boolean braces = RoundTrip.runWasBraced(ifstat, RoundTrip.lastEnd(ifstat));
         if (braces) {
           buf.appendIndent(indent).append("{").appendLineSeparator();
         }
@@ -823,7 +822,7 @@ public class IfStatement extends Statement {
    * break is illegal. False, printing nothing, when the else stays.
    */
   private boolean appendFlatElse(TextBuffer buf, int indent, Statement thenArm, Statement elseArm) {
-    if (!RoundTrip.selector("elseflat") || RoundTrip.isArmOpen(this)
+    if (RoundTrip.isArmOpen(this)
         || !RoundTrip.armWasFlat(elseArm)) {
       return false;
     }
@@ -1094,7 +1093,7 @@ public class IfStatement extends Statement {
     if (printElseIfArm(buf, indent, arm, first)) {
       return true;
     }
-    if (owner == null || !RoundTrip.selector("elseifchain")
+    if (owner == null
         || !(arm instanceof SequenceStatement sequence)
         || !sequence.varDefinitions.isEmpty() || sequence.getStats().size() < 2) {
       return false;
@@ -1173,7 +1172,7 @@ public class IfStatement extends Statement {
    * that arm printed nothing.
    */
   static boolean printElseIfArm(TextBuffer buf, int indent, Statement arm, Statement first) {
-    if (arm instanceof SequenceStatement sequence && RoundTrip.selector("elseifchain")
+    if (arm instanceof SequenceStatement sequence
         && sequence.printsAsChainArm()) {
       appendElseKeyword(buf, indent, first, arm);
       TextBuffer content = printElseIfArmContent(arm, indent);
@@ -1539,10 +1538,6 @@ public class IfStatement extends Statement {
    */
   private boolean printMergedGuards(TextBuffer buf, IfExprent head, int indent) {
     boolean breaks = ifedge.getType() == StatEdge.TYPE_BREAK;
-    // A break guard is a separate shape from the continue's; the selector keeps it switchable.
-    if (breaks && !RoundTrip.selector("breakguard")) {
-      return false;
-    }
     // A break guard's jump is a statement of its own behind a test of its own; an edge that keeps
     // no jump is not that shape, and the complement path below is the continue's own.
     if (breaks && !ifedge.explicit) {

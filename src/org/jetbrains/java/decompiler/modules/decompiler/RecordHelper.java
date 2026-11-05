@@ -362,8 +362,8 @@ public final class RecordHelper {
       // A top-level annotation on a type this class declares itself has to sit on the simple name:
       // written against the qualified name javac records it while the canonical constructor's
       // annotations are laid down, which reorders RuntimeVisibleTypeAnnotations.
-      String memberName = RoundTrip.selector("recsimplename") ? directMemberType(cl, fieldType) : null;
-      if (memberName == null && RoundTrip.selector("typeuse") && topLevelOnly(annos)
+      String memberName = directMemberType(cl, fieldType);
+      if (memberName == null && topLevelOnly(annos)
           && declarationPositionConstructor(cl)
           && fieldType.type == CodeType.OBJECT && fieldType.arrayDim == 0
           && !(fieldType instanceof GenericType)) {

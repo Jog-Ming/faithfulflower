@@ -88,9 +88,6 @@ public final class LocalDeclarationOrder {
    * Only declarations move and every store stays where it printed; no evaluation order changes.
    */
   private static void placeByScope(Statement stat, NameTable names, String method) {
-    if (!RoundTrip.selector("declscope")) {
-      return;
-    }
     if (stat instanceof DoStatement loop) {
       placeAboveLoop(loop, names, method);
     } else if (stat instanceof IfStatement ifStatement) {
@@ -511,9 +508,6 @@ public final class LocalDeclarationOrder {
    */
   private static boolean hoistSwitchArmDeclarations(SwitchStatement switchStatement, NameTable names,
                                                     String method) {
-    if (!RoundTrip.selector("switcharm")) {
-      return false;
-    }
     List<Statement> stats = switchStatement.getStats();
     if (stats.size() < 2) {
       return false;
@@ -671,9 +665,6 @@ public final class LocalDeclarationOrder {
    * source wrote the assignment to w alone, and printing it alone reproduces the target's store.
    */
   private static void collapseAssignedWrappers(Statement root, String method) {
-    if (!RoundTrip.selector("assigntemp")) {
-      return;
-    }
     Map<VarVersionPair, Integer> occurrences = new HashMap<>();
     countOccurrences(root, occurrences);
     collapseAssignedWrappersRec(root, occurrences, method);
@@ -763,9 +754,6 @@ public final class LocalDeclarationOrder {
    * with any such slot is refused.
    */
   private static void hoistReserved(Statement root, VarProcessor varproc, NameTable names, String method) {
-    if (!RoundTrip.selector("declreserved")) {
-      return;
-    }
     hoistReservedRec(root, varproc, names, method);
   }
 
@@ -1006,9 +994,6 @@ public final class LocalDeclarationOrder {
    * declaration moves; the value is still computed where it was printed.
    */
   private static void hoistNestedOut(Statement seq, VarProcessor varproc, NameTable names, String method) {
-    if (!RoundTrip.selector("decllvt")) {
-      return;
-    }
     int maxSlot = -1;
     for (Exprent definition : seq.getVarDefinitions()) {
       maxSlot = Math.max(maxSlot, targetSlot(definition));
@@ -1176,9 +1161,6 @@ public final class LocalDeclarationOrder {
    * encloses the variable's store.
    */
   private static void hoistToPrintedOrder(Statement root, VarProcessor varproc, NameTable names, String method) {
-    if (!RoundTrip.selector("decllvt")) {
-      return;
-    }
     List<DeclPos> order = new ArrayList<>();
     collectPrintedOrder(root, order);
     List<DeclPos> candidates = new ArrayList<>();

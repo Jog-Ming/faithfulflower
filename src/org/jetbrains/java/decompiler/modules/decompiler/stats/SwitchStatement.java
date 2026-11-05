@@ -232,7 +232,7 @@ public class SwitchStatement extends Statement {
     // counter, so a nested string switch in one of its arms cannot have shared the block: the
     // nested switch would have consumed the counter first and this one would be named `s2$`. The
     // arm was a naked block.
-    if (RoundTrip.selector("switcharmblock") && switch_type != null
+    if (switch_type != null
         && switch_type.equals(VarType.VARTYPE_STRING)) {
       SwitchInstruction instruction = switchInstruction();
       int switchOffset = instruction == null ? -1 : instruction.startOffset;
@@ -335,7 +335,6 @@ public class SwitchStatement extends Statement {
     // printing the label there is what a recompiled table would take as the default's target.
     // Whether the source wrote a trailing `default: break;` is the rule below's decision.
     boolean defaultIsJoin = switchEnd >= 0 && defaultTargetOffset() == switchEnd
-      && RoundTrip.selector("switchbreak") && RoundTrip.selector("switchdefault")
       && !yields && !isPattern() && caseGuards.stream().noneMatch(Objects::nonNull);
 
     // The default arm can also be the block the source wrote after the switch: the default target
@@ -387,8 +386,7 @@ public class SwitchStatement extends Statement {
     // where the target's block sits among the arms: at the table's default offset, not at the join
     // the jump lands on.
     int defaultBreakJump = -1;
-    if (switchEnd >= 0 && !yields && !isPattern() && caseGuards.stream().noneMatch(Objects::nonNull)
-        && RoundTrip.selector("switchbreak") && RoundTrip.selector("switchdefault")) {
+    if (switchEnd >= 0 && !yields && !isPattern() && caseGuards.stream().noneMatch(Objects::nonNull)) {
       int target = defaultTargetOffset();
       // The jump has to stand among the arm blocks: one past all of them is the switch's own
       // join, the instruction every arm falls through to, not a group the source wrote.
@@ -417,7 +415,6 @@ public class SwitchStatement extends Statement {
     // chopping the slots instead.
     if (defaultBreakJump < 0 && switchEnd >= 0 && !yields && !isPattern()
         && caseGuards.stream().noneMatch(Objects::nonNull)
-        && RoundTrip.selector("switchbreak") && RoundTrip.selector("switchdefault")
         && defaultTargetOffset() == switchEnd) {
       SwitchInstruction instruction = switchInstruction();
       int switchOffset = instruction == null ? -1 : instruction.startOffset;
@@ -451,7 +448,7 @@ public class SwitchStatement extends Statement {
     // join jump has no table entry was written as an arrow rule. Javac allows one kind per
     // switch, so every arm converts or none does; a braced rule's jump carries the closing
     // brace's line instead, and the brace is printed onto that line.
-    boolean arrowSwitch = RoundTrip.selector("switcharrow") && !yields && !orderUnknown
+    boolean arrowSwitch = !yields && !orderUnknown
       && !isPhantom() && (caseGuards.stream().noneMatch(Objects::nonNull) || isPattern())
       && defaultBreakJump < 0 && defaultBody.isEmpty() && joinArm == null && updateArm == null
       && caseJoinArm == null && spilled.isEmpty();
@@ -621,7 +618,7 @@ public class SwitchStatement extends Statement {
       // An empty arm whose table entry is the join instruction itself: javac writes no code for
       // a label with an empty body, so the source either wrote no group or an empty one at the
       // very end — both compile to this table. Print nothing for it.
-      if (RoundTrip.selector("switchempty") && RoundTrip.firstOffset(stat) < 0
+      if (RoundTrip.firstOffset(stat) < 0
           && armLandsOnJoinDirectly(i, switchEnd)) {
         continue;
       }
@@ -813,7 +810,7 @@ public class SwitchStatement extends Statement {
       // goto already starts at the join. javac anchors that goto on the line of the loop's closing
       // brace, not on the break, so the enclosing loop's print owns the anchor; claiming it here
       // would move the break onto the brace's line.
-      if (breakMapping == switchEnd && switchEnd >= 0 && RoundTrip.selector("loopjoinline")
+      if (breakMapping == switchEnd && switchEnd >= 0
           && RoundTrip.loopBackEdge(this, switchEnd)) {
         breakMapping = -1;
       }
@@ -822,7 +819,7 @@ public class SwitchStatement extends Statement {
       boolean breakOutside = braced.contains(stat) && bracedEarly.contains(stat) && breakJump >= 0
         && !yields && !orderUnknown && guard == null && !patternArm
         && RoundTrip.canCompleteNormally(stat) && !declaredScopePast(armRows.get(i), breakJump)
-        && RoundTrip.selector("switchbreak") && RoundTrip.jumpsOnto(breakJump);
+        && RoundTrip.jumpsOnto(breakJump);
       // A local the arm declares ends its row exactly at the break's jump, and another jump lands
       // on that jump: the source closed the arm's block before the break, so the break prints
       // after the closing brace instead of inside whatever branch the tree hung it off. The row
@@ -831,7 +828,6 @@ public class SwitchStatement extends Statement {
       // block whatever the arm's brace did, so it is not the arm's own scope evidence.
       int deferredBreak = -1;
       if (armClose[i] > 0 && braced.contains(stat) && !breakOutside && !yields && !orderUnknown
-          && RoundTrip.selector("switchbreak")
           && (breakJump < 0 || breakJump == armClose[i])
           && !declaredScopePast(armRows.get(i), armClose[i],
             RoundTrip.patternVariableSlots(values))
@@ -845,7 +841,7 @@ public class SwitchStatement extends Statement {
       // The evidence is the arm's own table rows and its own code ending at the join, not a jump
       // whose group could move with a reordered layout, so the print order does not unprove it.
       if (deferredBreak < 0 && breakJump < 0 && braced.contains(stat) && !breakOutside && !yields
-          && guard == null && RoundTrip.selector("switchbreak")
+          && guard == null
           && RoundTrip.blockEnd(stat) == switchEnd && RoundTrip.breaksTo(stat, this)
           && RoundTrip.canCompleteNormally(stat)) {
         deferredBreak = switchEnd;
@@ -858,7 +854,7 @@ public class SwitchStatement extends Statement {
       // the break would have carried the local's row through the jump, as the pattern variables'
       // rows are carried when the arm's code runs into the switch's join.
       if (deferredBreak < 0 && braced.contains(stat) && !breakOutside && !yields && !orderUnknown
-          && patternArm && RoundTrip.selector("switchbreak") && breakJump >= 0
+          && patternArm && breakJump >= 0
           && RoundTrip.jumpTargetAt(breakJump) == switchEnd
           && !declaredScopePast(armRows.get(i), breakJump, RoundTrip.patternVariableSlots(values))
           && (RoundTrip.anotherJumpTo(breakJump, switchEnd) || rowEndsAt(armRows.get(i), breakJump))) {
@@ -869,7 +865,7 @@ public class SwitchStatement extends Statement {
       // the break's jump and every label edge is that one break, so the label can go and the
       // break prints after the brace.
       boolean labelArm = deferredBreak < 0 && stat.isLabeled() && braced.contains(stat)
-        && !yields && !orderUnknown && RoundTrip.selector("switchbreak") && armClose[i] > 0
+        && !yields && !orderUnknown && armClose[i] > 0
         && !declaredScopePast(armRows.get(i), armClose[i], RoundTrip.patternVariableSlots(values))
         && labelsBreakToJoin(stat);
       if (labelArm) {
@@ -883,7 +879,7 @@ public class SwitchStatement extends Statement {
       // deferral from hiding a second, conditional break the printed body still needs.
       if (deferredBreak < 0 && braced.contains(stat) && !stat.isLabeled() && !breakOutside
           && !yields && !orderUnknown && guard == null && !patternArm
-          && RoundTrip.selector("switchbreak") && breakJump >= 0
+          && breakJump >= 0
           && !declaredScopePast(armRows.get(i), breakJump, RoundTrip.patternVariableSlots(values))
           && rowEndsAt(armRows.get(i), breakJump)
           && RoundTrip.printsExplicitJump(stat) && !tailIfCarriesBreak(stat)
@@ -897,7 +893,6 @@ public class SwitchStatement extends Statement {
       // source wrote `} break;`, and the break belongs after the brace.
       if (deferredBreak < 0 && braced.contains(stat) && !stat.isLabeled() && !breakOutside
           && !yields && !orderUnknown && guard == null && !patternArm
-          && RoundTrip.selector("switchbreak")
           && !RoundTrip.printsExplicitJump(stat) && countBreaksTo(stat, this) == 0
           && RoundTrip.canCompleteNormally(stat) && continuesToEnclosingLoop(stat)) {
         int tail = RoundTrip.tailJumpOffset(stat);
@@ -1034,7 +1029,7 @@ public class SwitchStatement extends Statement {
       int loopJoinJump = -1;
       boolean loopJoin = false;
       if (breakJump < 0 && !breakPrinted && deferredBreak < 0 && !yields && guard == null
-          && !patternArm && RoundTrip.selector("switchjump")
+          && !patternArm
           && RoundTrip.canCompleteNormally(stat) && !armLeaves
           && continuesToEnclosingLoop(stat)) {
         if (switchEnd >= 0 && RoundTrip.loopBackEdge(this, switchEnd)) {
@@ -1067,7 +1062,7 @@ public class SwitchStatement extends Statement {
         }
       }
       boolean breakInside = false;
-      if (RoundTrip.selector("switchbreak") && joins && !yields && !orderUnknown
+      if (joins && !yields && !orderUnknown
           && guard == null && !patternArm && !breakPrinted
           && RoundTrip.canCompleteNormally(stat) && !armLeaves) {
         // A braced arm holds the break inside the brace when the target's table still has a local
@@ -1089,7 +1084,7 @@ public class SwitchStatement extends Statement {
       boolean closedBeforeBreak = braced.contains(stat) && !breakOutside && breakJump >= 0
         && !yields && !orderUnknown && guard == null && !patternArm && !breakInside
         && !breakPrinted && !RoundTrip.printsExplicitJump(stat) && !tailJumpsToJoin
-        && RoundTrip.selector("switchbreak") && RoundTrip.canCompleteNormally(stat) && !armLeaves
+        && RoundTrip.canCompleteNormally(stat) && !armLeaves
         && RoundTrip.anotherJumpTo(breakJump, switchEnd);
 
       if (braced.contains(stat)) {
@@ -1120,7 +1115,7 @@ public class SwitchStatement extends Statement {
     // to, the target's table records the statement's line on it, and the page mapped nothing
     // there. The arm falls into the jump as printed, so the break is the only statement that can
     // carry the line; javac folds it into the join jump the arm already had.
-    if (RoundTrip.selector("switchtailbreak") && switchEnd >= 0 && lastPrinted >= 0
+    if (switchEnd >= 0 && lastPrinted >= 0
         && lastFallsIntoJoin && !lastJoins && !lastBreakPrinted
         && !yields && !arrowSwitch && !orderUnknown && !braced.contains(caseStatements.get(lastPrinted))
         && defaultBreakJump < 0 && defaultBody.isEmpty()
@@ -1151,8 +1146,7 @@ public class SwitchStatement extends Statement {
     // A `default:` the arms never print and whose table entry lands on the join had an empty body
     // the source still wrote out: the group is what keeps the last arm's `break;` jump in place,
     // so it has to be printed back even though it compiles to no instruction of its own.
-    if (RoundTrip.selector("switchbreak") && RoundTrip.selector("switchdefault")
-        && switchEnd >= 0 && !defaultPrinted && defaultBreakJump < 0 && lastPrinted >= 0 && lastJoins
+    if (switchEnd >= 0 && !defaultPrinted && defaultBreakJump < 0 && lastPrinted >= 0 && lastJoins
         && !yields && !orderUnknown && !isPattern() && caseGuards.stream().noneMatch(Objects::nonNull)
         && defaultTargetOffset() == switchEnd) {
       if (arrowSwitch) {
@@ -1280,7 +1274,7 @@ public class SwitchStatement extends Statement {
    * labels with an empty body and the statements after the switch.
    */
   private Statement caseJoinArm(boolean yields, int switchEnd) {
-    if (!RoundTrip.selector("switchcasejoin") || switchEnd < 0 || yields || isPattern()
+    if (switchEnd < 0 || yields || isPattern()
         || caseGuards.stream().anyMatch(Objects::nonNull)) {
       return null;
     }
@@ -1446,7 +1440,7 @@ public class SwitchStatement extends Statement {
     }
     // The join block is no arm: its instructions lie after the switch, so they say nothing about
     // where its label stood in the source.
-    int join = RoundTrip.selector("switchcasejoin") ? switchEndFromJumps() : -1;
+    int join = switchEndFromJumps();
     // A synthesized throw arm is not a body the source wrote: javac places the no-match path where
     // the jump layout wants it, and the printer drops the arm, so its block is no ordering evidence.
     boolean skipMatch = !RoundTrip.switchYields(caseStatements);
@@ -1499,7 +1493,7 @@ public class SwitchStatement extends Statement {
    * rule refuses a landing an enclosing `continue` also uses, and this is what separates them.
    */
   private int patternArrowJoin(List<List<int[]>> armRows) {
-    if (!RoundTrip.selector("patternarrow") || RoundTrip.switchYields(caseStatements)) {
+    if (RoundTrip.switchYields(caseStatements)) {
       return -1;
     }
     int join = -1;
@@ -1537,9 +1531,6 @@ public class SwitchStatement extends Statement {
    * where a {@code continue;} of an enclosing loop would land instead.
    */
   private int switchEndFromJumps() {
-    if (!RoundTrip.selector("switchjump")) {
-      return -1;
-    }
     // An arm is the join itself when another arm's tail jump lands on its first instruction: that
     // block is the code after the switch, and its own instructions must not raise the bar the
     // join has to clear.
@@ -1549,7 +1540,7 @@ public class SwitchStatement extends Statement {
       Statement arm = caseStatements.get(index);
       int first = RoundTrip.firstOffset(arm);
       boolean isJoinBlock = false;
-      if (first >= 0 && RoundTrip.selector("switchcasejoin")) {
+      if (first >= 0) {
         for (Statement other : caseStatements) {
           if (other != arm && RoundTrip.tailJumpTarget(other) == first) {
             isJoinBlock = true;
@@ -1594,9 +1585,6 @@ public class SwitchStatement extends Statement {
    * one an enclosing loop continues to says nothing, and two different landings are not a join.
    */
   private int switchEndFromTargetJumps() {
-    if (!RoundTrip.selector("switchjump")) {
-      return -1;
-    }
     SwitchInstruction instruction = switchInstruction();
     int[] targets = instruction == null ? null : RoundTrip.switchTargetsAt(instruction.startOffset);
     if (targets == null) {
@@ -1635,9 +1623,6 @@ public class SwitchStatement extends Statement {
    * loop's `continue;` are the same jump, and the landing is that block.
    */
   private int switchEndFromDefault() {
-    if (!RoundTrip.selector("switchjump")) {
-      return -1;
-    }
     int target = defaultTargetOffset();
     if (target < 0) {
       return -1;
@@ -1849,14 +1834,14 @@ public class SwitchStatement extends Statement {
    * {@code break;} to a jump the case label lands on, kept because a later group still follows.
    */
   private int armBreakJump(Statement stat, List<StatEdge> edges, int switchEnd) {
-    if (switchEnd < 0 || !RoundTrip.selector("switchbreak")) {
+    if (switchEnd < 0) {
       return -1;
     }
     int end = RoundTrip.tailJumpOffset(stat);
     if (end >= 0) {
       return RoundTrip.jumpTargetAt(end) == switchEnd ? end : -1;
     }
-    if (!RoundTrip.selector("switchempty") || RoundTrip.firstOffset(stat) >= 0) {
+    if (RoundTrip.firstOffset(stat) >= 0) {
       return -1;
     }
     SwitchInstruction instruction = switchInstruction();
@@ -2138,10 +2123,9 @@ public class SwitchStatement extends Statement {
     }
     boolean debugSwitch = System.getenv("FAITHFULFLOWER_SWITCH_DEBUG") != null;
     if (debugSwitch) {
-      System.err.println("switch order called size=" + size + " option="
-        + RoundTrip.selector("rt-switch-order"));
+      System.err.println("switch order called size=" + size);
     }
-    if (size < 2 || !RoundTrip.selector("rt-switch-order")) {
+    if (size < 2) {
       return order;
     }
     // The target's arm blocks record the source order directly when the switch instruction's keys

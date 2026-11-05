@@ -36,7 +36,7 @@ public final class NamedDeadStore {
   }
 
   public static boolean restore(Statement root, StructMethod method, VarProcessor varproc) {
-    if (method == null || varproc == null || !RoundTrip.enabled() || !RoundTrip.selector("deadstore")) {
+    if (method == null || varproc == null) {
       return false;
     }
     int[] count = {0};

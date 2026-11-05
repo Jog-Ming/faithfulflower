@@ -5,7 +5,6 @@ import org.jetbrains.java.decompiler.code.*;
 import org.jetbrains.java.decompiler.main.DecompilerContext;
 import org.jetbrains.java.decompiler.main.extern.IFernflowerPreferences;
 import org.jetbrains.java.decompiler.main.extern.IVariableNameProvider;
-import org.jetbrains.java.decompiler.modules.decompiler.RoundTrip;
 import org.jetbrains.java.decompiler.struct.attr.StructCodeAttribute;
 import org.jetbrains.java.decompiler.struct.attr.StructGeneralAttribute;
 import org.jetbrains.java.decompiler.struct.attr.StructGenericSignatureAttribute;
@@ -52,8 +51,7 @@ public class StructMethod extends StructMember {
       // targets. One map entry cannot hold both, so fold the Code table into the method table
       // instead of replacing it.
       for (Map.Entry<Key<?>, Object> entry : code.codeAttributes.entrySet()) {
-        if (RoundTrip.selector("typeuse")
-            && entry.getValue() instanceof StructTypeAnnotationAttribute codeLevel
+        if (entry.getValue() instanceof StructTypeAnnotationAttribute codeLevel
             && attributes.get(entry.getKey()) instanceof StructTypeAnnotationAttribute methodLevel) {
           methodLevel.merge(codeLevel);
         }

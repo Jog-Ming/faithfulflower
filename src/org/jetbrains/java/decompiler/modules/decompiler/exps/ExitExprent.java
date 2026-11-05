@@ -167,8 +167,7 @@ public class ExitExprent extends Exprent {
           buf.append(' ');
         }
 
-        if (value instanceof SwitchExprent switchValue && RoundTrip.selector("switchpoly")
-            && switchValue.simpleArmsFitTarget(ret)) {
+        if (value instanceof SwitchExprent switchValue && switchValue.simpleArmsFitTarget(ret)) {
           // A switch expression in a return is target-typed: javac checks every yield against
           // the return type and emits no cast after the merge. The switch's own type is the
           // common supertype of the yields, which the printer would turn into a cast (and,

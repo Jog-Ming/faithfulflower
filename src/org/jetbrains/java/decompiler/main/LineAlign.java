@@ -6,7 +6,6 @@ import org.jetbrains.java.decompiler.code.FullInstructionSequence;
 import org.jetbrains.java.decompiler.code.Instruction;
 import org.jetbrains.java.decompiler.main.collectors.BytecodeMappingTracer;
 import org.jetbrains.java.decompiler.main.rels.ClassWrapper;
-import org.jetbrains.java.decompiler.modules.decompiler.RoundTrip;
 import org.jetbrains.java.decompiler.struct.StructClass;
 import org.jetbrains.java.decompiler.struct.StructField;
 import org.jetbrains.java.decompiler.struct.StructMethod;
@@ -57,16 +56,14 @@ public final class LineAlign {
   /** The aligned text, or null when the buffer cannot be aligned and must be left as printed. */
   public static String align(TextBuffer buffer, ClassesProcessor.ClassNode root) {
     String text = buffer.convertToStringAndAllowDataDiscard();
-    if (RoundTrip.selector("rt-constant-sites")) {
-      try {
-        // Runs on the printed text before any line edit, so the bytecode positions the buffer
-        // recorded still describe this string. The switch replaces the whole-file constant pass.
-        text = ConstantNames.restore(text, root, buffer.getBytecodePositions(),
-          buffer.getClassRegions());
-      }
-      catch (RuntimeException e) {
-        // A class must not be lost because its constant sites could not be classified.
-      }
+    try {
+      // Runs on the printed text before any line edit, so the bytecode positions the buffer
+      // recorded still describe this string. This pass replaces the whole-file constant pass.
+      text = ConstantNames.restore(text, root, buffer.getBytecodePositions(),
+        buffer.getClassRegions());
+    }
+    catch (RuntimeException e) {
+      // A class must not be lost because its constant sites could not be classified.
     }
     String separator = DecompilerContext.getNewLineSeparator();
     String[] lines = text.split(java.util.regex.Pattern.quote(separator), -1);
@@ -79,16 +76,13 @@ public final class LineAlign {
     }
     applyFieldDeclarationAnchors(tracers);
 
-    if (RoundTrip.selector("rt-same-line-join")) {
-      String joined = joinSameTargetLines(text, separator, lines, tracers, lineRecords(tracers, lines));
-      if (joined != null) {
-        text = joined;
-        lines = text.split(java.util.regex.Pattern.quote(separator), -1);
-      }
+    String joined = joinSameTargetLines(text, separator, lines, tracers, lineRecords(tracers, lines));
+    if (joined != null) {
+      text = joined;
+      lines = text.split(java.util.regex.Pattern.quote(separator), -1);
     }
     LineRecords records = lineRecords(tracers, lines);
 
-    boolean gapAlign = RoundTrip.selector("rt-gap-align");
     TreeMap<Integer, Integer> shifts = new TreeMap<>();
     Set<Integer> conflicted = new HashSet<>();
     Set<Integer> unmergeable = new HashSet<>();
@@ -108,7 +102,7 @@ public final class LineAlign {
         if (owner == null) {
           owner = initializerTable(className, mapping.keySet());
         }
-        if (owner != null && gapAlign) {
+        if (owner != null) {
           // The lifted initializer's offsets belong to a constructor, not to a method the tracer
           // names, so there is no code to read an opcode from; the walk keeps its old rules.
           addMethodConstraints(owner, mapping, lines, candidates, entryLines, null, null, tracers,
@@ -133,22 +127,10 @@ public final class LineAlign {
       if (table == null) {
         continue;
       }
-      if (gapAlign) {
-        StructClass cls = DecompilerContext.getStructContext().getClass(className);
-        StructMethod method = cls == null ? null : cls.getMethod(methodKey);
-        addMethodConstraints(table, mapping, lines, candidates, entryLines, cls, method, tracers,
-          joinBlocked);
-        continue;
-      }
-      for (Map.Entry<Integer, Integer> entry : mapping.entrySet()) {
-        int ours = entry.getValue() + 1; // one based line in this file
-        int target = table.findLineNumber(entry.getKey());
-        if (target < 0 || ours < 1 || ours > lines.length) {
-          continue;
-        }
-        entryLines.add(ours);
-        add(shifts, conflicted, ours, target - ours);
-      }
+      StructClass cls = DecompilerContext.getStructContext().getClass(className);
+      StructMethod method = cls == null ? null : cls.getMethod(methodKey);
+      addMethodConstraints(table, mapping, lines, candidates, entryLines, cls, method, tracers,
+        joinBlocked);
     }
     // An implicit constructor has no source text to map, yet javac places its one entry on the
     // class declaration's line. Without this constraint the declaration never moves, and every
@@ -166,54 +148,9 @@ public final class LineAlign {
     List<int[]> inserts = new ArrayList<>();
     List<Integer> removals = new ArrayList<>();
     List<Integer> joins = new ArrayList<>();
-    if (gapAlign) {
-      if (!walkGaps(lines, shifts, unmergeable, inherited, entryLines, joinBlocked, records, inserts,
-          removals, joins)) {
-        return text;
-      }
-    }
-    else {
-      int previous = 0;
-      int previousIndex = -1;
-      for (Map.Entry<Integer, Integer> entry : shifts.entrySet()) {
-        int index = entry.getKey() - 1;
-        int target = entry.getValue();
-        if (index < 0 || index > lines.length) {
-          return text;
-        }
-        if (target > previous) {
-          if (insideTextBlock(lines, index)) {
-            return text;
-          }
-          inserts.add(new int[]{index, target - previous});
-        } else if (target < previous) {
-          int want = previous - target;
-          int need = want;
-          int lowest = previousIndex;
-          for (int i = Math.min(index - 1, lines.length - 1); i > lowest && need > 0; i--) {
-            if (removable(lines, i)) {
-              removals.add(i);
-              need--;
-            }
-          }
-          for (int i = Math.min(index - 1, lines.length - 1); i > lowest && need > 0; i--) {
-            // A join moves line i onto line i-1, so neither may be a line another edit deletes.
-            if (joinable(lines, i, entryLines, false)
-                && joinRecordsSupport(i + 1, i, entry.getKey() + entry.getValue(), records)
-                && !removals.contains(i) && !removals.contains(i - 1) && !joins.contains(i)) {
-              joins.add(i);
-              need--;
-            }
-          }
-          target = previous - (want - need);
-          if (debug && need > 0) {
-            System.err.println("underpaid line " + entry.getKey() + " want " + want + " unpaid " + need
-              + " from " + lowest + " to " + index);
-          }
-        }
-        previous = target;
-        previousIndex = index;
-      }
+    if (!walkGaps(lines, shifts, unmergeable, inherited, entryLines, joinBlocked, records, inserts,
+        removals, joins)) {
+      return text;
     }
     if (debug) {
       System.err.println("align " + text.hashCode() + " shifts " + shifts.size()

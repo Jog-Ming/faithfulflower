@@ -573,7 +573,7 @@ public class ClassWriter implements StatementWriter {
   private boolean writeLambdaMethodReference(ClassNode node, StructClass cl, StructMethod mt,
                                              Exprent methodObject, TextBuffer buffer, int indent,
                                              MethodDescriptor md_content, MethodDescriptor md_lambda) {
-    if (!RoundTrip.selector("methodrefbridge") || !node.lambdaInformation.is_content_method_static) {
+    if (!node.lambdaInformation.is_content_method_static) {
       return false;
     }
     int prefix = md_content.params.length - md_lambda.params.length;
@@ -615,7 +615,7 @@ public class ClassWriter implements StatementWriter {
     // forwarded parameters to its constructor. A lambda's body carries the functional method's
     // instantiated parameters, so the primitive or erased parameter types of the bridge are the
     // record of the adaptation a `::new` performs.
-    if (RoundTrip.selector("methodrefbridge") && differs && staticNoCapture(prefix)
+    if (differs && staticNoCapture(prefix)
         && writeConstructorReference(cl, seq, md_content, buffer)) {
       return true;
     }
@@ -623,7 +623,7 @@ public class ClassWriter implements StatementWriter {
     // calls the varargs method with it. A lambda's body has the functional method's own parameter
     // types, so only a reference (whose bridge widens them) shows up with `differs` set. The
     // varargs method may be static or an instance method on a captured receiver.
-    if (RoundTrip.selector("methodrefvarargs") && differs && prefix <= 1
+    if (differs && prefix <= 1
         && (prefix == 0 ? methodObject == null : methodObject != null)
         && writeVarargsForward(cl, seq, md_content, md_lambda, prefix, methodObject, buffer, indent)) {
       return true;
@@ -1019,7 +1019,7 @@ public class ClassWriter implements StatementWriter {
   private boolean writeInnerConstructorReference(ClassNode node, StructClass cl, StructMethod mt,
                                                  TextBuffer buffer, MethodDescriptor md_content,
                                                  MethodDescriptor md_lambda) {
-    if (!RoundTrip.selector("innernewref") || mt == null
+    if (mt == null
         || node.lambdaInformation.content_method_invocation_type
            != CodeConstants.CONSTANT_MethodHandle_REF_invokeVirtual
         || (mt.getAccessFlags() & (CodeConstants.ACC_PRIVATE | CodeConstants.ACC_STATIC
@@ -1257,16 +1257,15 @@ public class ClassWriter implements StatementWriter {
       // order is what lets javac reproduce the original line table and nesting order.
       List<int[]> plan = new ArrayList<>();
       java.util.Set<Integer> blockSequences = new java.util.HashSet<>();
-      boolean ordered = RoundTrip.selector("rt-member-order");
       int sequence = 0;
       for (int i = 0; i < nonEnumFields.size(); i++) {
-        plan.add(new int[]{0, i, ordered ? fieldLine(wrapper, cl, nonEnumFields.get(i)) : -1, sequence++});
+        plan.add(new int[]{0, i, fieldLine(wrapper, cl, nonEnumFields.get(i)), sequence++});
       }
       for (int i : methodOrder) {
         StructMethod mt = methods.get(i);
-        int line = ordered ? methodLine(mt) : -1;
+        int line = methodLine(mt);
         boolean enumBlock = false;
-        if (ordered && !"off".equals(System.getenv("FAITHFULFLOWER_ENUMBLOCK"))
+        if (!"off".equals(System.getenv("FAITHFULFLOWER_ENUMBLOCK"))
             && CodeConstants.CLINIT_NAME.equals(mt.getName())) {
           int block = staticBlockLine(wrapper, cl);
           if (block >= 0) {
@@ -1319,315 +1318,310 @@ public class ClassWriter implements StatementWriter {
         ClassNode inner = node.nested.get(i);
         int rank = inner.type == ClassNode.Type.MEMBER && inner.classStruct != null
           ? nestRank.getOrDefault(inner.classStruct.qualifiedName, Integer.MAX_VALUE) : Integer.MAX_VALUE;
-        plan.add(new int[]{2, i, ordered && inner.type == ClassNode.Type.MEMBER ? classLine(inner) : -1, sequence++, rank});
+        plan.add(new int[]{2, i, inner.type == ClassNode.Type.MEMBER ? classLine(inner) : -1, sequence++, rank});
       }
-      if (ordered) {
-        // A member class with no line table of its own is placed next to the member class the
-        // original declared just before it, which the target's NestMembers names.
-        java.util.List<int[]> ranked = new java.util.ArrayList<>(); // {rank, known line}
-        for (int[] member : plan) {
-          if (member[0] == 2 && member.length > 4 && member[4] != Integer.MAX_VALUE && member[2] >= 0) {
-            ranked.add(new int[]{member[4], member[2]});
+      // A member class with no line table of its own is placed next to the member class the
+      // original declared just before it, which the target's NestMembers names.
+      java.util.List<int[]> ranked = new java.util.ArrayList<>(); // {rank, known line}
+      for (int[] member : plan) {
+        if (member[0] == 2 && member.length > 4 && member[4] != Integer.MAX_VALUE && member[2] >= 0) {
+          ranked.add(new int[]{member[4], member[2]});
+        }
+      }
+      ranked.sort(Comparator.comparingInt(a -> a[0]));
+      for (int[] member : plan) {
+        if (member[0] != 2 || member[2] >= 0 || member.length <= 4 || member[4] == Integer.MAX_VALUE) {
+          continue;
+        }
+        int line = -1;
+        for (int[] known : ranked) {
+          if (known[0] < member[4]) {
+            line = known[1];
           }
         }
-        ranked.sort(Comparator.comparingInt(a -> a[0]));
-        for (int[] member : plan) {
-          if (member[0] != 2 || member[2] >= 0 || member.length <= 4 || member[4] == Integer.MAX_VALUE) {
+        if (line < 0) {
+          // Declared before every member class that has a line: share the nearest later one,
+          // and the rank order in the sort keeps it in front.
+          for (int[] known : ranked) {
+            if (known[0] > member[4]) {
+              line = known[1];
+              break;
+            }
+          }
+        }
+        member[2] = line;
+      }
+      // A member class with no line and no member class to be ranked against has no evidence
+      // of where it sat among the methods: the plan's own order is the class file's, which
+      // lists member classes after every member. Give it a line after all of them rather than
+      // the last method's, which its NestMembers rank would otherwise sort it in front of.
+      boolean rankedMemberClass = false;
+      for (int[] member : plan) {
+        if (member[0] == 2 && member.length > 4 && member[4] != Integer.MAX_VALUE && member[2] >= 0) {
+          rankedMemberClass = true;
+          break;
+        }
+      }
+      int maxFieldLine = -1;
+      for (int[] member : plan) {
+        if (member[0] == 0 && member[2] >= 0) {
+          maxFieldLine = Math.max(maxFieldLine, member[2]);
+        }
+      }
+      // The legacy arrangement, kept to restore an unlined method that the rule below would
+      // otherwise move across a member class (RecipeProvider's buildRecipes past Runner).
+      int planSize = plan.size();
+      int[] original = new int[planSize];
+      int[] legacy = new int[planSize];
+      for (int i = 0; i < planSize; i++) {
+        original[i] = plan.get(i)[2];
+        legacy[i] = original[i];
+      }
+      int legacyCarry = -1;
+      for (int i = 0; i < planSize; i++) {
+        if (legacy[i] < 0) {
+          if (plan.get(i)[0] == 2 && !rankedMemberClass) {
             continue;
           }
-          int line = -1;
-          for (int[] known : ranked) {
-            if (known[0] < member[4]) {
-              line = known[1];
-            }
-          }
-          if (line < 0) {
-            // Declared before every member class that has a line: share the nearest later one,
-            // and the rank order in the sort keeps it in front.
-            for (int[] known : ranked) {
-              if (known[0] > member[4]) {
-                line = known[1];
-                break;
-              }
-            }
-          }
-          member[2] = line;
+          legacy[i] = legacyCarry;
+        } else {
+          legacyCarry = legacy[i];
         }
-        // A member class with no line and no member class to be ranked against has no evidence
-        // of where it sat among the methods: the plan's own order is the class file's, which
-        // lists member classes after every member. Give it a line after all of them rather than
-        // the last method's, which its NestMembers rank would otherwise sort it in front of.
-        boolean rankedMemberClass = false;
-        for (int[] member : plan) {
-          if (member[0] == 2 && member.length > 4 && member[4] != Integer.MAX_VALUE && member[2] >= 0) {
-            rankedMemberClass = true;
-            break;
+      }
+      legacyCarry = Integer.MAX_VALUE;
+      for (int i = planSize - 1; i >= 0; i--) {
+        if (legacy[i] < 0) {
+          legacy[i] = legacyCarry;
+        } else {
+          legacyCarry = legacy[i];
+        }
+      }
+      // A constructor's line is the class or initializer anchor, not a declaration position:
+      // when a field follows it, carrying it to an unlined member pulls that member in front of
+      // the field the source declared first (RuleTest's CODEC). Without such a field the old
+      // behaviour stands.
+      int carried = -1;
+      // A method without code has no line of its own and the source declared it right after the
+      // previous method the class file lists with one: methods are emitted in declaration order,
+      // and a field's line says nothing about a method's place. The constructor's line can be a
+      // lifted field initializer rather than its declaration, so it must not carry the method
+      // past fields the source declared after that method.
+      int carriedMethod = -1;
+      // An interface has no constructor to anchor an unlined method, and a preceding static
+      // method's line is not where the source put it: the field's initializer line is the only
+      // declaration evidence left, and the source declared such methods after the field.
+      boolean noCtor = true;
+      for (int i : methodOrder) {
+        if (CodeConstants.INIT_NAME.equals(methods.get(i).getName())) {
+          noCtor = false;
+          break;
+        }
+      }
+      // Members with no line of their own stay next to the neighbour that has one.
+      for (int[] member : plan) {
+        if (member[2] < 0) {
+          if (member[0] == 2 && !rankedMemberClass) {
+            continue; // the backward pass puts it after every lined member
           }
-        }
-        boolean tailMembers = RoundTrip.selector("rt-member-tail");
-        int maxFieldLine = -1;
-        for (int[] member : plan) {
-          if (member[0] == 0 && member[2] >= 0) {
-            maxFieldLine = Math.max(maxFieldLine, member[2]);
-          }
-        }
-        // The legacy arrangement, kept to restore an unlined method that the rule below would
-        // otherwise move across a member class (RecipeProvider's buildRecipes past Runner).
-        int planSize = plan.size();
-        int[] original = new int[planSize];
-        int[] legacy = new int[planSize];
-        for (int i = 0; i < planSize; i++) {
-          original[i] = plan.get(i)[2];
-          legacy[i] = original[i];
-        }
-        int legacyCarry = -1;
-        for (int i = 0; i < planSize; i++) {
-          if (legacy[i] < 0) {
-            if (tailMembers && plan.get(i)[0] == 2 && !rankedMemberClass) {
-              continue;
-            }
-            legacy[i] = legacyCarry;
+          if (member[0] == 1) {
+            member[2] = carriedMethod >= 0 ? carriedMethod : carried;
           } else {
-            legacyCarry = legacy[i];
+            member[2] = noCtor && member[0] == 1 && maxFieldLine > carried ? maxFieldLine : carried;
           }
-        }
-        legacyCarry = Integer.MAX_VALUE;
-        for (int i = planSize - 1; i >= 0; i--) {
-          if (legacy[i] < 0) {
-            legacy[i] = legacyCarry;
-          } else {
-            legacyCarry = legacy[i];
-          }
-        }
-        // A constructor's line is the class or initializer anchor, not a declaration position:
-        // when a field follows it, carrying it to an unlined member pulls that member in front of
-        // the field the source declared first (RuleTest's CODEC). Without such a field the old
-        // behaviour stands.
-        int carried = -1;
-        // A method without code has no line of its own and the source declared it right after the
-        // previous method the class file lists with one: methods are emitted in declaration order,
-        // and a field's line says nothing about a method's place. The constructor's line can be a
-        // lifted field initializer rather than its declaration, so it must not carry the method
-        // past fields the source declared after that method.
-        int carriedMethod = -1;
-        // An interface has no constructor to anchor an unlined method, and a preceding static
-        // method's line is not where the source put it: the field's initializer line is the only
-        // declaration evidence left, and the source declared such methods after the field.
-        boolean noCtor = true;
-        for (int i : methodOrder) {
-          if (CodeConstants.INIT_NAME.equals(methods.get(i).getName())) {
-            noCtor = false;
-            break;
-          }
-        }
-        // Members with no line of their own stay next to the neighbour that has one.
-        for (int[] member : plan) {
-          if (member[2] < 0) {
-            if (tailMembers && member[0] == 2 && !rankedMemberClass) {
-              continue; // the backward pass puts it after every lined member
-            }
-            if (member[0] == 1) {
-              member[2] = carriedMethod >= 0 ? carriedMethod : carried;
-            } else {
-              member[2] = noCtor && member[0] == 1 && maxFieldLine > carried ? maxFieldLine : carried;
-            }
-          } else {
-            if (member[0] == 1) {
-              StructMethod mt = methods.get(member[1]);
-              if (!CodeConstants.CLINIT_NAME.equals(mt.getName()) && !hiddenMethod(wrapper, mt)) {
-                carriedMethod = member[2];
-              }
-            }
-            if (!(isCtorMember(member, methods) && maxFieldLine > member[2])) {
-              carried = member[2];
+        } else {
+          if (member[0] == 1) {
+            StructMethod mt = methods.get(member[1]);
+            if (!CodeConstants.CLINIT_NAME.equals(mt.getName()) && !hiddenMethod(wrapper, mt)) {
+              carriedMethod = member[2];
             }
           }
-        }
-        carried = Integer.MAX_VALUE;
-        for (int i = plan.size() - 1; i >= 0; i--) {
-          int[] member = plan.get(i);
-          if (member[2] < 0) {
-            member[2] = carried;
-          } else if (!(isCtorMember(member, methods) && maxFieldLine > member[2])) {
+          if (!(isCtorMember(member, methods) && maxFieldLine > member[2])) {
             carried = member[2];
           }
         }
-        // An unlined method the rule moved past a member class goes back to its legacy line.
-        for (int i = 0; i < planSize; i++) {
-          if (original[i] >= 0 || plan.get(i)[0] != 1 || plan.get(i)[2] <= legacy[i]) {
-            continue;
-          }
-          for (int j = 0; j < planSize; j++) {
-            if (plan.get(j)[0] == 2 && node.nested.get(plan.get(j)[1]).type == ClassNode.Type.MEMBER
-              && legacy[j] > legacy[i] && legacy[j] <= plan.get(i)[2]) {
-              plan.get(i)[2] = legacy[i];
-              break;
-            }
-          }
+      }
+      carried = Integer.MAX_VALUE;
+      for (int i = plan.size() - 1; i >= 0; i--) {
+        int[] member = plan.get(i);
+        if (member[2] < 0) {
+          member[2] = carried;
+        } else if (!(isCtorMember(member, methods) && maxFieldLine > member[2])) {
+          carried = member[2];
         }
-        // A member with no line of its own — a method without code, a field without an initializer
-        // line — has no evidence of where the source put it, and the carry above hands it a
-        // neighbour's line. When that line would sort it after a member the class file lists
-        // later, the source cannot have had that order: take the later neighbour's line instead,
-        // and the sequence tie-break keeps the file order. This corrects the carry; it never
-        // replaces a line the target actually recorded.
-        if (RoundTrip.selector("memberfileorder")) {
-          for (int i = 0; i < planSize; i++) {
-            int[] member = plan.get(i);
-            if (original[i] >= 0 || member[2] < 0 || member[0] != 1) {
-              continue;
-            }
-            MethodWrapper wrapperOf = wrapper.getMethodWrapper(member[1]);
-            if (wrapperOf != null && wrapperOf.root != null) {
-              continue; // a method with code has a table of its own
-            }
-            // Only a leading run of code-less methods: once a method with a line has been seen,
-            // the carry's placement is the one the target's own table implies.
-            boolean leading = true;
-            for (int j = 0; j < i; j++) {
-              if (plan.get(j)[0] == 1 && original[j] >= 0) {
-                leading = false;
-                break;
-              }
-            }
-            if (!leading) {
-              continue;
-            }
-            for (int j = i + 1; j < planSize; j++) {
-              // Only another method bounds a method: the class file lists fields first whatever
-              // the source order, so a field's position says nothing about where a method sat.
-              if (original[j] < 0 || plan.get(j)[0] != 1 || plan.get(j)[2] < 0) {
-                continue;
-              }
-              // A constructor's or static block's line is the class header or an initializer
-              // anchor, not a declaration position: neither can bound a method's place.
-              StructMethod boundMethod = methods.get(plan.get(j)[1]);
-              if (CodeConstants.INIT_NAME.equals(boundMethod.getName())
-                  || CodeConstants.CLINIT_NAME.equals(boundMethod.getName())
-                  || hiddenMethod(wrapper, boundMethod)) {
-                // A hidden method — a lambda body, a synthetic bridge — is not printed at its
-                // line: the line is where its body's instructions sit, not a declaration, and
-                // the source can put a code-less method after it and still print it there.
-                continue;
-              }
-              if (plan.get(j)[2] < member[2]) {
-                member[2] = plan.get(j)[2];
-              }
-              break;
-            }
-          }
+      }
+      // An unlined method the rule moved past a member class goes back to its legacy line.
+      for (int i = 0; i < planSize; i++) {
+        if (original[i] >= 0 || plan.get(i)[0] != 1 || plan.get(i)[2] <= legacy[i]) {
+          continue;
         }
-        // A static block's own line is a real declaration line from the target's table, but the
-        // carry above gives an uninitialised field the next lined member's line — the first method
-        // after it, past the block. The initializer clamp below then drags the block past every
-        // field, and the source cannot have had the block after a member it precedes. No field
-        // reads anything, so an uninitialised field may sit before the block: cap its carried line
-        // at the block's own line, and the field monotonic pass below keeps the class order. Only
-        // when the clamp would move the block anyway: a block whose line it treats as a real
-        // declaration (a lifted tail precedes a later field, InputConstants' UNKNOWN) must keep
-        // the field lines clean, because the clamp reads them as evidence, and an enum block is
-        // exempt from the clamp altogether.
-        int blockAt = -1;
-        for (int i = 0; i < planSize; i++) {
-          if (plan.get(i)[0] == 1 && original[i] >= 0
-              && CodeConstants.CLINIT_NAME.equals(methods.get(plan.get(i)[1]).getName())) {
-            blockAt = i;
+        for (int j = 0; j < planSize; j++) {
+          if (plan.get(j)[0] == 2 && node.nested.get(plan.get(j)[1]).type == ClassNode.Type.MEMBER
+            && legacy[j] > legacy[i] && legacy[j] <= plan.get(i)[2]) {
+            plan.get(i)[2] = legacy[i];
             break;
           }
         }
-        if (blockAt >= 0 && (cl.getAccessFlags() & CodeConstants.ACC_ENUM) == 0
-            && !blockSequences.contains(plan.get(blockAt)[3])) {
-          int blockLine = original[blockAt];
-          int lineLastField = -1;
-          int lineFirstField = Integer.MAX_VALUE;
-          java.util.Set<Integer> linesOfFields = new java.util.HashSet<>();
-          for (int[] member : plan) {
-            if (member[0] == 0 && member[2] >= 0) {
-              lineLastField = Math.max(lineLastField, member[2]);
-              lineFirstField = Math.min(lineFirstField, member[2]);
-              linesOfFields.add(member[2]);
-            }
-          }
-          // Mirrors the clamp below with the values it would read, before any cap changes them.
-          String blockCtorMode = System.getenv("FAITHFULFLOWER_CTORLINE");
-          boolean blockScoped = "all".equals(blockCtorMode)
-            || endsWithLiftedInitializer(wrapper.getMethodWrapper(plan.get(blockAt)[1]), wrapper);
-          boolean blockRealLine = !"off".equals(blockCtorMode) && blockScoped
-            && (blockLine < lineFirstField || !linesOfFields.contains(blockLine));
-          if (blockLine < lineLastField && !blockRealLine) {
-            for (int i = 0; i < planSize; i++) {
-              if (plan.get(i)[0] == 0 && original[i] < 0) {
-                plan.get(i)[2] = Math.min(plan.get(i)[2], blockLine);
-              }
-            }
+      }
+      // A member with no line of its own — a method without code, a field without an initializer
+      // line — has no evidence of where the source put it, and the carry above hands it a
+      // neighbour's line. When that line would sort it after a member the class file lists
+      // later, the source cannot have had that order: take the later neighbour's line instead,
+      // and the sequence tie-break keeps the file order. This corrects the carry; it never
+      // replaces a line the target actually recorded.
+      for (int i = 0; i < planSize; i++) {
+        int[] member = plan.get(i);
+        if (original[i] >= 0 || member[2] < 0 || member[0] != 1) {
+          continue;
+        }
+        MethodWrapper wrapperOf = wrapper.getMethodWrapper(member[1]);
+        if (wrapperOf != null && wrapperOf.root != null) {
+          continue; // a method with code has a table of its own
+        }
+        // Only a leading run of code-less methods: once a method with a line has been seen,
+        // the carry's placement is the one the target's own table implies.
+        boolean leading = true;
+        for (int j = 0; j < i; j++) {
+          if (plan.get(j)[0] == 1 && original[j] >= 0) {
+            leading = false;
+            break;
           }
         }
-        // Fields keep their declaration order: a forward reference from an initializer to a later
-        // field is illegal, and their own lines are only as trustworthy as their initializers.
-        int previousField = -1;
-        int lastField = -1;
-        for (int[] member : plan) {
-          if (member[0] != 0) {
+        if (!leading) {
+          continue;
+        }
+        for (int j = i + 1; j < planSize; j++) {
+          // Only another method bounds a method: the class file lists fields first whatever
+          // the source order, so a field's position says nothing about where a method sat.
+          if (original[j] < 0 || plan.get(j)[0] != 1 || plan.get(j)[2] < 0) {
             continue;
           }
-          if (previousField >= 0) {
-            member[2] = Math.max(member[2], previousField);
+          // A constructor's or static block's line is the class header or an initializer
+          // anchor, not a declaration position: neither can bound a method's place.
+          StructMethod boundMethod = methods.get(plan.get(j)[1]);
+          if (CodeConstants.INIT_NAME.equals(boundMethod.getName())
+              || CodeConstants.CLINIT_NAME.equals(boundMethod.getName())
+              || hiddenMethod(wrapper, boundMethod)) {
+            // A hidden method — a lambda body, a synthetic bridge — is not printed at its
+            // line: the line is where its body's instructions sit, not a declaration, and
+            // the source can put a code-less method after it and still print it there.
+            continue;
           }
-          previousField = member[2];
-          lastField = Math.max(lastField, member[2]);
+          if (plan.get(j)[2] < member[2]) {
+            member[2] = plan.get(j)[2];
+          }
+          break;
         }
-        // A constructor or static block re-inlines the fields' initializers, so its first line
-        // belongs to a field that was lifted out of it. It must stay after every field, unless it
-        // is an enum's static block that provably precedes them.
-        String ctorMode = System.getenv("FAITHFULFLOWER_CTORLINE");
-        boolean ctorLine = !"off".equals(ctorMode);
-        int firstField = Integer.MAX_VALUE;
-        java.util.Set<Integer> fieldLineValues = new java.util.HashSet<>();
-        if (ctorLine) {
-          for (int[] member : plan) {
-            if (member[0] == 0 && member[2] >= 0) {
-              firstField = Math.min(firstField, member[2]);
-              fieldLineValues.add(member[2]);
+      }
+      // A static block's own line is a real declaration line from the target's table, but the
+      // carry above gives an uninitialised field the next lined member's line — the first method
+      // after it, past the block. The initializer clamp below then drags the block past every
+      // field, and the source cannot have had the block after a member it precedes. No field
+      // reads anything, so an uninitialised field may sit before the block: cap its carried line
+      // at the block's own line, and the field monotonic pass below keeps the class order. Only
+      // when the clamp would move the block anyway: a block whose line it treats as a real
+      // declaration (a lifted tail precedes a later field, InputConstants' UNKNOWN) must keep
+      // the field lines clean, because the clamp reads them as evidence, and an enum block is
+      // exempt from the clamp altogether.
+      int blockAt = -1;
+      for (int i = 0; i < planSize; i++) {
+        if (plan.get(i)[0] == 1 && original[i] >= 0
+            && CodeConstants.CLINIT_NAME.equals(methods.get(plan.get(i)[1]).getName())) {
+          blockAt = i;
+          break;
+        }
+      }
+      if (blockAt >= 0 && (cl.getAccessFlags() & CodeConstants.ACC_ENUM) == 0
+          && !blockSequences.contains(plan.get(blockAt)[3])) {
+        int blockLine = original[blockAt];
+        int lineLastField = -1;
+        int lineFirstField = Integer.MAX_VALUE;
+        java.util.Set<Integer> linesOfFields = new java.util.HashSet<>();
+        for (int[] member : plan) {
+          if (member[0] == 0 && member[2] >= 0) {
+            lineLastField = Math.max(lineLastField, member[2]);
+            lineFirstField = Math.min(lineFirstField, member[2]);
+            linesOfFields.add(member[2]);
+          }
+        }
+        // Mirrors the clamp below with the values it would read, before any cap changes them.
+        String blockCtorMode = System.getenv("FAITHFULFLOWER_CTORLINE");
+        boolean blockScoped = "all".equals(blockCtorMode)
+          || endsWithLiftedInitializer(wrapper.getMethodWrapper(plan.get(blockAt)[1]), wrapper);
+        boolean blockRealLine = !"off".equals(blockCtorMode) && blockScoped
+          && (blockLine < lineFirstField || !linesOfFields.contains(blockLine));
+        if (blockLine < lineLastField && !blockRealLine) {
+          for (int i = 0; i < planSize; i++) {
+            if (plan.get(i)[0] == 0 && original[i] < 0) {
+              plan.get(i)[2] = Math.min(plan.get(i)[2], blockLine);
             }
           }
         }
-        if (lastField >= 0) {
-          for (int[] member : plan) {
-            if (member[0] == 1) {
-              StructMethod mt = methods.get(member[1]);
-              if (CodeConstants.INIT_NAME.equals(mt.getName()) || CodeConstants.CLINIT_NAME.equals(mt.getName())) {
-                // A static block's line is a real declaration line when an initializer was lifted
-                // out of the block's tail: that initializer's code follows the block's, so the
-                // field is declared after it (InputConstants' UNKNOWN) and the clamp would drag
-                // the block past it. Without such a tail the block must stay after every field:
-                // it may read a field declared below it, which only compiles after the field.
-                boolean scoped = "all".equals(ctorMode) || CodeConstants.INIT_NAME.equals(mt.getName())
-                  || CodeConstants.CLINIT_NAME.equals(mt.getName())
-                     && endsWithLiftedInitializer(wrapper.getMethodWrapper(member[1]), wrapper);
-                // A lifted initializer's line is one of the field lines; a genuine declaration
-                // line that merely precedes a later field must not be dragged after it.
-                boolean realLine = ctorLine && scoped && member[2] >= 0
-                  && (member[2] < firstField || !fieldLineValues.contains(member[2]));
-                if (!blockSequences.contains(member[3]) && !realLine) {
-                  member[2] = Math.max(member[2], lastField);
-                }
+      }
+      // Fields keep their declaration order: a forward reference from an initializer to a later
+      // field is illegal, and their own lines are only as trustworthy as their initializers.
+      int previousField = -1;
+      int lastField = -1;
+      for (int[] member : plan) {
+        if (member[0] != 0) {
+          continue;
+        }
+        if (previousField >= 0) {
+          member[2] = Math.max(member[2], previousField);
+        }
+        previousField = member[2];
+        lastField = Math.max(lastField, member[2]);
+      }
+      // A constructor or static block re-inlines the fields' initializers, so its first line
+      // belongs to a field that was lifted out of it. It must stay after every field, unless it
+      // is an enum's static block that provably precedes them.
+      String ctorMode = System.getenv("FAITHFULFLOWER_CTORLINE");
+      boolean ctorLine = !"off".equals(ctorMode);
+      int firstField = Integer.MAX_VALUE;
+      java.util.Set<Integer> fieldLineValues = new java.util.HashSet<>();
+      if (ctorLine) {
+        for (int[] member : plan) {
+          if (member[0] == 0 && member[2] >= 0) {
+            firstField = Math.min(firstField, member[2]);
+            fieldLineValues.add(member[2]);
+          }
+        }
+      }
+      if (lastField >= 0) {
+        for (int[] member : plan) {
+          if (member[0] == 1) {
+            StructMethod mt = methods.get(member[1]);
+            if (CodeConstants.INIT_NAME.equals(mt.getName()) || CodeConstants.CLINIT_NAME.equals(mt.getName())) {
+              // A static block's line is a real declaration line when an initializer was lifted
+              // out of the block's tail: that initializer's code follows the block's, so the
+              // field is declared after it (InputConstants' UNKNOWN) and the clamp would drag
+              // the block past it. Without such a tail the block must stay after every field:
+              // it may read a field declared below it, which only compiles after the field.
+              boolean scoped = "all".equals(ctorMode) || CodeConstants.INIT_NAME.equals(mt.getName())
+                || CodeConstants.CLINIT_NAME.equals(mt.getName())
+                   && endsWithLiftedInitializer(wrapper.getMethodWrapper(member[1]), wrapper);
+              // A lifted initializer's line is one of the field lines; a genuine declaration
+              // line that merely precedes a later field must not be dragged after it.
+              boolean realLine = ctorLine && scoped && member[2] >= 0
+                && (member[2] < firstField || !fieldLineValues.contains(member[2]));
+              if (!blockSequences.contains(member[3]) && !realLine) {
+                member[2] = Math.max(member[2], lastField);
               }
             }
           }
         }
-        // A member the class file records no line for — an abstract or interface method, a member
-        // type without a line table of its own — has no declaration position; the passes above
-        // only borrow a neighbour's. The target's line tables over the whole source file say which
-        // lines its statements occupy, and text printed into the lines they leave moves no anchor.
-        // Put such a member where its text ends before the next anchored member, at the place the
-        // rank or the method order gives it, so that member is still paid in full.
-        if (RoundTrip.selector("membergap") && methodToDecompile.isEmpty()) {
-          placeUnlinedMembers(node, wrapper, methods, plan, original, indent);
-        }
-        plan.sort(Comparator.comparingInt((int[] m) -> m[2])
-          .thenComparingInt(m -> m.length > 4 ? m[4] : Integer.MAX_VALUE)
-          .thenComparingInt(m -> m[3]));
       }
+      // A member the class file records no line for — an abstract or interface method, a member
+      // type without a line table of its own — has no declaration position; the passes above
+      // only borrow a neighbour's. The target's line tables over the whole source file say which
+      // lines its statements occupy, and text printed into the lines they leave moves no anchor.
+      // Put such a member where its text ends before the next anchored member, at the place the
+      // rank or the method order gives it, so that member is still paid in full.
+      if (methodToDecompile.isEmpty()) {
+        placeUnlinedMembers(node, wrapper, methods, plan, original, indent);
+      }
+      plan.sort(Comparator.comparingInt((int[] m) -> m[2])
+        .thenComparingInt(m -> m.length > 4 ? m[4] : Integer.MAX_VALUE)
+        .thenComparingInt(m -> m[3]));
 
       boolean enums = !nonEnumFields.isEmpty() && DecompilerContext.getOption(IFernflowerPreferences.DECOMPILE_ENUM)
         && cl.getFields().stream().anyMatch(fd -> fd.hasModifier(CodeConstants.ACC_ENUM));
@@ -3093,9 +3087,7 @@ public class ClassWriter implements StatementWriter {
         printedParameterTypes.add(parameterType);
       }
     }
-    Set<Integer> declarationPosition = RoundTrip.selector("typeuse")
-      ? declarationPositionParameters(mt, printedParameterTypes)
-      : Collections.emptySet();
+    Set<Integer> declarationPosition = declarationPositionParameters(mt, printedParameterTypes);
 
     buffer.pushNewlineGroup(indent, 0);
     for (int i = start; i < md.params.length; i++) {
@@ -4200,7 +4192,7 @@ public class ClassWriter implements StatementWriter {
    */
   private static void restoreFoldedInstanceField(ClassNode node, MethodWrapper methodWrapper, RootStatement root) {
     if (node.lambdaInformation.is_content_method_static || node.parent == null
-        || methodWrapper.varproc == null || !RoundTrip.selector("lambdathis")) {
+        || methodWrapper.varproc == null) {
       return;
     }
     if (usesThis(root)) {
@@ -4587,9 +4579,6 @@ public class ClassWriter implements StatementWriter {
     for (int i = 0; i < methods.size(); i++) {
       order.add(i);
     }
-    if (!RoundTrip.selector("memberorder")) {
-      return order;
-    }
     int clinit = -1;
     for (int i = 0; i < methods.size(); i++) {
       if (CodeConstants.CLINIT_NAME.equals(methods.get(i).getName())) {
@@ -4835,7 +4824,7 @@ public class ClassWriter implements StatementWriter {
 
       List<VarType> parameterBounds = bounds.get(i);
       boolean annotated = false;
-      if (member != null && RoundTrip.selector("typeuse")) {
+      if (member != null) {
         for (int j = 0; j < parameterBounds.size(); j++) {
           if (!getTypeAnnotations(member, targetType, (i << 8) | j).isEmpty()) {
             annotated = true;
@@ -4851,7 +4840,7 @@ public class ClassWriter implements StatementWriter {
             buffer.append(" & ");
           }
           List<Pair<Queue<TypeAnnotation.PathValue>, AnnotationExprent>> annos =
-            member != null && RoundTrip.selector("typeuse")
+            member != null
               ? getTypeAnnotations(member, targetType, (i << 8) | j)
               : Collections.emptyList();
           if (!annos.isEmpty()) {

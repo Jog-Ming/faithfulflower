@@ -27,9 +27,6 @@ public final class LoopWrapperMerge {
   private LoopWrapperMerge() {}
 
   public static boolean restructure(Statement root) {
-    if (!RoundTrip.selector("loopwrap")) {
-      return false;
-    }
     if (mergeChains(root)) {
       return true;
     }

@@ -352,7 +352,6 @@ public final class SwitchPatternMatchProcessor {
     // are gone. The source wrote the switch bare at the method's end, so the loop, the copy of
     // the selector in a local, and the return the loop printed as its break all go away.
     boolean dispatchLoop = parent instanceof SequenceStatement dispatchSeq
-        && RoundTrip.selector("switchjoin")
         && dispatchSeq.getStats().size() == 2
         && dispatchSeq.getStats().get(0) == stat
         && dispatchSeq.getStats().get(1) instanceof BasicBlockStatement tail

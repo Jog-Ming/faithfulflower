@@ -9,7 +9,6 @@ import org.jetbrains.java.decompiler.main.collectors.CounterContainer;
 import org.jetbrains.java.decompiler.main.collectors.VarNamesCollector;
 import org.jetbrains.java.decompiler.main.extern.IFernflowerLogger;
 import org.jetbrains.java.decompiler.main.extern.IFernflowerPreferences;
-import org.jetbrains.java.decompiler.modules.decompiler.RoundTrip;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.*;
 import org.jetbrains.java.decompiler.modules.decompiler.flow.DirectEdge;
 import org.jetbrains.java.decompiler.modules.decompiler.flow.DirectEdgeType;
@@ -247,7 +246,7 @@ public class NestedClassProcessor {
                   // enclosing name map can land on a sibling local that reused the slot, while
                   // the exprent keeps the row its own declaration prints.
                   LocalVariable capturedRow = ((VarExprent)param).getLVT();
-                  String capturedName = capturedRow != null && RoundTrip.selector("slotname")
+                  String capturedName = capturedRow != null
                     ? capturedRow.getName() : enclosingVarProc.getVarName(paramVersion);
                   mapNewNames.put(varVersion, capturedName);
                   lvts.put(varVersion, ((VarExprent)param).getLVT());
@@ -256,7 +255,7 @@ public class NestedClassProcessor {
                   // creation of the outer's inner class inside the body resolves to it, and the
                   // target's null check records whether the source qualified that creation.
                   String capturedThis = enclosingVarProc.getThisVars().get(paramVersion);
-                  if (capturedThis != null && RoundTrip.selector("implicit-enclosing-capture")) {
+                  if (capturedThis != null) {
                     varProc.getThisVars().put(varVersion, capturedThis);
                   }
                   if (enclosingVarProc.getVarFinal(paramVersion) == FinalType.NON_FINAL) {

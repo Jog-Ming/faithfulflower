@@ -6,7 +6,6 @@ import org.jetbrains.java.decompiler.code.FullInstructionSequence;
 import org.jetbrains.java.decompiler.main.ClassesProcessor;
 import org.jetbrains.java.decompiler.main.ClassesProcessor.ClassNode;
 import org.jetbrains.java.decompiler.main.DecompilerContext;
-import org.jetbrains.java.decompiler.modules.decompiler.RoundTrip;
 import org.jetbrains.java.decompiler.struct.StructClass;
 import org.jetbrains.java.decompiler.struct.StructContext;
 import org.jetbrains.java.decompiler.struct.StructMethod;
@@ -173,7 +172,7 @@ public class LambdaProcessor {
    * sat relative to each other, and their lambda indices only follow that order.
    */
   private static void registerOrphanLambdas(ClassNode node, StructClass cl) {
-    if (!RoundTrip.selector("orphanlambda") || node.type == ClassNode.Type.LAMBDA) {
+    if (node.type == ClassNode.Type.LAMBDA) {
       // A lambda node carries its parent's class; the class's own node registers for it.
       return;
     }

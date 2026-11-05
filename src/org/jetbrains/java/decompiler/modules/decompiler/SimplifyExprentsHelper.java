@@ -901,7 +901,7 @@ public class SimplifyExprentsHelper {
    * line the reference was written on.
    */
   private static void attachNullCheckOffsets(InvocationExprent check, Exprent second) {
-    if (!RoundTrip.selector("arg-head-line") || check.bytecode == null || check.bytecode.isEmpty()
+    if (check.bytecode == null || check.bytecode.isEmpty()
       || check.getLstParameters().isEmpty()) {
       return;
     }

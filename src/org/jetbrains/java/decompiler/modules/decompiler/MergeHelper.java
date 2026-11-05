@@ -83,7 +83,7 @@ public class MergeHelper {
    * the guard by {@code A && !guard} restores the header the source wrote.
    */
   private static boolean matchWhileGuard(DoStatement stat) {
-    if (!RoundTrip.selector("loopguard") || stat.getConditionExprent() == null) {
+    if (stat.getConditionExprent() == null) {
       return false;
     }
     Statement first = stat.getFirst();
@@ -558,7 +558,7 @@ public class MergeHelper {
     // last statement is left alone: the loop's later reshaping may still settle around it.
     Statement updateData = lastData;
     Set<Statement> continues = stat.getNeighboursSet(StatEdge.TYPE_CONTINUE, EdgeDirection.BACKWARD);
-    if (RoundTrip.selector("forhead") && continues.size() == 1
+    if (continues.size() == 1
         && !updateData.getExprents().isEmpty()
         && updateData.getExprents().get(updateData.getExprents().size() - 1) instanceof ExitExprent) {
       Statement back = continues.iterator().next();
@@ -835,8 +835,7 @@ public class MergeHelper {
    * are the only evidence.
    */
   private static void matchInfiniteFor(DoStatement stat) {
-    if (!RoundTrip.selector("forhead") || !RoundTrip.selector("infhead")
-        || stat.getConditionExprent() != null) {
+    if (stat.getConditionExprent() != null) {
       return;
     }
     // A body that opens with the loop's own test has its condition infolded: a later pass folds
@@ -1227,7 +1226,7 @@ public class MergeHelper {
           VarExprent copy = (VarExprent)initExprents[1].getLeft();
           VarExprent inc = (VarExprent)holder.getInstance();
           // A regular local used once is still the source's variable; only compiler temporaries fold.
-          boolean keepLocal = RoundTrip.selector("keeplocal") && !copy.isStack();
+          boolean keepLocal = !copy.isStack();
           if (!keepLocal && copy.getIndex() == inc.getIndex() && copy.getVersion() == inc.getVersion() &&
               !inc.isVarReferenced(stat.getTopParent(), copy) && !isNextCall(initExprents[1].getRight())) {
             preData.getExprents().remove(initExprents[1]);

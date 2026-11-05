@@ -5,7 +5,6 @@ import org.jetbrains.java.decompiler.code.CodeConstants;
 import org.jetbrains.java.decompiler.main.ClassesProcessor;
 import org.jetbrains.java.decompiler.main.DecompilerContext;
 import org.jetbrains.java.decompiler.modules.decompiler.ExprProcessor;
-import org.jetbrains.java.decompiler.modules.decompiler.RoundTrip;
 import org.jetbrains.java.decompiler.struct.gen.CodeType;
 import org.jetbrains.java.decompiler.struct.gen.VarType;
 import org.jetbrains.java.decompiler.struct.gen.generics.GenericType;
@@ -138,18 +137,12 @@ public class TypeAnnotation {
     TextBuffer appendBuffer = new TextBuffer();
     if (type.arrayDim > 0) {
       for (int i = 0; i < type.arrayDim; i++) {
-        if (RoundTrip.selector("typeuse")) {
-          // The type path starts at the array type itself: an empty path names this array and is
-          // written at its brackets (`ShortList @Nullable []`), while a DEEPER_ARRAY step names
-          // the component type and must precede the component's own name (`@Nullable ShortList[]`).
-          stepwiseWriteAnnotations(appendBuffer, true, typeAnnotations, filter, v -> false);
-          stepwiseWriteAnnotations(buffer, false, typeAnnotations, filter,
-            v -> v.kind() == TypeAnnotation.PathKind.DEEPER_ARRAY);
-        }
-        else {
-          stepwiseWriteAnnotations(appendBuffer, true, typeAnnotations, filter,
-            v -> v.kind() == TypeAnnotation.PathKind.DEEPER_ARRAY);
-        }
+        // The type path starts at the array type itself: an empty path names this array and is
+        // written at its brackets (`ShortList @Nullable []`), while a DEEPER_ARRAY step names
+        // the component type and must precede the component's own name (`@Nullable ShortList[]`).
+        stepwiseWriteAnnotations(appendBuffer, true, typeAnnotations, filter, v -> false);
+        stepwiseWriteAnnotations(buffer, false, typeAnnotations, filter,
+          v -> v.kind() == TypeAnnotation.PathKind.DEEPER_ARRAY);
 
         if (i == type.arrayDim - 1 && vararg && flush) { // flush == top level, only check for varargs there
           appendBuffer.append("...");
@@ -196,7 +189,7 @@ public class TypeAnnotation {
       }
 
       int first = 0;
-      if (memberName && RoundTrip.selector("typeuse") && type.arrayDim == 0 && fullClasses.size() > 1) {
+      if (memberName && type.arrayDim == 0 && fullClasses.size() > 1) {
         boolean plain = true;
         for (Pair<Queue<TypeAnnotation.PathValue>, AnnotationExprent> anno : typeAnnotations) {
           if (!anno.a.isEmpty() && anno.a.peek().kind() == TypeAnnotation.PathKind.DEEPER_NESTED) {
@@ -213,7 +206,7 @@ public class TypeAnnotation {
             stepwiseWriteAnnotations(buffer, false, typeAnnotations, filter, v -> false);
             first = fullClasses.size() - 1;
           }
-          else if (RoundTrip.selector("nestedimport")) {
+          else {
             // A nested type of another class is equally writable as an imported simple name
             // (`import Owner.Inner;`), which is what lets a declaration-position annotation lead
             // it; the qualified `Owner.@Nullable Inner` would record a type-position entry.
@@ -261,7 +254,7 @@ public class TypeAnnotation {
         if (i >= startIdx) {
           stepwiseWriteAnnotations(buffer, false, typeAnnotations, filter,
             v -> v.kind() == TypeAnnotation.PathKind.DEEPER_NESTED, i == fullClasses.size() - 1,
-            RoundTrip.selector("typeuse") && i == fullClasses.size() - 1);
+            i == fullClasses.size() - 1);
         }
 
         buffer.appendClass(name, false, node == null ? type.value : clazz.replace(".", "/"));

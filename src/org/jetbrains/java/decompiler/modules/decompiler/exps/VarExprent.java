@@ -168,16 +168,12 @@ public class VarExprent extends Exprent implements Pattern {
         // instruction of its own, and a for-each variable's recorded offset is the iterator
         // load, not its store.
         boolean matches;
-        if (RoundTrip.selector("typeuse") && offset >= 0
+        if (offset >= 0
             && local.index() == slot && local.startPc() == offset + storeLength(method, offset)) {
           matches = true;
         }
         else if (local.index() == slot && lvt != null && local.startPc() == lvt.getStart()) {
           matches = true;
-        }
-        else if (!RoundTrip.selector("typeuse")) {
-          matches = offset >= 0 && local.index() == slot && offset >= local.startPc() - 1
-            && offset < local.startPc() + local.length();
         }
         else {
           matches = false;

@@ -819,7 +819,7 @@ public class FunctionExprent extends Exprent {
    * Recompiling the cast-free chain makes javac insert the very same checkcast.
    */
   private boolean selfTypedReceiverCast() {
-    if (!org.jetbrains.java.decompiler.modules.decompiler.RoundTrip.enabled() || lstOperands.size() < 2) {
+    if (lstOperands.size() < 2) {
       return false;
     }
     VarType target = lstOperands.get(1).getExprType();

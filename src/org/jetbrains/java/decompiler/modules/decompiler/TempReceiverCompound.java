@@ -40,7 +40,7 @@ public final class TempReceiverCompound {
   }
 
   public static boolean fold(Statement root, StructMethod method) {
-    if (method == null || !RoundTrip.enabled() || !RoundTrip.selector("compound-temp")) {
+    if (method == null) {
       return false;
     }
 

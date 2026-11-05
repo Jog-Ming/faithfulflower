@@ -190,11 +190,9 @@ public class InvocationExprent extends Exprent {
    */
   public static int enterVarargElement(Exprent element) {
     int saved = ARGUMENT_TEXT_START.get()[0];
-    if (RoundTrip.selector("arg-head-line")) {
-      int line = firstPrintedLine(element);
-      if (line >= 0 && (saved < 0 || line > saved)) {
-        ARGUMENT_TEXT_START.get()[0] = line;
-      }
+    int line = firstPrintedLine(element);
+    if (line >= 0 && (saved < 0 || line > saved)) {
+      ARGUMENT_TEXT_START.get()[0] = line;
     }
     return saved;
   }
@@ -976,7 +974,7 @@ public class InvocationExprent extends Exprent {
         // the builder calls do determine it, and javac's own resolution of the nested method
         // reference cannot reach it without the witness the source wrote.
         Map<VarType, VarType> builderInference = null;
-        if (!isNew && RoundTrip.selector("rt-builder-inference")
+        if (!isNew
           && BUILDER_OWNER.equals(classname) && ("create".equals(name) || "mapCodec".equals(name))) {
           builderInference = BuilderInference.solve(this, fparams);
           if (builderInference != null) {
@@ -989,7 +987,7 @@ public class InvocationExprent extends Exprent {
         // variables default to their bounds and the reference is rejected. The reference's
         // implementation Signature and the interface's own Signature fix them.
         boolean referenceDemand = false;
-        if (!isNew && RoundTrip.selector("rt-demand-witness")) {
+        if (!isNew) {
           Map<VarType, VarType> referenceInference = BuilderInference.solveMethodReference(this, fparams);
           if (referenceInference != null) {
             referenceInference.forEach(genericsMap::putIfAbsent);
@@ -1136,7 +1134,7 @@ public class InvocationExprent extends Exprent {
         // class variable from the type arguments the call's own target already solved. javac
         // gives a receiver expression no target, so only an explicit witness on the receiver
         // could have carried that type.
-        if (!isNew && RoundTrip.selector("rt-demand-witness")) {
+        if (!isNew) {
           BuilderInference.solveReceiverFromReference(this, fparams, upperBoundsMap, upperBoundsMap);
         }
 
@@ -1429,7 +1427,6 @@ public class InvocationExprent extends Exprent {
                 // argument's own type variables to nameable types, the source named them; a pure
                 // element factory passes the target one level in to its elements.
                 if (functype != Type.INIT
-                  && RoundTrip.selector("rt-demand-witness")
                   && paramUB != null && paramUB.isGeneric()) {
                   if (parameter instanceof InvocationExprent topDown) {
                     topDown.applyTopDownTarget(paramUB);
@@ -1550,7 +1547,7 @@ public class InvocationExprent extends Exprent {
         // the reference does not have to be the receiver. The solved values are the printer's
         // own inference, so no explicit type argument is written for them.
         Map<VarType, VarType> argumentInference = null;
-        if (RoundTrip.selector("rt-demand-witness") && !fparams.isEmpty()) {
+        if (!fparams.isEmpty()) {
           argumentInference = BuilderInference.solveArgumentReference(this, fparams, genericsMap);
           if (argumentInference != null) {
             argumentInference.forEach(genericsMap::putIfAbsent);
@@ -1596,7 +1593,6 @@ public class InvocationExprent extends Exprent {
             }
 
             boolean receiverDemand = suppress && !isNew
-              && RoundTrip.selector("rt-demand-witness")
               && receiverTargetDemand(fparams, upperBoundsMap, bounds);
 
             // A type variable no recorded parameter mentions can only default to its declared
@@ -1604,7 +1600,6 @@ public class InvocationExprent extends Exprent {
             // instantiation, so the source pinned it. Only the witness whose erasure reproduces
             // the pool's descriptor is used.
             boolean returnOnlyDemand = !isNew
-              && RoundTrip.selector("rt-demand-witness")
               && returnOnlyTypeVariableDemand(fparams, ret, bounds, upperBound, isNew);
 
             // A receiver call whose own arguments leave a type variable to the target: javac
@@ -1614,13 +1609,11 @@ public class InvocationExprent extends Exprent {
             // something javac infers, so the printer's wildcard is the target's, and only an
             // explicit witness could have produced it.
             boolean receiverWildcardDemand = !suppress && !isNew
-              && RoundTrip.selector("rt-demand-witness")
               && receiverWildcardTargetDemand(fparams, ret, upperBound, bounds, false);
             // A method reference cannot name a wildcard return type, so where the target projection
             // carries one at an invariant position javac cannot infer it even when the printer's
             // own return type already fits the expected class.
             boolean receiverMethodRefDemand = suppress && !isNew
-              && RoundTrip.selector("rt-demand-witness")
               && receiverWildcardTargetDemand(fparams, ret, upperBound, bounds, true);
 
             if ((!suppress && !receiverWildcardDemand && !receiverMethodRefDemand)
@@ -1646,8 +1639,7 @@ public class InvocationExprent extends Exprent {
               if (rawWitness) {
                 genericArgs.clear();
               }
-              if (!rawWitness && genericArgs.isEmpty() && !isNew
-                && RoundTrip.selector("rt-demand-witness")) {
+              if (!rawWitness && genericArgs.isEmpty() && !isNew) {
                 // The printer's inference has no value for some type variable; an argument's
                 // recorded metafactory type may still prove what the source passed.
                 tryDemandWitness(fparams, bounds);
@@ -1661,40 +1653,34 @@ public class InvocationExprent extends Exprent {
               // to the target; a receiver call had to name them.
               getGenericArgs(fparams, genericsMap, genericArgs);
             }
-            else if (RoundTrip.selector("rt-demand-witness")
-              && receiverRecordedValueDemand(fparams, ret, upperBound, bounds)) {
+            else if (receiverRecordedValueDemand(fparams, ret, upperBound, bounds)) {
               // The printer has no value for some type variable of a call in receiver position.
               // The outer call's functional argument records the value it must return, and the
               // receiver's type argument is invariant in it: the recorded type pins the variable.
             }
-            else if (RoundTrip.selector("rt-demand-witness")
-              && targetProjectionDemand(fparams, ret, upperBound, bounds, LAMBDA_BODY.get() == this)) {
+            else if (targetProjectionDemand(fparams, ret, upperBound, bounds, LAMBDA_BODY.get() == this)) {
               // The recorded expected type names the arguments this call's own value must carry,
               // and the printer's own inference landed on a different one.
             }
-            else if (RoundTrip.selector("rt-demand-witness")
-              && passThroughReceiverDemand(fparams, ret, upperBound, bounds)) {
+            else if (passThroughReceiverDemand(fparams, ret, upperBound, bounds)) {
               // The outer call returns its receiver's own type variable unchanged and its own
               // result is the method's declared return type, so the receiver's argument must be
               // that recorded type; a method reference there is not pertinent to javac.
             }
-            else if (RoundTrip.selector("rt-genvar-args")
-              && inPoly() && hasGenvarArgs(fparams, genericsMap)) {
+            else if (inPoly() && hasGenvarArgs(fparams, genericsMap)) {
               // A call inferred to an enclosing method's or class's type variable can need the
               // witness in source: javac does not propagate the target type into every poly
               // expression (a conditional arm, a diamond argument), and then cannot infer it.
               getGenericArgs(fparams, genericsMap, genericArgs);
             }
-            else if (RoundTrip.selector("rt-demand-witness")
-              && constructorDelegationDemand(fparams, ret, targetSeeded, isNew)) {
+            else if (constructorDelegationDemand(fparams, ret, targetSeeded, isNew)) {
               // this(...)/super(...) overload resolution cannot hand the target type to the
               // argument, so a type variable the arguments leave to the target must be pinned
               // in source; the constructor's recorded parameter type is what demanded it.
               getGenericArgs(fparams, genericsMap, genericArgs);
               narrowRecordedFunctionReturns(fparams, genericArgs);
             }
-            else if (!isNew && RoundTrip.selector("rt-demand-witness")
-              && tryDemandWitness(fparams, bounds)) {
+            else if (!isNew && tryDemandWitness(fparams, bounds)) {
               // A functional argument's recorded instantiated type is wider than the method it
               // names, so the source constrained the call's type arguments explicitly. The witness
               // is printed only when its erasure reproduces the call the target actually recorded.
@@ -1709,7 +1695,6 @@ public class InvocationExprent extends Exprent {
           // so javac cannot infer this call's variable from the lambda to the argument's type.
           // The source pinned it to the recorded declaration, which is the only nameable witness.
           if (OPTIONAL_MAP_DEMAND.get() == this
-            && RoundTrip.selector("rt-demand-witness")
             && optionalMapWitness(OPTIONAL_MAP_DEMAND_TYPE.get(), fparams, bounds)) {
             genericArgs.clear();
             genericArgs.add(OPTIONAL_MAP_DEMAND_TYPE.get());
@@ -1720,9 +1705,7 @@ public class InvocationExprent extends Exprent {
           // type (the ground target's element type, erased) disagrees with what the printer
           // inferred for this call's return. The referenced method's recorded parameter type is
           // the only fully parameterised name that reproduces it.
-          if (RoundTrip.selector("rt-demand-witness")) {
-            outerReferenceParameterWitness(fparams, ret);
-          }
+          outerReferenceParameterWitness(fparams, ret);
 
           // The solved builder argument is printed even where the printer's own inference left
           // nothing: every type variable it names is in scope and every constraint holds.
@@ -2892,7 +2875,7 @@ public class InvocationExprent extends Exprent {
    * recognizes for a call whose value is consumed; the two comparisons must not overlap.
    */
   private boolean closingParenSharesLastArgumentLine(TextBuffer printed) {
-    if (!RoundTrip.selector("paren-share") || bytecode == null || bytecode.isEmpty()) {
+    if (bytecode == null || bytecode.isEmpty()) {
       return false;
     }
     int invoke = RoundTrip.lastInstructionStart(bytecode);
@@ -3782,7 +3765,6 @@ public class InvocationExprent extends Exprent {
     // javac marks a line at every invocation's invoke, while the argument loads before it only
     // inherit the last mark. The text of a call therefore starts on the line of its own invoke,
     // not on the line of the first load the expression carries.
-    boolean headLine = RoundTrip.selector("arg-head-line");
     // The allocation's own line is only inherited from the enclosing statement, and an inherited
     // line is not where the creation's text sits; it must not reach the enclosing call's break
     // decision as if it were one.
@@ -3792,14 +3774,14 @@ public class InvocationExprent extends Exprent {
         && !func.getLstOperands().isEmpty()) {
         current = func.getLstOperands().get(0);
       } else if (current instanceof InvocationExprent invocation) {
-        line = headLine ? RoundTrip.sourceLineEnd(invocation) : RoundTrip.sourceLine(invocation);
+        line = RoundTrip.sourceLineEnd(invocation);
         if (invocation.getInstance() == null) {
           break;
         }
         current = invocation.getInstance();
       } else if (current instanceof FieldExprent field && field.getInstance() != null) {
         current = field.getInstance();
-      } else if (headLine && current instanceof NewExprent created) {
+      } else if (current instanceof NewExprent created) {
         // A method reference's text starts at the invokedynamic javac records for it, which is
         // the line the reference is written on. A creation keeps its own first offset: its
         // constructor invocation is recorded after the arguments, on the last of their lines,
@@ -3844,7 +3826,7 @@ public class InvocationExprent extends Exprent {
       && compound.getLstOperands().size() == 2) {
       InvocationExprent firstCall = firstPrintedCall(compound);
       if (firstCall != null) {
-        int callLine = headLine ? RoundTrip.sourceLineEnd(firstCall) : RoundTrip.sourceLine(firstCall);
+        int callLine = RoundTrip.sourceLineEnd(firstCall);
         int inherited = RoundTrip.textStartLine(argument);
         if (callLine >= 0 && inherited >= 0) {
           return Math.max(callLine, inherited);
@@ -3856,7 +3838,7 @@ public class InvocationExprent extends Exprent {
     // carries such an entry; a bare load under an inherited line was written on the line above --
     // inside a lambda body that line is the body's own recorded end -- and reading it as the
     // argument's text start invents a break after the opening parenthesis.
-    if (RoundTrip.selector("load-head-line") && !carriesLineEntry(current)) {
+    if (!carriesLineEntry(current)) {
       return -1;
     }
     return RoundTrip.sourceLine(current);
@@ -4639,7 +4621,7 @@ public class InvocationExprent extends Exprent {
       // element.
       Exprent firstArgument = start < lstParameters.size() ? lstParameters.get(start) : null;
       boolean elementStartsLater = false;
-      if (RoundTrip.selector("vararg-elements") && firstArgument instanceof NewExprent array
+      if (firstArgument instanceof NewExprent array
           && array.isVarArgParam() && !array.getLstArrayElements().isEmpty()) {
         Exprent element = array.getLstArrayElements().get(0);
         int line = RoundTrip.sourceLine(element);
@@ -4661,7 +4643,7 @@ public class InvocationExprent extends Exprent {
         && ARGUMENT_AT.get()[enclosingDepth - 2] == RoundTrip.currentMethod();
       boolean inheritedFirst = (firstLine < callLine && firstEnd == firstLine
         && (ARG_AT_LINE_START.get()
-            || RoundTrip.selector("arg-head-line") && ARGUMENT_TEXT_START.get()[0] > firstLine))
+            || ARGUMENT_TEXT_START.get()[0] > firstLine))
         || !insideEnclosingArguments && firstArgumentInheritsCallStartLine(firstLine, callLine);
       // A constructor's own token is its `new`: the init invocation inherits the line of the last
       // instruction of the argument list, so comparing the first argument with it would read a
@@ -4812,19 +4794,15 @@ public class InvocationExprent extends Exprent {
         // from the enclosing statement's marker. javac attributes the invoke to the first
         // argument's line, so a later argument at the call's own line was written on that line:
         // the first argument merely inherited the declaration's line above it.
-        boolean callLineGate = RoundTrip.selector("rt-arg-call-line");
         // The target's line for the previous argument's last instruction is where that argument
         // ended; an argument that starts on it was written on the same source line.
-        boolean prevEndGate = RoundTrip.selector("rt-arg-prev-end");
-        int previous = prevEndGate ? previousEnd : previousLine;
+        int previous = previousEnd;
         // The enclosing argument's text starts no earlier than the line the printer placed it on;
         // a previous argument's recorded end below that line is a load inheriting an outer line,
         // not a break the source had before this argument.
-        if (RoundTrip.selector("arg-base-line")) {
-          int argumentBase = ARGUMENT_TEXT_START.get()[0];
-          if (argumentBase >= 0) {
-            previous = Math.max(previous, argumentBase);
-          }
+        int argumentBase = ARGUMENT_TEXT_START.get()[0];
+        if (argumentBase >= 0) {
+          previous = Math.max(previous, argumentBase);
         }
         // A lambda's invokedynamic inherits the call's line, but its body is a method of its own:
         // a body line later than the previous argument's end means the source wrote the lambda
@@ -4837,7 +4815,7 @@ public class InvocationExprent extends Exprent {
           && (openingLine < 0 || argumentBodyLine > openingLine);
         boolean forced = !firstParameter
           && (lambdaLater || line >= 0 && previous >= 0 && line > previous
-              && (!callLineGate || openingLine < 0 || line > openingLine));
+              && (openingLine < 0 || line > openingLine));
         // The target puts this argument on the line the previous one ends on, so the source did
         // not break here: a width break would move the argument's own text onto a line it never
         // had, and every entry that inherits this line would move with it.
@@ -4934,8 +4912,7 @@ public class InvocationExprent extends Exprent {
       } else if (closingParenSharesLastArgumentLine(buf)) {
         buf.appendPossibleNewline("", true);
       } else if (previousLine >= 0 && callLine >= 0 && previousLine > callLine
-          && (!RoundTrip.selector("arg-entry")
-              || RoundTrip.lineStartsHere(lstParameters.get(lstParameters.size() - 1)))) {
+          && RoundTrip.lineStartsHere(lstParameters.get(lstParameters.size() - 1))) {
         buf.appendLineSeparator();
       } else {
         buf.appendPossibleNewline("", true);
@@ -5321,7 +5298,7 @@ public class InvocationExprent extends Exprent {
    * break then puts the dot on that line.
    */
   private boolean explicitUnboxingStartsLine() {
-    if (!RoundTrip.selector("explicit-unbox") || instance == null
+    if (instance == null
         || bytecode == null || bytecode.isEmpty()) {
       return false;
     }
@@ -5526,9 +5503,6 @@ public class InvocationExprent extends Exprent {
    */
   private BitSet getLambdaAmbiguousParameters() {
     BitSet result = new BitSet(lstParameters.size());
-    if (!RoundTrip.selector("overloadcast")) {
-      return result;
-    }
     boolean hasLambda = false;
     for (Exprent param : lstParameters) {
       if (param instanceof NewExprent && ((NewExprent) param).isLambda()) {
@@ -6520,8 +6494,7 @@ public class InvocationExprent extends Exprent {
    * printed type argument otherwise falls back to the declared bound.
    */
   private void applyTopDownTarget(VarType target) {
-    if (!RoundTrip.selector("rt-demand-witness")
-      || target == null || !target.isGeneric() || desc == null || desc.getSignature() == null) {
+    if (target == null || !target.isGeneric() || desc == null || desc.getSignature() == null) {
       return;
     }
     VarType elementTarget = elementArgumentTarget(target);
@@ -6577,8 +6550,7 @@ public class InvocationExprent extends Exprent {
 
   /** The same proof for a constructor whose value must fit the recorded target. */
   private void applyTopDownNewTarget(NewExprent created, VarType target) {
-    if (!RoundTrip.selector("rt-demand-witness")
-      || target == null || !target.isGeneric() || created.getNewType().arrayDim != 0) {
+    if (target == null || !target.isGeneric() || created.getNewType().arrayDim != 0) {
       return;
     }
     StructClass cls = DecompilerContext.getStructContext().getClass(created.getNewType().value);
@@ -7361,9 +7333,6 @@ public class InvocationExprent extends Exprent {
    * of the call recorded return type, which is what ties the two together.
    */
   private static List<VarType> chainRecordedWitness(List<VarType> witness) {
-    if (!RoundTrip.selector("chainwitness")) {
-      return witness;
-    }
     java.util.ArrayDeque<InvocationExprent> chain = PRINT_CHAIN.get();
     if (chain.isEmpty()) {
       return witness;
@@ -7521,7 +7490,7 @@ public class InvocationExprent extends Exprent {
    * non-generic implementation signature names no type arguments and is not used.
    */
   private boolean outerReferenceParameterWitness(List<String> fparams, VarType ret) {
-    if (!RoundTrip.selector("outerrefwitness") || !isInvocationInstance || fparams.size() != 1
+    if (!isInvocationInstance || fparams.size() != 1
       || ret == null || ret.type != CodeType.OBJECT || !ret.isGeneric() || desc == null
       || desc.getSignature() == null) {
       return false;
@@ -8448,7 +8417,7 @@ public class InvocationExprent extends Exprent {
    * let javac infer the variable from the argument instead.
    */
   private boolean witnessContradictsFunctionalRecord(List<String> fparams) {
-    if (!RoundTrip.selector("witnessrecord") || genericArgs.isEmpty() || genericArgs.size() != fparams.size()
+    if (genericArgs.isEmpty() || genericArgs.size() != fparams.size()
       || desc == null || desc.getSignature() == null || lstParameters.isEmpty()) {
       return false;
     }
@@ -8548,7 +8517,7 @@ public class InvocationExprent extends Exprent {
   private boolean correctMethodReferenceWitness(List<String> fparams) {
     // Only a receiver's type arguments are beyond javac's inference: an argument or assignment
     // position hands the call a target, and the source could leave the variable to it.
-    if (!RoundTrip.selector("witnessrecord") || !isInvocationInstance || genericArgs.size() != fparams.size()
+    if (!isInvocationInstance || genericArgs.size() != fparams.size()
       || desc == null || desc.getSignature() == null || lstParameters.isEmpty()
       || genericArgs.contains(null) || genericArgs.contains(GenericType.DUMMY_VAR)) {
       return false;

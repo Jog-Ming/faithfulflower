@@ -57,14 +57,7 @@ public final class ReferenceReceiverTemp {
   }
 
   public static boolean fold(Statement root, StructMethod method) {
-    // The reference fold exists to feed the bridge printer: with that printer off, the marker
-    // would have no reader and the deleted store would leave the lambda's body dangling. The
-    // lambda's `this` capture has no such reader and stands on its own selector.
-    if (method == null || !RoundTrip.enabled()) {
-      return false;
-    }
-    boolean reference = RoundTrip.selector("reftemp") && RoundTrip.selector("methodrefbridge");
-    if (!reference && !RoundTrip.selector("lambdathis")) {
+    if (method == null) {
       return false;
     }
 
@@ -195,7 +188,7 @@ public final class ReferenceReceiverTemp {
       return null;
     }
     Bridge bridge = boundBridge(site);
-    if (bridge == null || !RoundTrip.selector("reftemp") || !RoundTrip.selector("methodrefbridge")) {
+    if (bridge == null) {
       return matchLambdaThis(site, method, store, ambiguous, occurrences, capture);
     }
     // The receiver temp must be untabled and appear exactly twice: its store and this capture.
@@ -241,9 +234,6 @@ public final class ReferenceReceiverTemp {
   private static Fold matchLambdaThis(NewExprent site, StructMethod method, Store store,
                                       Set<Integer> ambiguous, Map<Integer, List<VarExprent>> occurrences,
                                       VarExprent capture) {
-    if (!RoundTrip.selector("lambdathis")) {
-      return null;
-    }
     ClassNode node = DecompilerContext.getClassProcessor().getMapRootClasses().get(site.getNewType().value);
     if (node == null || node.lambdaInformation == null || !node.lambdaInformation.is_content_method_static) {
       return null;

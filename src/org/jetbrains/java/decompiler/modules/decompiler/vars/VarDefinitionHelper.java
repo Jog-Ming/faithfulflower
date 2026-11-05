@@ -725,9 +725,6 @@ public class VarDefinitionHelper {
    * of its own, so neither shape is vetoed here.
    */
   private boolean distinctRows(VarExprent victim, VarVersionPair survivor) {
-    if (!RoundTrip.selector("slotname")) {
-      return false;
-    }
     LocalVariable victimRow = declarationRows.get(victim.getIndex());
     LocalVariable survivorRow = declarationRows.get(survivor.var);
     return victimRow != null && survivorRow != null
@@ -2181,10 +2178,6 @@ public class VarDefinitionHelper {
     if (separateClassScope) {
       return false;
     }
-    if (!selfParam && !RoundTrip.selector("lambdaname")) {
-      return true;
-    }
-
     List<LocalVariable> vars = lvtEntries(vim.mt, vim.pair.var, name);
     if (vars.isEmpty() && vim.lvt != null) {
       vars = entriesBySlot(vim.mt, vim.lvt.getVersion().var);

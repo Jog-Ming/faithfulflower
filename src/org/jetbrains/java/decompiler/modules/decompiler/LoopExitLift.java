@@ -28,9 +28,6 @@ public final class LoopExitLift {
   private LoopExitLift() {}
 
   public static boolean lift(Statement root) {
-    if (!RoundTrip.selector("exitlift")) {
-      return false;
-    }
     return liftRec(root);
   }
 

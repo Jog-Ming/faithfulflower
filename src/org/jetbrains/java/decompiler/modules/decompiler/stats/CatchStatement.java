@@ -269,8 +269,7 @@ public class CatchStatement extends Statement {
 
       // javac gives a try-with-resources' synthetic close the closing brace's line, so the
       // target's table says whether the original put the brace on a line without the catch.
-      boolean newLine = RoundTrip.selector("rt-catch-line")
-          && handlerOffset != null
+      boolean newLine = handlerOffset != null
           && RoundTrip.catchOnNewLine(i == 1 ? first : stats.get(i - 1), handlerOffset,
               i == 1 && !resources.isEmpty());
       if (newLine) {
@@ -549,7 +548,7 @@ public class CatchStatement extends Statement {
    * none for `_`.
    */
   private static boolean unnamedCatchDeclaration(Integer handlerOffset) {
-    if (!RoundTrip.selector("unnamedbind") || !RoundTrip.hasUnnamedVariables()) {
+    if (!RoundTrip.hasUnnamedVariables()) {
       return false;
     }
     if (handlerOffset == null || handlerOffset < 0) {
@@ -589,9 +588,6 @@ public class CatchStatement extends Statement {
    * slot; after an empty catch javac is free to reuse the parameter's own slot for it.
    */
   private static boolean unnamedCatchParameter(Statement handler, int varIndex) {
-    if (!RoundTrip.selector("emptycatch")) {
-      return false;
-    }
     int body = emptyCatchBodyStart(handler, varIndex);
     BasicBlock block = handler.getBasichead() == null ? null : handler.getBasichead().getBlock();
     if (body < 0 || block == null) {

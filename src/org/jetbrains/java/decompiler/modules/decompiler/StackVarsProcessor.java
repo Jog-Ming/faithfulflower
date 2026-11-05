@@ -508,15 +508,13 @@ public class StackVarsProcessor {
       // in may be empty and the use may sit past the statement the flat flow reaches next, which is
       // what the value is there for. Its evaluation stays in the printed expression, in front of
       // whatever else that expression evaluates.
-      boolean soleSwitchUse = right instanceof SwitchExprent && usedVers.size() == 1
-        && RoundTrip.selector("switchinline");
+      boolean soleSwitchUse = right instanceof SwitchExprent && usedVers.size() == 1;
       // A receiver the target evaluates before a switch-expression argument stays on the stack
       // across it: the class file has no astore/aload pair and no local row for it. The tree had
       // to name the value to carry it over the switch, and its one use is the first thing the
       // exprent after the switch evaluates, so inlining prints the receiver in front of the
       // switch argument exactly where the target evaluates it.
-      boolean receiverAcrossSwitch = RoundTrip.selector("switcharg")
-        && usedVers.size() == 1 && usedver.var == leftVar.var
+      boolean receiverAcrossSwitch = usedVers.size() == 1 && usedver.var == leftVar.var
         && next instanceof SwitchHeadExprent
         && stat instanceof SwitchStatement switchStat && switchStat.isPhantom()
         && receiverBeforeSwitchValue(switchStat, usedver);

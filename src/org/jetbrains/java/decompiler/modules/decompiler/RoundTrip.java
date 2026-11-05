@@ -4,7 +4,6 @@ import org.jetbrains.java.decompiler.code.CodeConstants;
 import org.jetbrains.java.decompiler.code.FullInstructionSequence;
 import org.jetbrains.java.decompiler.code.Instruction;
 import org.jetbrains.java.decompiler.main.DecompilerContext;
-import org.jetbrains.java.decompiler.main.extern.IFernflowerPreferences;
 import org.jetbrains.java.decompiler.main.rels.MethodWrapper;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.ArrayExprent;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.AssignmentExprent;
@@ -38,7 +37,7 @@ import org.jetbrains.java.decompiler.struct.gen.VarType;
 import java.util.BitSet;
 import java.util.List;
 
-/** Target-aware choices for byte-faithful output. Only active with {@code --round-trip=1}. */
+/** Target-aware choices for byte-faithful output. Always active. */
 public final class RoundTrip {
   /** A statement whose trailing jump an enclosing print has taken over (an else's implicit exit). */
   private static final ThreadLocal<Statement> SUPPRESSED_JUMP = new ThreadLocal<>();
@@ -610,9 +609,6 @@ public final class RoundTrip {
    */
   private static BitSet handoverStarts(StructMethod method) {
     BitSet starts = new BitSet();
-    if (!selector("bareblock")) {
-      return starts;
-    }
     StructLocalVariableTableAttribute table =
       method.getAttribute(StructGeneralAttribute.ATTRIBUTE_LOCAL_VARIABLE_TABLE);
     if (table == null) {
@@ -642,7 +638,7 @@ public final class RoundTrip {
    */
   public static int[] tryStoredBeforeReturn(BitSet offsets) {
     StructMethod method = currentMethod();
-    if (method == null || offsets == null || !selector("tryreturn")) {
+    if (method == null || offsets == null) {
       return null;
     }
     java.util.Map<Integer, int[]> stores = TRY_RETURN_STORES.get(method);
@@ -683,7 +679,7 @@ public final class RoundTrip {
    */
   public static int twrStoredBeforeReturn(BitSet offsets) {
     StructMethod method = currentMethod();
-    if (method == null || offsets == null || !selector("twrreturn")) {
+    if (method == null || offsets == null) {
       return -1;
     }
     java.util.Map<Integer, Integer> stores = TWR_RETURN_STORES.get(method);
@@ -722,7 +718,7 @@ public final class RoundTrip {
    * question; a row opening inside the run says nothing about the enclosing block.
    */
   public static int[] trailingBareBlock(java.util.List<Statement> children, int i, Statement owner) {
-    if (!selector("blockbrace") || children == null || owner == null || i < 0 || i >= children.size()) {
+    if (children == null || owner == null || i < 0 || i >= children.size()) {
       return null;
     }
     StructMethod method = currentMethod();
@@ -825,7 +821,7 @@ public final class RoundTrip {
    * together with the statements after it.
    */
   public static int trailingBlockFromExprents(java.util.List<Statement> children, int i, Statement owner) {
-    if (!selector("blockbrace") || children == null || owner == null || i < 0 || i >= children.size()) {
+    if (children == null || owner == null || i < 0 || i >= children.size()) {
       return -1;
     }
     Statement st = children.get(i);
@@ -985,7 +981,7 @@ public final class RoundTrip {
    * The same, for an else arm that would take every statement after the if up to {@code elseEnd}.
    */
   public static boolean elseChainSlots(IfStatement ifstat, Statement elseFirst, int elseEnd) {
-    if (!selector("elsechain") || ifstat == null || elseFirst == null
+    if (ifstat == null || elseFirst == null
         || ifstat.getIfstat() == null) {
       return false;
     }
@@ -1090,7 +1086,7 @@ public final class RoundTrip {
    * keyword can take, so the arm's remaining statements are this test's else.
    */
   public static boolean chainArmHead(Statement stat) {
-    if (!selector("elsechain") || stat == null) {
+    if (stat == null) {
       return false;
     }
     Statement parent = stat.getParent();
@@ -1165,7 +1161,7 @@ public final class RoundTrip {
    * binding first, when that block closes. The earlier operands stay in one condition.
    */
   public static boolean patternBindingFollows(Exprent earlier, Exprent operand) {
-    if (!selector("patternand") || earlier == null || operand == null) {
+    if (earlier == null || operand == null) {
       return false;
     }
     LocalVariable previous = null;
@@ -1227,7 +1223,7 @@ public final class RoundTrip {
    * else arm would contribute to the ternary.
    */
   public static boolean ternaryHidesPatternChain(IfStatement ifstat, Exprent elseValue) {
-    if (!selector("yieldtern") || ifstat == null || elseValue == null) {
+    if (ifstat == null || elseValue == null) {
       return false;
     }
     LocalVariable thenBinding = conditionPatternLocal(ifstat);
@@ -1244,7 +1240,7 @@ public final class RoundTrip {
    * a pattern test has that evidence; an ordinary if behind `else {` is a block, not a clause.
    */
   public static boolean patternChainArm(IfStatement owner, Statement arm) {
-    if (!selector("elsechain") || owner == null || arm == null) {
+    if (owner == null || arm == null) {
       return false;
     }
     Statement lead = leadingStatement(arm);
@@ -1259,7 +1255,7 @@ public final class RoundTrip {
    * would flatten the test into an expression and renumber the hoisted bindings.
    */
   public static boolean foldsElseChain(IfStatement ifstat) {
-    if (!selector("yieldtern") || ifstat == null || ifstat.getParent() == null
+    if (ifstat == null || ifstat.getParent() == null
         || conditionPatternLocal(ifstat) == null) {
       return false;
     }
@@ -1339,9 +1335,6 @@ public final class RoundTrip {
    * shares the enclosing block.
    */
   public static boolean sharesEnclosingScope(Statement stat, int enclosingStart) {
-    if (!selector("switchjoin")) {
-      return false;
-    }
     StructMethod method = currentMethod();
     StructLocalVariableTableAttribute table = method == null ? null
       : method.getAttribute(StructGeneralAttribute.ATTRIBUTE_LOCAL_VARIABLE_TABLE);
@@ -1393,9 +1386,6 @@ public final class RoundTrip {
    * AST does not carry it.
    */
   public static int voidReturnBeforeBody(BitSet conditionOffsets, Statement body) {
-    if (!selector("bodyguard")) {
-      return -1;
-    }
     StructMethod method = currentMethod();
     if (method == null) {
       return -1;
@@ -1612,9 +1602,6 @@ public final class RoundTrip {
    * wrote the arms in the other order with the negated condition.
    */
   public static boolean swapIfArmsByLine(Statement thenArm, Statement elseArm) {
-    if (!selector("polarityline")) {
-      return false;
-    }
     StructMethod method = currentMethod();
     StructLineNumberTableAttribute table = method == null ? null
       : method.getAttribute(StructGeneralAttribute.ATTRIBUTE_LINE_NUMBER_TABLE);
@@ -1643,7 +1630,7 @@ public final class RoundTrip {
    * does not depend on how the decompiler typed the operands.
    */
   public static boolean swapIfArmsByTarget(Exprent head, Statement thenArm, Statement elseArm) {
-    if (!selector("polaritytarget") || !(head instanceof IfExprent ifHead)) {
+    if (!(head instanceof IfExprent ifHead)) {
       return false;
     }
     StructMethod method = currentMethod();
@@ -1669,7 +1656,7 @@ public final class RoundTrip {
    * must not flip it.
    */
   public static boolean polaritySelfConsistent(Exprent head, Statement thenArm, Statement elseArm) {
-    if (!selector("polaritytarget") || !(head instanceof IfExprent ifHead)) {
+    if (!(head instanceof IfExprent ifHead)) {
       return false;
     }
     if (currentMethod() == null) {
@@ -1723,7 +1710,7 @@ public final class RoundTrip {
    * that merged another statement's test spans offsets the condition's own operands do not.
    */
   public static boolean swapIfArmsByLastTarget(Exprent head, Statement thenArm) {
-    if (!selector("ifarmtarget") || !(head instanceof IfExprent ifHead)) {
+    if (!(head instanceof IfExprent ifHead)) {
       return false;
     }
     StructMethod method = currentMethod();
@@ -1762,7 +1749,7 @@ public final class RoundTrip {
    * statements that use it, so the negation is the printer's and the arms swap back.
    */
   public static boolean positivePatternTest(Exprent head, Statement thenArm) {
-    if (!selector("polaritytarget") || !(head instanceof IfExprent ifHead)) {
+    if (!(head instanceof IfExprent ifHead)) {
       return false;
     }
     StructMethod method = currentMethod();
@@ -1805,7 +1792,7 @@ public final class RoundTrip {
    * else as the then.
    */
   public static boolean emptyThenArm(Exprent head, Statement arm) {
-    if (!selector("emptythen") || !swapIfArmsByLastTarget(head, arm)) {
+    if (!swapIfArmsByLastTarget(head, arm)) {
       return false;
     }
     StructMethod method = currentMethod();
@@ -1843,7 +1830,7 @@ public final class RoundTrip {
    * the arm's own code never loads it. A name the arm reads must stay: the load names the slot.
    */
   public static boolean unnamedPatternVariable(Statement arm, VarExprent variable) {
-    if (!selector("unusedpattern") || arm == null || variable == null) {
+    if (arm == null || variable == null) {
       return false;
     }
     StructMethod method = currentMethod();
@@ -1873,7 +1860,7 @@ public final class RoundTrip {
    * range starts after this binding's store and cannot be this binding's name.
    */
   public static boolean unnamedDeclaration(VarExprent variable) {
-    if (!selector("unnamedbind") || variable == null || variable.bytecode == null || variable.bytecode.isEmpty()) {
+    if (variable == null || variable.bytecode == null || variable.bytecode.isEmpty()) {
       return false;
     }
     if (!hasUnnamedVariables()) {
@@ -1923,7 +1910,7 @@ public final class RoundTrip {
    * shape.
    */
   public static int negatedPatternGuard(Exprent head, Statement thenArm, Statement guardArm) {
-    if (!selector("patternguard") || !(head instanceof IfExprent ifHead)) {
+    if (!(head instanceof IfExprent ifHead)) {
       return -1;
     }
     StructMethod method = currentMethod();
@@ -1990,7 +1977,7 @@ public final class RoundTrip {
    * branch target and the bind's goto separate the two forms.
    */
   public static boolean guardArmFirst(Exprent head, Statement arm, Statement body) {
-    if (!selector("guardfirst") || head == null || arm == null || body == null
+    if (head == null || arm == null || body == null
         || !(head instanceof IfExprent ifHead)) {
       return false;
     }
@@ -2060,7 +2047,7 @@ public final class RoundTrip {
    * sends that branch to the test's own false path instead and leaves no goto behind it.
    */
   public static Exprent ternaryCondition(IfExprent head) {
-    if (!selector("condselect") || head == null || head.bytecode == null || head.bytecode.isEmpty()) {
+    if (head == null || head.bytecode == null || head.bytecode.isEmpty()) {
       return null;
     }
     StructMethod method = currentMethod();
@@ -2134,7 +2121,7 @@ public final class RoundTrip {
    */
   public static boolean guardElseJoin(Exprent head, Statement arm, java.util.List<Statement> rest,
                                       StructMethod method) {
-    if (!selector("guardfirst") || head == null || arm == null || rest == null || rest.isEmpty()
+    if (head == null || arm == null || rest == null || rest.isEmpty()
         || method == null || head.bytecode == null || head.bytecode.isEmpty()) {
       return false;
     }
@@ -2255,7 +2242,7 @@ public final class RoundTrip {
    * loop's end so the negated test skips nothing a continue would not.
    */
   public static boolean breakGuardByTarget(Exprent head, Statement around) {
-    if (!selector("breakguard") || !(head instanceof IfExprent ifHead) || around == null) {
+    if (!(head instanceof IfExprent ifHead) || around == null) {
       return false;
     }
     if (currentMethod() == null || lastAtomUnderOr(ifHead.getCondition(), false)) {
@@ -2349,7 +2336,7 @@ public final class RoundTrip {
    * compile to different opcode families and are left alone.
    */
   public static boolean swapIfArms(Exprent head) {
-    if (!selector("polarity") || !(head instanceof IfExprent ifHead)) {
+    if (!(head instanceof IfExprent ifHead)) {
       return false;
     }
     StructMethod method = currentMethod();
@@ -2378,9 +2365,6 @@ public final class RoundTrip {
    * proves which of the two sources the class file came from.
    */
   public static boolean branchEntersAt(Exprent head, Exprent exprent) {
-    if (!selector("patternjump")) {
-      return false;
-    }
     StructMethod method = currentMethod();
     if (method == null || head == null || exprent == null) {
       return false;
@@ -2404,7 +2388,7 @@ public final class RoundTrip {
    * the plain {@code if (C) { arm } break;} branches past the arm to the break instead.
    */
   public static boolean breakGuardEntersArm(Exprent head, Statement arm, Statement breakTarget) {
-    if (!selector("breakarm") || !(head instanceof IfExprent ifHead) || arm == null || breakTarget == null) {
+    if (!(head instanceof IfExprent ifHead) || arm == null || breakTarget == null) {
       return false;
     }
     StructMethod method = currentMethod();
@@ -2600,10 +2584,6 @@ public final class RoundTrip {
       || opcode == CodeConstants.opc_ifnull || opcode == CodeConstants.opc_ifnonnull;
   }
 
-  public static boolean enabled() {
-    return DecompilerContext.getOption(IFernflowerPreferences.ROUND_TRIP);
-  }
-
   /** The target's source line for the first instruction the exprent owns, or -1. */
   public static int sourceLine(Exprent exprent) {
     StructMethod method = currentMethod();
@@ -2623,9 +2603,6 @@ public final class RoundTrip {
    * marker is visible as a first entry whose line the entries after it run back above.
    */
   public static boolean lambdaStartMarker(int offset) {
-    if (!selector("lambda-end-line")) {
-      return false;
-    }
     StructMethod method = currentMethod();
     if (method == null || offset < 0 || !method.hasModifier(CodeConstants.ACC_SYNTHETIC)) {
       return false;
@@ -2691,9 +2668,6 @@ public final class RoundTrip {
    * belong in the header rather than in the body.
    */
   public static int updateBlockStart(Statement loop, java.util.List<Exprent> exprents) {
-    if (!selector("forupdate")) {
-      return -1;
-    }
     StructMethod method = currentMethod();
     if (method == null || loop == null || exprents == null || exprents.size() < 2) {
       return -1;
@@ -2757,9 +2731,6 @@ public final class RoundTrip {
    * the while form, which compiles to the same instructions either way.
    */
   public static boolean updateIsBodyStatement(Exprent condition, Exprent update) {
-    if (!selector("whileupdate")) {
-      return false;
-    }
     // A condition the merge passes built from an and/or carries no instruction range of its own;
     // its operands still record the lines the source gave the header, and the first operand
     // begins the test. Without the deep read a `while (a && b)` update reads no evidence at all.
@@ -2776,9 +2747,6 @@ public final class RoundTrip {
    * in the body, and the demotion of an existing for is never decided here.
    */
   public static boolean updateOnHeaderLine(Exprent condition, Exprent update) {
-    if (!selector("forheadline")) {
-      return false;
-    }
     if (!(update instanceof FunctionExprent function)) {
       return false;
     }
@@ -2868,9 +2836,6 @@ public final class RoundTrip {
    * block, so the source wrote a separate statement.
    */
   public static boolean initHeaderScoped(Statement loop, Exprent init) {
-    if (!selector("forhead")) {
-      return false;
-    }
     // A for head's parts share one line; a separate while's declaration carries the line before
     // the test. A row ending at the loop exit is not enough on its own — a declaration before a
     // loop that ends its block has the same end — so the statement must also sit on the head's
@@ -2920,9 +2885,6 @@ public final class RoundTrip {
    * which the for-each matcher must keep its chance to fold.
    */
   public static boolean updateInHeader(Exprent update, Exprent condition, int updateFrom) {
-    if (!selector("forhead")) {
-      return false;
-    }
     if (updateFrom >= 0) {
       return true;
     }
@@ -2937,7 +2899,7 @@ public final class RoundTrip {
    * condition starting its own line proves a separate while instead.
    */
   public static VarExprent headerLocalAssignedInCondition(Statement loop) {
-    if (!selector("forhead") || !(loop instanceof DoStatement doStat)) {
+    if (!(loop instanceof DoStatement doStat)) {
       return null;
     }
     Exprent condition = doStat.getConditionExprent();
@@ -2994,7 +2956,7 @@ public final class RoundTrip {
    * finally body. A return the source wrote inside try/finally gets its own return instruction.
    */
   public static boolean fallsOutOfFinally(Exprent exit) {
-    if (!selector("finallycopy") || exit == null || exit.bytecode == null || exit.bytecode.isEmpty()) {
+    if (exit == null || exit.bytecode == null || exit.bytecode.isEmpty()) {
       return false;
     }
     StructMethod method = currentMethod();
@@ -3084,7 +3046,7 @@ public final class RoundTrip {
    * store is outside the handler's reach and the flatten is the source's own shape.
    */
   public static boolean catchArmWitness(int storeOffset, StructMethod method) {
-    if (!selector("catchstore") || method == null || storeOffset < 0) {
+    if (method == null || storeOffset < 0) {
       return false;
     }
     java.util.List<int[]> ranges = EXCEPTION_RANGES.get(method);
@@ -3184,7 +3146,7 @@ public final class RoundTrip {
    */
   public static Exprent deferTryReturn(Statement stat) {
     Integer handler = TRY_BODY_HANDLER.get();
-    if (!selector("tryreturntail") || handler == null || stat == null
+    if (handler == null || stat == null
         || stat.getExprents() == null || stat.getExprents().size() != 1) {
       return null;
     }
@@ -3360,7 +3322,7 @@ public final class RoundTrip {
    * the operand's own line: the source broke before the right operand.
    */
   public static boolean operatorStartsChainLine(Exprent compound, Exprent right) {
-    if (!enabled() || compound == null || right == null) {
+    if (compound == null || right == null) {
       return false;
     }
     int own = textStartLine(compound);
@@ -3378,7 +3340,7 @@ public final class RoundTrip {
    * the head whose own first instruction starts there, or the last operand when none does.
    */
   public static Exprent booleanOpenLineOperand(Exprent chain) {
-    if (!selector("booleantail") || !(chain instanceof FunctionExprent function)
+    if (!(chain instanceof FunctionExprent function)
         || function.getFuncType() != FunctionExprent.FunctionType.BOOLEAN_AND
         || chain.bytecode == null || chain.bytecode.isEmpty()) {
       return null;
@@ -3491,7 +3453,7 @@ public final class RoundTrip {
    * its line is where the operand's text began: the source broke before the whole operand.
    */
   public static boolean patternBindingStartsLater(Exprent before, Exprent after) {
-    if (!enabled() || before == null || after == null) {
+    if (before == null || after == null) {
       return false;
     }
     int end = Math.max(lastLine(before), sourceLineEnd(before));
@@ -3527,7 +3489,7 @@ public final class RoundTrip {
    * beginning is the first line-table entry the operand's left-hand evaluation chain reaches.
    */
   public static boolean newlineBetweenOperands(Exprent before, Exprent after) {
-    if (!enabled() || after == null) {
+    if (after == null) {
       return false;
     }
     // The operand's own invoke or branch instruction carries a line too, and javac merges its
@@ -3578,9 +3540,6 @@ public final class RoundTrip {
    * form `use(++x)` loads the receiver (or the first argument) before the increment instead.
    */
   public static boolean ppmmStandsAlone(Exprent ppmm, Exprent next) {
-    if (!selector("ppmminline")) {
-      return false;
-    }
     int inc = firstOffsetOf(ppmm);
     int nxt = firstOffsetOf(next);
     return inc >= 0 && nxt >= 0 && inc < nxt;
@@ -3594,9 +3553,6 @@ public final class RoundTrip {
    * form is the source's.
    */
   public static boolean updatePrecedesExpression(Exprent update, Exprent expression) {
-    if (!selector("ppmmearly")) {
-      return false;
-    }
     int inc = firstOffsetOf(update);
     int first = firstOffsetOf(expression);
     if (inc < 0 || first < 0 || inc >= first) {
@@ -3613,8 +3569,7 @@ public final class RoundTrip {
    * starts at that statement's first one.
    */
   public static int evaluationOffset(Exprent exprent) {
-    if (exprent instanceof org.jetbrains.java.decompiler.modules.decompiler.exps.SwitchExprent sw
-        && selector("switchline")) {
+    if (exprent instanceof org.jetbrains.java.decompiler.modules.decompiler.exps.SwitchExprent sw) {
       // The switch's own instructions begin at the block holding its selector; its arms start
       // later, and an empty head block would make the arms look like the start.
       Statement head = sw.getBacking().getFirst();
@@ -3824,7 +3779,7 @@ public final class RoundTrip {
    * only a strictly farther outer target counts.
    */
   public static boolean chainedIfTests(Exprent head, int afterStart, int afterEnd) {
-    if (!selector("ifnesttarget") || head == null || head.bytecode == null || head.bytecode.isEmpty()
+    if (head == null || head.bytecode == null || head.bytecode.isEmpty()
         || afterStart < 0 || afterEnd <= afterStart) {
       return false;
     }
@@ -3841,7 +3796,7 @@ public final class RoundTrip {
    * rather than as the right operand of {@code &&}.
    */
   public static boolean operandStartsStatement(Exprent before, Exprent after) {
-    if (!selector("ifnest") || after == null) {
+    if (after == null) {
       return false;
     }
     StructMethod method = currentMethod();
@@ -3910,7 +3865,7 @@ public final class RoundTrip {
    * equals the one its last argument already recorded, and the operand still began that line.
    */
   public static boolean newlineBeforeOperand(Exprent before, Exprent after) {
-    if (!enabled() || after == null) {
+    if (after == null) {
       return false;
     }
     int start = operandOwnLine(after);
@@ -4037,7 +3992,7 @@ public final class RoundTrip {
    * later line, after the test's own text ended.
    */
   public static boolean operatorStartsLine(Exprent before, Exprent after) {
-    if (!enabled() || !(after instanceof InvocationExprent) || before == null) {
+    if (!(after instanceof InvocationExprent) || before == null) {
       return false;
     }
     int first = firstOffsetOf(before);
@@ -4371,22 +4326,6 @@ public final class RoundTrip {
     return here < 0 || before < 0 || here != before;
   }
 
-  /**
-   * Whether a named round-trip rule runs. {@code --rt-off=name1,name2}, or the RT_OFF environment
-   * variable when the option is unset, leaves the named rules off for bisecting a suspect
-   * transform.
-   */
-  public static boolean selector(String name) {
-    if (!enabled()) {
-      return false;
-    }
-    String disabled = (String) DecompilerContext.getProperty(IFernflowerPreferences.ROUND_TRIP_OFF);
-    if (disabled == null || disabled.isEmpty()) {
-      disabled = System.getenv("RT_OFF");
-    }
-    return disabled == null || !disabled.contains(name);
-  }
-
   /** True when the target names a type variable: a generic variable or an unknown object type. */
   public static boolean isTypeVariableTarget(VarType target) {
     if (target == null || target.arrayDim != 0) {
@@ -4405,9 +4344,6 @@ public final class RoundTrip {
    * A return-position ternary shares one return after a join; an if/else has one per arm.
    */
   public static boolean hasDistinctReturnInstructions(Exprent first, Exprent second) {
-    if (!selector("ternary")) {
-      return false;
-    }
     StructMethod method = currentMethod();
     if (method == null) {
       return false;
@@ -4427,9 +4363,6 @@ public final class RoundTrip {
    * {@code x = y++} would move the iinc in front of the store.
    */
   public static boolean incrementAfterStore(Exprent assignment, Exprent increment) {
-    if (!selector("ppistore")) {
-      return false;
-    }
     BitSet store = assignment.bytecode;
     BitSet inc = increment.bytecode;
     if (store == null || store.isEmpty() || inc == null || inc.isEmpty()) {
@@ -4448,9 +4381,6 @@ public final class RoundTrip {
    * laload; ...; lastore}, where the expanded form loads {@code a} and {@code i} again.
    */
   public static boolean isCompoundTarget(Exprent left, Exprent matching) {
-    if (!selector("compound")) {
-      return false;
-    }
     StructMethod method = currentMethod();
     if (method == null) {
       return false;
@@ -4500,9 +4430,6 @@ public final class RoundTrip {
    * duplicate of its own because the temporary already holds the receiver.
    */
   public static boolean isCachedReceiverTarget(Exprent store, Exprent matching) {
-    if (!selector("compound-temp")) {
-      return false;
-    }
     StructMethod method = currentMethod();
     if (method == null) {
       return false;
@@ -4541,9 +4468,6 @@ public final class RoundTrip {
 
   /** True when the target emitted a checkcast inside this expression's bytecode range. */
   public static boolean forceCast(Exprent exprent) {
-    if (!selector("cast")) {
-      return false;
-    }
     StructMethod method = currentMethod();
     if (method == null) {
       return false;
@@ -4576,7 +4500,7 @@ public final class RoundTrip {
   }
 
   private static Exprent guardCondition(Exprent head, Statement body, boolean mark) {
-    if (!selector("guardprint") || !(head instanceof IfExprent ie)) {
+    if (!(head instanceof IfExprent ie)) {
       return null;
     }
     Exprent condition = ie.getCondition();
@@ -4617,16 +4541,14 @@ public final class RoundTrip {
       // branch skips a block that runs the copy and then returns, and lands right after it. The
       // return has to lie before the arm; when the arm holds it already, the printer's form is the
       // guard itself and negating the condition would invert a correct one.
-      if (selector("finallyguard")) {
-        java.util.Map<Integer, Integer> targets = BRANCH_TARGETS.get(method);
-        Integer target = targets == null ? null : targets.get(lastEnd);
-        int exit = target == null ? -1 : finallyCopyReturnBefore(method, target, bodyStart);
-        if (exit >= 0) {
-          if (mark) {
-            markGuardExit(method, exit);
-          }
-          return negateCondition(condition);
+      java.util.Map<Integer, Integer> targets = BRANCH_TARGETS.get(method);
+      Integer target = targets == null ? null : targets.get(lastEnd);
+      int exit = target == null ? -1 : finallyCopyReturnBefore(method, target, bodyStart);
+      if (exit >= 0) {
+        if (mark) {
+          markGuardExit(method, exit);
         }
+        return negateCondition(condition);
       }
       return null;
     }
@@ -4768,9 +4690,6 @@ public final class RoundTrip {
    * earlier operand's temporaries are still held, and the variable gets a fresh slot.
    */
   public static boolean patternSlotReused(Exprent operand) {
-    if (!selector("ifnest")) {
-      return false;
-    }
     StructMethod method = currentMethod();
     java.util.Map<Integer, java.util.List<int[]>> tempStores = method == null ? null : TEMP_STORES.get(method);
     if (tempStores == null || tempStores.isEmpty() || operand == null) {
@@ -4809,9 +4728,6 @@ public final class RoundTrip {
    * decides the shape.
    */
   public static boolean patternSlotFresh(Exprent operand) {
-    if (!selector("ifnest")) {
-      return false;
-    }
     StructMethod method = currentMethod();
     java.util.Map<Integer, java.util.List<int[]>> tempStores = method == null ? null : TEMP_STORES.get(method);
     if (tempStores == null || tempStores.isEmpty() || operand == null) {
@@ -4851,7 +4767,7 @@ public final class RoundTrip {
    * ends it with the return, and reaches the arm from the condition's own fall-through.
    */
   public static boolean guardBeforeTail(Exprent head, Statement rest, Statement arm) {
-    if (!selector("guardtail") || head == null || head.bytecode == null || head.bytecode.isEmpty()) {
+    if (head == null || head.bytecode == null || head.bytecode.isEmpty()) {
       return false;
     }
     StructMethod method = currentMethod();
@@ -5074,7 +4990,7 @@ public final class RoundTrip {
    * {@code while (true) { if (!C) { exit-block; break; } body }}.
    */
   public static boolean whileGuardInsideBody(Exprent condition, Statement loop) {
-    if (!selector("loopguard") || condition == null || loop == null) {
+    if (condition == null || loop == null) {
       return false;
     }
     StructMethod method = currentMethod();
@@ -5103,7 +5019,7 @@ public final class RoundTrip {
     // nested loop's own test) is not a block before the body.
     boolean beforeBody = bodyStart >= 0 && exitStart >= 0 && exitStart < bodyStart
       && branchTarget > exitStart;
-    return beforeBody && (!selector("wgibexit") || exitEnd >= 0 && exitEnd < bodyStart);
+    return beforeBody && (exitEnd >= 0 && exitEnd < bodyStart);
   }
 
   /**
@@ -5300,7 +5216,7 @@ public final class RoundTrip {
    * jump leaves the loop therefore proves the guard statement. Returns the tested operand, or null.
    */
   public static Exprent foldedBreakGuard(Exprent condition, Statement loop, Statement body) {
-    if (!selector("loopguard") || !(condition instanceof FunctionExprent function)
+    if (!(condition instanceof FunctionExprent function)
         || function.getFuncType() != FunctionExprent.FunctionType.BOOLEAN_AND
         || function.getLstOperands().size() != 2) {
       return null;
@@ -5410,7 +5326,7 @@ public final class RoundTrip {
    * statement of its own, anchored at its first instruction on a later line. Returns C, or null.
    */
   public static Exprent foldedElseBreak(Exprent condition, Statement loop, Statement body) {
-    if (!selector("elsebreak") || !(condition instanceof FunctionExprent function)
+    if (!(condition instanceof FunctionExprent function)
         || function.getFuncType() != FunctionExprent.FunctionType.BOOLEAN_AND
         || function.getLstOperands().size() != 2) {
       return null;
@@ -5775,7 +5691,7 @@ public final class RoundTrip {
       for (java.util.Map.Entry<Integer, Integer> entry : branches.entrySet()) {
         Integer to = entry.getValue();
         if (to != null && to >= tail && entry.getKey() > head && entry.getKey() <= backEdge
-            && !(selector("looptest") && isLeadingTestOffset(loop, entry.getKey()))) {
+            && !isLeadingTestOffset(loop, entry.getKey())) {
           // A test in the body reaches the block without jumping out of the loop: it is body.
           return out;
         }
@@ -5837,7 +5753,7 @@ public final class RoundTrip {
     // past the loop's last instruction, which a declaration inside the body cannot do. The source
     // wrote the declaration above the loop and only the store inside; the declaration is hoisted
     // when the loop prints, so the moved block reads a local that is still in scope.
-    return !(selector("deferlvt") && deferredReadsDeclaredAbove(loop, deferred, defined));
+    return !deferredReadsDeclaredAbove(loop, deferred, defined);
   }
 
   /** True when every loop-defined local the moved block reads is proven declared above the loop. */
@@ -5892,7 +5808,7 @@ public final class RoundTrip {
    * the loop would close the row at the loop's end; a bare declaration above it keeps the row open.
    */
   public static void hoistDeferredDeclarations(Statement loop, java.util.List<Statement> deferred) {
-    if (deferred.isEmpty() || !selector("deferlvt")) {
+    if (deferred.isEmpty()) {
       return;
     }
     java.util.Set<org.jetbrains.java.decompiler.modules.decompiler.vars.VarVersionPair> defined = new java.util.HashSet<>();
@@ -6069,7 +5985,7 @@ public final class RoundTrip {
     if (gotos == null) {
       return null;
     }
-    int head = selector("loophead") ? headOffsetDeep(loop) : firstOffset(loop);
+    int head = headOffsetDeep(loop);
     int loopEnd = lastOffset(loop);
     if (head < 0 || loopEnd < 0) {
       return null;
@@ -6303,7 +6219,7 @@ public final class RoundTrip {
    * past the back edge is a real statement after the loop.
    */
   public static Statement returnInsideLoop(Statement loop, Statement target) {
-    if (!selector("returninloop") || !(loop instanceof org.jetbrains.java.decompiler.modules.decompiler.stats.DoStatement)
+    if (!(loop instanceof org.jetbrains.java.decompiler.modules.decompiler.stats.DoStatement)
         || target == null || !(loop.getParent() instanceof org.jetbrains.java.decompiler.modules.decompiler.stats.SequenceStatement sequence)) {
       return null;
     }
@@ -6332,7 +6248,7 @@ public final class RoundTrip {
    * starts at the store.
    */
   public static void moveDeclarationIntoBody(Statement loop, Statement insideReturn, Statement body) {
-    if (!selector("returninloop") || insideReturn == null || body == null || loop.getVarDefinitions().isEmpty()) {
+    if (insideReturn == null || body == null || loop.getVarDefinitions().isEmpty()) {
       return;
     }
     java.util.Set<Integer> used = new java.util.HashSet<>();
@@ -6866,9 +6782,6 @@ public final class RoundTrip {
    * match handler) may sit between the else block and that return, so the rest need not end on it.
    */
   public static boolean armJumpsOverRestToFinalReturn(Statement arm, Statement restFirst) {
-    if (!selector("elseblock")) {
-      return false;
-    }
     StructMethod method = currentMethod();
     Integer last = method == null ? null : LAST_INSTRUCTION.get(method);
     java.util.Map<Integer, Integer> gotos = method == null ? null : GOTO_TARGETS.get(method);
@@ -6902,7 +6815,7 @@ public final class RoundTrip {
 
   /** As {@link #hideImplicitFinalReturn(Statement)}, giving a hidden return's offsets to the exit. */
   public static Runnable hideImplicitFinalReturn(Statement body, DummyExitStatement dummyExit) {
-    if (!selector("silentreturn") || body == null) {
+    if (body == null) {
       return null;
     }
     StructMethod method = currentMethod();
@@ -7105,8 +7018,7 @@ public final class RoundTrip {
     // Only a loop prints its label purely because a break names it ({@link #carriesBreakOut}); a
     // switch's or block's label is owned by its own print rule, and naming it here could leave the
     // label undefined.
-    if (!selector("breakout")
-        || !(closure instanceof org.jetbrains.java.decompiler.modules.decompiler.stats.DoStatement)) {
+    if (!(closure instanceof org.jetbrains.java.decompiler.modules.decompiler.stats.DoStatement)) {
       return false;
     }
     // The jump has to start inside the loop: a break printed after the loop's closing brace can no
@@ -7325,9 +7237,6 @@ public final class RoundTrip {
    * {@code if (!C) { return value; } body} rather than {@code if (C) { body } return value;}.
    */
   public static boolean returnGuard(Statement body, Statement tail) {
-    if (!selector("retguard")) {
-      return false;
-    }
     int bodyStart = firstOffset(body);
     int tailStart = firstOffset(tail);
     if (bodyStart < 0 || tailStart < 0) {
@@ -7367,9 +7276,6 @@ public final class RoundTrip {
    * compiles to a branch over a jump to the exit, which the scan records as a pair.
    */
   public static boolean breakBranchLandsOnExit(Exprent head, Statement stat) {
-    if (!selector("elsebreak")) {
-      return false;
-    }
     StructMethod method = currentMethod();
     if (method == null || head == null || head.bytecode == null || head.bytecode.isEmpty() || stat == null) {
       return false;
@@ -7828,9 +7734,6 @@ public final class RoundTrip {
    * own last instruction, so a merge jump generated for some other construct cannot trigger it.
    */
   public static boolean gotoPastsExit(Statement arm, Statement exit) {
-    if (!selector("elseblock")) {
-      return false;
-    }
     StructMethod method = currentMethod();
     if (method == null || arm == null || exit == null) {
       return false;
@@ -7857,9 +7760,6 @@ public final class RoundTrip {
    * the rest instead would run it on both paths.
    */
   public static boolean gotoJumpsOverArm(Statement arm, Statement rest) {
-    if (!selector("elseblock")) {
-      return false;
-    }
     StructMethod method = currentMethod();
     if (method == null || arm == null || rest == null) {
       return false;
@@ -7880,9 +7780,6 @@ public final class RoundTrip {
   }
 
   private static boolean exitAfterBodyImpl(Statement exitStatement, Statement body) {
-    if (!selector("exitlast")) {
-      return false;
-    }
     int exitStart = firstOffset(exitStatement);
     int bodyStart = firstOffset(body);
     if (exitStart < 0 || bodyStart < 0) {
@@ -7909,7 +7806,7 @@ public final class RoundTrip {
    * {@code if (!C) { body }}, which compiles to the opposite branch with no goto.
    */
   public static boolean printContinueGuard(Exprent head, Statement sequence) {
-    return selector("continueguard") && head != null && head.bytecode != null
+    return head != null && head.bytecode != null
       && !head.bytecode.isEmpty() && continuesAt(head.bytecode.length(), sequence);
   }
 
@@ -7923,7 +7820,7 @@ public final class RoundTrip {
    * test's loop.
    */
   public static boolean printContinueGuardAtHead(Exprent head, Statement around) {
-    if (!selector("continueguard") || !(head instanceof IfExprent) || around == null
+    if (!(head instanceof IfExprent) || around == null
         || head.bytecode == null || head.bytecode.isEmpty()) {
       return false;
     }
@@ -7968,7 +7865,7 @@ public final class RoundTrip {
    */
   public static boolean printContinueThroughClose(Exprent head, Statement sequence) {
     CONTINUE_CLOSE_SITE.get()[0] = -1;
-    if (!selector("continueguard") || head == null || head.bytecode == null || head.bytecode.isEmpty()
+    if (head == null || head.bytecode == null || head.bytecode.isEmpty()
         || !endsLoopBodyAcrossTry(sequence)) {
       return false;
     }
@@ -8043,9 +7940,6 @@ public final class RoundTrip {
    * which javac compiles exactly like the hoisted form but gives one declaration in the table.
    */
   public static boolean forInitContinues(Exprent declaration, Statement loop, Exprent init, int boundary) {
-    if (!selector("forinit")) {
-      return false;
-    }
     if (!(declaration instanceof org.jetbrains.java.decompiler.modules.decompiler.exps.AssignmentExprent first)
         || !(first.getLeft() instanceof VarExprent a) || !a.isDefinition()
         || !(init instanceof org.jetbrains.java.decompiler.modules.decompiler.exps.AssignmentExprent second)
@@ -8064,9 +7958,6 @@ public final class RoundTrip {
 
   /** True when the jump into the guard sits immediately before this next test (3 bytes of goto). */
   public static boolean continuesBefore(Exprent next, Statement around) {
-    if (!selector("continueguard")) {
-      return false;
-    }
     int start = firstOffsetOf(next);
     return start >= 3 && continuesAt(start - 3, around);
   }
@@ -8077,9 +7968,6 @@ public final class RoundTrip {
    * {@link #continueGoto} does for the last guard of a merged condition.
    */
   public static int continueGotoBefore(Exprent next, Statement around) {
-    if (!selector("continueguard")) {
-      return -1;
-    }
     int start = firstOffsetOf(next);
     if (start < 3 || !continuesAt(start - 3, around)) {
       return -1;
@@ -8120,7 +8008,7 @@ public final class RoundTrip {
    * test and is never counted.
    */
   public static int leadingContinueGuards(java.util.List<Exprent> operands, Statement around) {
-    if (!selector("continueguard") || operands == null || operands.size() < 2) {
+    if (operands == null || operands.size() < 2) {
       return -1;
     }
     StructMethod method = currentMethod();
@@ -8163,7 +8051,7 @@ public final class RoundTrip {
    */
   public static java.util.List<java.util.List<Exprent>> guardGroups(Exprent head, java.util.List<Exprent> operands,
                                                                    Statement around) {
-    if (!selector("continueguard") || head == null || head.bytecode == null || head.bytecode.isEmpty()
+    if (head == null || head.bytecode == null || head.bytecode.isEmpty()
         || operands.size() < 2) {
       return null;
     }
@@ -8231,7 +8119,7 @@ public final class RoundTrip {
   public static java.util.List<java.util.List<Exprent>> closeGuardGroups(Exprent head,
                                                                          java.util.List<Exprent> operands,
                                                                          Statement around) {
-    if (!selector("continueguard") || !(head instanceof IfExprent ifHead) || operands.size() < 2) {
+    if (!(head instanceof IfExprent ifHead) || operands.size() < 2) {
       return null;
     }
     StructMethod method = currentMethod();
@@ -8303,7 +8191,7 @@ public final class RoundTrip {
    * ends the head, or -1.
    */
   public static int continueCloseSiteForHead(Exprent head) {
-    if (!selector("continueguard") || head == null || head.bytecode == null || head.bytecode.isEmpty()) {
+    if (head == null || head.bytecode == null || head.bytecode.isEmpty()) {
       return -1;
     }
     StructMethod method = currentMethod();
@@ -8318,9 +8206,6 @@ public final class RoundTrip {
    * {@code continue;} takes its line from it.
    */
   public static int continueCloseSiteBefore(Exprent next, Statement around) {
-    if (!selector("continueguard")) {
-      return -1;
-    }
     StructMethod method = currentMethod();
     java.util.Map<Integer, int[]> sites = method == null ? null : CONTINUE_ELSE_SITES.get(method);
     int start = firstOffsetOf(next);
@@ -8352,7 +8237,7 @@ public final class RoundTrip {
                                         java.util.List<Exprent> operands,
                                         Statement around,
                                         boolean breaks) {
-    if (!selector("continueguard") || !(head instanceof IfExprent ifHead) || operands.size() < 2) {
+    if (!(head instanceof IfExprent ifHead) || operands.size() < 2) {
       return null;
     }
     java.util.Map<Integer, Integer> guards = CONTINUE_GUARDS.get(currentMethod());
@@ -8416,7 +8301,7 @@ public final class RoundTrip {
    * continuation of one expression enters the line at the invocation instead.
    */
   public static GuardSplit fusedFirstBreak(java.util.List<Exprent> operands, Statement around, boolean breaks) {
-    if (!selector("continueguard") || operands == null || operands.size() != 2) {
+    if (operands == null || operands.size() != 2) {
       return null;
     }
     StructMethod method = currentMethod();
@@ -8487,7 +8372,7 @@ public final class RoundTrip {
    * the same exit as the inner test's goto. Returns {@code {B, test}}, or null.
    */
   public static Exprent[] nestedBreakGuard(Exprent guard, Statement loop) {
-    if (!selector("loopguard") || !(guard instanceof FunctionExprent function)
+    if (!(guard instanceof FunctionExprent function)
         || function.getFuncType() != FunctionExprent.FunctionType.BOOLEAN_AND
         || function.getLstOperands().size() != 2) {
       return null;
@@ -8586,7 +8471,7 @@ public final class RoundTrip {
   }
 
   public static boolean splitsIntoGuards(Exprent head, int operands, Statement around) {
-    if (!selector("continueguard") || head == null || head.bytecode == null || head.bytecode.isEmpty()
+    if (head == null || head.bytecode == null || head.bytecode.isEmpty()
         || operands < 2) {
       return false;
     }
@@ -8772,7 +8657,7 @@ public final class RoundTrip {
    * block's local would keep its range open until the enclosing construct closed.
    */
   public static boolean closesAtOwnEnd(Statement statement) {
-    if (!selector("bareblock") || statement == null) {
+    if (statement == null) {
       return false;
     }
     int end = lastEnd(statement);
@@ -8860,7 +8745,7 @@ public final class RoundTrip {
    * transfer proves it; the caller keeps the flat print then.
    */
   public static int armScopeSplit(Statement arm) {
-    if (!selector("armscope") || !(arm instanceof SequenceStatement) || arm.isLabeled()) {
+    if (!(arm instanceof SequenceStatement) || arm.isLabeled()) {
       return -1;
     }
     List<Statement> children = arm.getStats();
@@ -8966,7 +8851,7 @@ public final class RoundTrip {
    * else arm cannot reproduce it by falling through to the join.
    */
   public static int armContinueSite(Statement arm, Statement elseArm) {
-    if (!selector("continuearm") || arm == null || elseArm == null) {
+    if (arm == null || elseArm == null) {
       return -1;
     }
     java.util.List<StatEdge> edges = arm.getSuccessorEdges(Statement.STATEDGE_DIRECT_ALL);
@@ -9027,7 +8912,7 @@ public final class RoundTrip {
    * join lands, so the target alone cannot tell them apart and the row is the evidence.
    */
   public static int swappedArmContinueSite(Statement arm, Statement elseArm) {
-    if (!selector("continuearm") || arm == null || elseArm == null) {
+    if (arm == null || elseArm == null) {
       return -1;
     }
     java.util.List<StatEdge> edges = arm.getSuccessorEdges(Statement.STATEDGE_DIRECT_ALL);
@@ -9087,7 +8972,7 @@ public final class RoundTrip {
    * -1 when any of that is unproven.
    */
   public static int flatContinueSite(Statement arm, Statement elseArm) {
-    if (!selector("continueflat") || arm == null || elseArm == null) {
+    if (arm == null || elseArm == null) {
       return -1;
     }
     java.util.List<StatEdge> edges = arm.getSuccessorEdges(Statement.STATEDGE_DIRECT_ALL);
@@ -9144,7 +9029,7 @@ public final class RoundTrip {
    * leave a loop whose body is being printed; a join stays inside that loop. -1 otherwise.
    */
   public static int writtenBreakSite(Statement arm, Statement elseArm) {
-    if (!selector("armbreak") || arm == null || elseArm == null) {
+    if (arm == null || elseArm == null) {
       return -1;
     }
     int site = tailJumpOffset(arm);
@@ -9221,7 +9106,7 @@ public final class RoundTrip {
    */
   public static Statement suppressJumpIfCarried(Statement arm, int join) {
     Statement old = SUPPRESSED_JUMP.get();
-    if (!selector("continuearm") || jumpCarriedByJoin(arm, join)) {
+    if (jumpCarriedByJoin(arm, join)) {
       SUPPRESSED_JUMP.set(arm);
     }
     return old;
@@ -9301,9 +9186,6 @@ public final class RoundTrip {
    * written continue, and the arm's own end is the last condition branch's target.
    */
   private static int[] armContinueGoto(Exprent head) {
-    if (!selector("continuearm")) {
-      return null;
-    }
     StructMethod method = currentMethod();
     if (method == null) {
       return null;
@@ -9353,9 +9235,6 @@ public final class RoundTrip {
    */
   public static boolean printContinueElse(Exprent head, Statement sequence, Statement arm) {
     CONTINUE_ELSE_SITE.get()[0] = -1;
-    if (!selector("continueguard")) {
-      return false;
-    }
     StructMethod method = currentMethod();
     if (method == null) {
       return false;
@@ -9534,9 +9413,6 @@ public final class RoundTrip {
    * `return;` instead drops it, one instruction shorter.
    */
   public static boolean printsAsBreak(Exprent exit) {
-    if (!selector("copiedbreak")) {
-      return false;
-    }
     StructMethod method = currentMethod();
     Statement loop = OPEN_LOOPS.get().peek();
     if (method == null || loop == null || exit == null || exit.bytecode == null || exit.bytecode.isEmpty()) {
@@ -9572,7 +9448,7 @@ public final class RoundTrip {
    * or condition), which a {@code break} cannot reach — that jumps past the switch instead.
    */
   public static boolean breakJumpsToContinue(int jumpOffset) {
-    if (!selector("breakcontinue") || jumpOffset < 0) {
+    if (jumpOffset < 0) {
       return false;
     }
     StructMethod method = currentMethod();
@@ -9592,7 +9468,7 @@ public final class RoundTrip {
    * the arm the tree absorbed was the source's code after the if.
    */
   public static boolean mergeJumpsTo(int elseStart, int join) {
-    if (!selector("elsepost") || elseStart < 0 || join <= elseStart) {
+    if (elseStart < 0 || join <= elseStart) {
       return false;
     }
     StructMethod method = currentMethod();
@@ -9613,7 +9489,7 @@ public final class RoundTrip {
    * assigned on every path that reaches it.
    */
   public static boolean joinSecondRange(int slot, int join) {
-    if (!selector("elsepost") || slot < 0 || join < 0) {
+    if (slot < 0 || join < 0) {
       return false;
     }
     StructMethod method = currentMethod();
@@ -9637,8 +9513,7 @@ public final class RoundTrip {
    * {@code CONTINUE_GUARDS} records.
    */
   public static boolean landsOnLoopLatch(Statement stat) {
-    if (!selector("loopjump")
-        || !(stat instanceof org.jetbrains.java.decompiler.modules.decompiler.stats.IfStatement ifstat)) {
+    if (!(stat instanceof org.jetbrains.java.decompiler.modules.decompiler.stats.IfStatement ifstat)) {
       return false;
     }
     StructMethod method = currentMethod();
@@ -9680,9 +9555,6 @@ public final class RoundTrip {
    * Printing a `return;` inside the braces compiles to `monitorexit; return` instead.
    */
   public static boolean fallsOutToExit(Statement block, Exprent exit) {
-    if (!selector("synexit")) {
-      return false;
-    }
     if (!(exit instanceof org.jetbrains.java.decompiler.modules.decompiler.exps.ExitExprent e)
         || e.getExitType() != org.jetbrains.java.decompiler.modules.decompiler.exps.ExitExprent.Type.RETURN
         || e.getValue() != null) {
@@ -9715,9 +9587,6 @@ public final class RoundTrip {
    * be the switch's only empty arm, so no other arm can own it.
    */
   public static boolean emptyArmContinues(Statement arm) {
-    if (!selector("breakcontinue")) {
-      return false;
-    }
     StructMethod method = currentMethod();
     Statement loop = OPEN_ALL_LOOPS.get().peek();
     if (method == null || !(loop instanceof org.jetbrains.java.decompiler.modules.decompiler.stats.DoStatement doStatement)) {
@@ -9818,7 +9687,7 @@ public final class RoundTrip {
    */
   public static Statement trampolineBreakLoop(
       org.jetbrains.java.decompiler.modules.decompiler.StatEdge edge, Statement source, int jumpOffset) {
-    if (!selector("trampolinebreak") || edge == null || source == null) {
+    if (edge == null || source == null) {
       return null;
     }
     if (edge.getType() != org.jetbrains.java.decompiler.modules.decompiler.StatEdge.TYPE_CONTINUE
@@ -9928,7 +9797,7 @@ public final class RoundTrip {
   }
 
   public static boolean carriesTrampolineBreak(Statement loop) {
-    if (!selector("trampolinebreak") || loop == null) {
+    if (loop == null) {
       return false;
     }
     return carriesTrampolineBreak(loop, loop);
@@ -9963,7 +9832,7 @@ public final class RoundTrip {
    * no unlabelled `break` can reach that far, so the source named this loop with a label.
    */
   public static boolean carriesOutwardBreak(Statement loop) {
-    if (!selector("breaklabel") || loop == null) {
+    if (loop == null) {
       return false;
     }
     StructMethod method = currentMethod();
@@ -10015,7 +9884,7 @@ public final class RoundTrip {
 
   /** The jump offset and the enclosing loop's id for a return a loop's outward break lands on. */
   private static int[] outwardBreak(Exprent exit) {
-    if (!selector("breaklabel") || exit == null || exit.bytecode == null || exit.bytecode.isEmpty()) {
+    if (exit == null || exit.bytecode == null || exit.bytecode.isEmpty()) {
       return null;
     }
     StructMethod method = currentMethod();
@@ -10215,7 +10084,7 @@ public final class RoundTrip {
    * record that jump as a continue guard.
    */
   public static boolean exitBranchLandsOn(Exprent head, org.jetbrains.java.decompiler.modules.decompiler.StatEdge edge) {
-    if (!selector("elseexit") || head == null || head.bytecode == null || edge == null) {
+    if (head == null || head.bytecode == null || edge == null) {
       return false;
     }
     if (edge.getType() != org.jetbrains.java.decompiler.modules.decompiler.StatEdge.TYPE_CONTINUE
@@ -10256,7 +10125,7 @@ public final class RoundTrip {
     // else guard behind a try-with-resources close, is a run of guard statements rather than an
     // if/else: its branch lands on the next written test, and the source's rest follows the run.
     java.util.Map<Integer, Integer> elseGuards = CONTINUE_ELSE_GUARDS.get(method);
-    if (selector("continueguard") && elseGuards != null && elseGuards.containsKey(lastEnd)) {
+    if (elseGuards != null && elseGuards.containsKey(lastEnd)) {
       return false;
     }
     if (!isContinueTarget(loop, landing)) {
@@ -10271,7 +10140,7 @@ public final class RoundTrip {
    * source statement wrote it. javac rebuilds it from the case list, so not printing it is exact.
    */
   public static boolean synthesizedMatchThrow(Statement stat) {
-    if (!selector("matchexception") || stat == null) {
+    if (stat == null) {
       return false;
     }
     if (!IfPatternMatchProcessor.isStatementMatchThrow(stat)) {
@@ -10322,7 +10191,7 @@ public final class RoundTrip {
    * where the ambient method is the class's last one.
    */
   public static boolean armWasFlat(Statement arm, StructMethod method) {
-    if (!selector("elseflat") || arm == null || method == null) {
+    if (arm == null || method == null) {
       return false;
     }
     int armStart = firstOffset(arm);
@@ -10396,7 +10265,7 @@ public final class RoundTrip {
    */
   public static boolean elseArmWitness(Exprent head, Statement thenArm, Statement elseArm,
                                        StructMethod method) {
-    if (!selector("realelse") || head == null || thenArm == null || elseArm == null || method == null) {
+    if (head == null || thenArm == null || elseArm == null || method == null) {
       return false;
     }
     BitSet offsets = head.bytecode;
@@ -10509,7 +10378,7 @@ public final class RoundTrip {
   /** As {@link #realElseContinuation(Exprent, Statement, java.util.List)}, for a known method. */
   public static int realElseContinuation(Exprent head, Statement arm, java.util.List<Statement> rest,
                                          StructMethod method) {
-    if (!selector("realelse") || head == null || arm == null || rest == null || rest.isEmpty()
+    if (head == null || arm == null || rest == null || rest.isEmpty()
         || method == null) {
       return -1;
     }
@@ -10598,7 +10467,7 @@ public final class RoundTrip {
   /** As {@link #guardThenArm(Exprent, Statement, java.util.List)}, for a known method. */
   public static boolean guardThenArm(Exprent head, Statement arm, java.util.List<Statement> rest,
                                      StructMethod method) {
-    if (!selector("realelse") || head == null || arm == null || rest == null || rest.isEmpty()
+    if (head == null || arm == null || rest == null || rest.isEmpty()
         || method == null) {
       return false;
     }
@@ -10865,7 +10734,7 @@ public final class RoundTrip {
    */
   public static java.util.Map<Integer, int[]> targetSlotsDeclaredIn(Statement arm, java.util.List<int[]> own) {
     java.util.Map<Integer, int[]> slots = new java.util.HashMap<>();
-    if (!selector("armbraces") || arm == null || own == null || own.isEmpty()) {
+    if (arm == null || own == null || own.isEmpty()) {
       return slots;
     }
     StructMethod method = currentMethod();
@@ -10899,7 +10768,7 @@ public final class RoundTrip {
    */
   public static java.util.Map<Integer, int[]> targetSlotsIn(Statement arm) {
     java.util.Map<Integer, int[]> slots = new java.util.HashMap<>();
-    if (!selector("armbraces") || arm == null) {
+    if (arm == null) {
       return slots;
     }
     StructMethod method = currentMethod();
@@ -11157,7 +11026,7 @@ public final class RoundTrip {
    */
   public static boolean armClosesBeforePatternVars(
       Statement arm, java.util.List<int[]> own, java.util.List<Exprent> values) {
-    if (!selector("armbraces") || arm == null || own == null || own.isEmpty() || values == null) {
+    if (arm == null || own == null || own.isEmpty() || values == null) {
       return false;
     }
     StructMethod method = currentMethod();
@@ -11207,7 +11076,7 @@ public final class RoundTrip {
    * and printing continue would merge the switch's join with the loop's back edge.
    */
   public static boolean armBreakAtLoopLatch(Statement stat, int jumpOffset) {
-    if (!selector("switchbreak") || stat == null) {
+    if (stat == null) {
       return false;
     }
     java.util.Map<Integer, Integer> gotos = gotosHere();
@@ -11275,7 +11144,7 @@ public final class RoundTrip {
    * own end, so the printer can cut the run out of the exprent lists it was going to print.
    */
   public static int[] handoverRun(List<Statement> stats, int from, int blockEnd) {
-    if (!selector("bareblock") || stats == null || from < 0 || from >= stats.size()) {
+    if (stats == null || from < 0 || from >= stats.size()) {
       return null;
     }
     StructMethod method = currentMethod();
@@ -11453,7 +11322,7 @@ public final class RoundTrip {
    */
   public static org.jetbrains.java.decompiler.util.TextBuffer withBlocks(List<Exprent> exprents, int from, int to,
                                                                          int indent, boolean closeAtEnd) {
-    if (!selector("bareblock") || exprents == null) {
+    if (exprents == null) {
       return ExprProcessor.listToJava(exprents == null ? null : exprents.subList(from, to), indent);
     }
     org.jetbrains.java.decompiler.util.TextBuffer buf = new org.jetbrains.java.decompiler.util.TextBuffer();
@@ -11608,7 +11477,7 @@ public final class RoundTrip {
    * closed before the enclosing block's; without both, the merged guard stays one statement.
    */
   public static int guardArmSplit(List<Exprent> operands, Statement body) {
-    if (!selector("guardarm") || operands == null || operands.size() < 2 || body == null) {
+    if (operands == null || operands.size() < 2 || body == null) {
       return -1;
     }
     int end = lastEnd(body);
@@ -11636,7 +11505,7 @@ public final class RoundTrip {
    * rising-slot pass writes the earlier-allocated enclosing row first.
    */
   public static boolean runWasBraced(Statement firstTail, int enclosingEnd) {
-    if (!selector("trailelse") || firstTail == null || currentMethod() == null) {
+    if (firstTail == null || currentMethod() == null) {
       return false;
     }
     StructLocalVariableTableAttribute table =
@@ -12059,7 +11928,7 @@ public final class RoundTrip {
    * nested block whose closing brace stood where its scope ends.
    */
   public static int[] nestedBlockScope(Statement stat, int windowEnd, int blockEnd) {
-    if (!selector("bareblock") || stat == null) {
+    if (stat == null) {
       return null;
     }
     StructMethod method = currentMethod();
@@ -13162,9 +13031,6 @@ public final class RoundTrip {
 
   /** True when the target loads this local into the return, i.e. the source kept the variable. */
   public static boolean targetReturnUsesLocal(Exprent exit, int var) {
-    if (!selector("returnlocal")) {
-      return false;
-    }
     StructMethod method = currentMethod();
     if (method == null) {
       return false;

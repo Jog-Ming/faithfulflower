@@ -858,7 +858,7 @@ public final class Main {
     return fallback;
   }
 
-  /** Decompiler flags for an experimental variant, e.g. {@code --options "--rt-off=elseflat"}. */
+  /** Decompiler flags for an experimental variant, e.g. {@code --options "--remove-bridge=0"}. */
   private static List<String> optionsFlag(List<String> args) {
     String value = stringFlag(args, "--options", null);
     if (value == null || value.isBlank()) {

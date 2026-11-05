@@ -62,7 +62,7 @@ public final class IfPatternMatchProcessor {
    * body runs, or the condition's test would come after it in the source too.
    */
   private static boolean handleLoop(DoStatement loop) {
-    if (!RoundTrip.selector("looppattern") || loop.getLooptype() != DoStatement.Type.WHILE) {
+    if (loop.getLooptype() != DoStatement.Type.WHILE) {
       return false;
     }
     Exprent condition = loop.getConditionExprent();
@@ -465,7 +465,7 @@ public final class IfPatternMatchProcessor {
     VarType type = instOf.getLstOperands().get(1).getExprType();
 
     PatternExprent exprent;
-    if (RoundTrip.selector("patternrecord") && branch instanceof BasicBlockStatement
+    if (branch instanceof BasicBlockStatement
         && branch.getParent() instanceof SequenceStatement parentSeq) {
       // A guard-throw leaves the deconstruction in the run that follows the `if`: the branch the
       // condition enters is the store block alone, and the extraction tries are its siblings in

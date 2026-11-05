@@ -36,7 +36,7 @@ public final class DupStoreFolding {
   }
 
   public static boolean fold(Statement root, StructMethod method) {
-    if (method == null || !RoundTrip.enabled() || !RoundTrip.selector("dupstore")) {
+    if (method == null) {
       return false;
     }
     Uses uses = new Uses();

@@ -694,7 +694,7 @@ public class ExprProcessor implements CodeConstants {
    * an expression statement of its own and prints where it stands.
    */
   private static Exprent staticQualifierValue(List<Exprent> exprlist, ListStack<Exprent> stack) {
-    if (!RoundTrip.selector("staticexpr") || exprlist.isEmpty() || stack.isEmpty()) {
+    if (exprlist.isEmpty() || stack.isEmpty()) {
       return null;
     }
     Exprent top = stack.getByOffset(-1);
@@ -1520,9 +1520,6 @@ public class ExprProcessor implements CodeConstants {
    */
   private static List<org.jetbrains.java.decompiler.util.Pair<Queue<TypeAnnotation.PathValue>, AnnotationExprent>> castAnnotations(
     Exprent exprent) {
-    if (!RoundTrip.selector("castanno")) {
-      return Collections.emptyList();
-    }
     StructMethod method = RoundTrip.currentMethod();
     if (method == null || exprent.bytecode == null || exprent.bytecode.isEmpty()) {
       return Collections.emptyList();
@@ -1893,7 +1890,6 @@ public class ExprProcessor implements CodeConstants {
     // declared has vanished; the original source had to cast that capture away, and javac elides
     // the checkcast because the erasures match.
     if (!doCastGenerics
-        && RoundTrip.selector("rt-capture-cast")
         && exprent instanceof InvocationExprent invocation
         && needsCaptureCast(leftType, invocation.getDeclaredGenericReturnType())) {
       doCastGenerics = true;
@@ -4373,13 +4369,10 @@ public class ExprProcessor implements CodeConstants {
   }
 
   private static boolean lambdaNeedsCast(VarType left, NewExprent exprent) {
-    if (!exprent.isLambda() && !exprent.isMethodReference()) {
-      return false;
-    }
     // The invokedynamic names the interface javac built the lambda for, and it comes from the
     // target itself: when it is not the expected type, the source must have cast to it, or javac
     // would have built the lambda for the expected type instead.
-    return RoundTrip.selector("lambdacast");
+    return exprent.isLambda() || exprent.isMethodReference();
   }
 
   /** The single abstract method that makes {@code cls} a functional interface, or null. */

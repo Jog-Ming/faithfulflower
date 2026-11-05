@@ -106,20 +106,20 @@ public class SequenceStatement extends Statement {
 
     // A labelled block that is really the source's else-if chain, or an if whose two arms were
     // swapped: print the source shape and drop the label the class file needed for the breaks.
-    if (islabeled && RoundTrip.selector("elseifchain") && printLabelledChain(buf, indent)) {
+    if (islabeled && printLabelledChain(buf, indent)) {
       return buf;
     }
 
     // The rest of an else-if chain the enclosing print is rebuilding: the source wrote these as
     // further `else if` clauses, not as statements after the arm's break.
-    if (!islabeled && RoundTrip.selector("elseifchain") && printsAsChainArm()) {
+    if (!islabeled && printsAsChainArm()) {
       appendChain(buf, indent);
       return buf;
     }
 
     // A run of ifs an arm at a time falling into the same exit: once the arms are a chain, the
     // copy of that exit the printer left in each arm is the chain's own end, printed after it.
-    if (!islabeled && RoundTrip.selector("elseifchain") && printTailChain(buf, indent)) {
+    if (!islabeled && printTailChain(buf, indent)) {
       return buf;
     }
 
@@ -127,7 +127,7 @@ public class SequenceStatement extends Statement {
     // to the same test, so the CFG builder made the body the inner loop's and left the increment
     // outside it. The target's offsets put the increment first, then the guard, then the body, and
     // the guard repeats the first atom of the merged test.
-    if (!islabeled && RoundTrip.selector("incrementloop") && printFoldedIncrementLoop(buf, indent)) {
+    if (!islabeled && printFoldedIncrementLoop(buf, indent)) {
       return buf;
     }
 
@@ -135,8 +135,7 @@ public class SequenceStatement extends Statement {
     // jump lands on, and the run leaves only through the break to a switch. javac ends the local's
     // row where the source's closing brace stood, so the source wrote `{ … } break;` and the break
     // is not part of the run.
-    if (!islabeled && RoundTrip.selector("bareblock") && RoundTrip.selector("switchbreak")
-        && printClosedBlockBreak(buf, indent)) {
+    if (!islabeled && printClosedBlockBreak(buf, indent)) {
       return buf;
     }
 
@@ -270,172 +269,168 @@ public class SequenceStatement extends Statement {
       // where the table says its scope did. Both ends are exprent boundaries — the declaration's
       // own store and the last instruction of the run's last statement — so the braces land
       // exactly where javac closed the source's block.
-      if (RoundTrip.selector("bareblock")) {
-        int[] run = RoundTrip.handoverRun(stats, i, RoundTrip.blockEnd(this));
-        // Closing the block takes every local it declares out of scope: a use past the boundary
-        // has to land in the row that takes its slot over at a store, which the printer writes as
-        // a declaration. Anything else and the brace would name a variable that is gone.
-        if (run != null && splittable(stats.get(run[0]))
-            && (run[3] < 0 || splittable(stats.get(run[2])))
-            && RoundTrip.closesCleanly(run[5], run[6])) {
-          int openExp = run[1];
-          int closeExp = run[3];
-          List<Exprent> leading = RoundTrip.leadingExprents(stats.get(run[0]));
-          if (openExp > 0) {
-            // The declarations before the block's own stay outside it.
-            buf.append(ExprProcessor.listToJava(leading.subList(0, openExp), indent));
-          }
-          RoundTrip.armSplitDeclarations(run[5], run[6]);
-          buf.appendIndent(indent).append("{").appendLineSeparator();
-          // A block nested in this run that ends where this one does closes on the same brace;
-          // the source's single brace is this one.
-          int previousEnd = RoundTrip.handoverEnd(run[6]);
-          try {
-            if (run[2] == run[0] && closeExp < 0) {
-              printFrom(stats.get(run[0]), openExp, indent + 1, buf);
-              buf.appendIndent(indent).append("}").appendLineSeparator();
-            } else if (run[2] == run[0]) {
-              buf.append(ExprProcessor.listToJava(leading.subList(openExp, closeExp + 1), indent + 1));
-              buf.appendIndent(indent).append("}").appendLineSeparator();
-              printAfter(stats.get(run[0]), closeExp, indent, buf);
-            } else {
-              printFrom(stats.get(run[0]), openExp, indent + 1, buf);
-              for (int j = run[0] + 1; j < run[2]; j++) {
-                buf.append(ExprProcessor.jmpWrapper(stats.get(j), indent + 1, true));
-              }
-              List<Statement> childSplit = run.length > 9 && run[9] >= 0
-                ? ((SequenceStatement) stats.get(run[2])).getStats() : null;
-              if (childSplit != null) {
-                // The boundary is between two of the closing sequence's statements: its print
-                // splits there, and the rest runs after the brace.
-                for (int k = 0; k <= run[9]; k++) {
-                  buf.append(ExprProcessor.jmpWrapper(childSplit.get(k), indent + 1, true));
-                }
-                buf.appendIndent(indent).append("}").appendLineSeparator();
-                for (int k = run[9] + 1; k < childSplit.size(); k++) {
-                  buf.append(ExprProcessor.jmpWrapper(childSplit.get(k), indent, true));
-                }
-              } else if (closeExp < 0) {
-                buf.append(ExprProcessor.jmpWrapper(stats.get(run[2]), indent + 1, true));
-                buf.appendIndent(indent).append("}").appendLineSeparator();
-              } else {
-                List<Exprent> tail = RoundTrip.leadingExprents(stats.get(run[2]));
-                buf.append(ExprProcessor.listToJava(tail.subList(0, closeExp + 1), indent + 1));
-                buf.appendIndent(indent).append("}").appendLineSeparator();
-                printAfter(stats.get(run[2]), closeExp, indent, buf);
-              }
-            }
-          } finally {
-            RoundTrip.restoreHandoverEnd(previousEnd);
-          }
-          notempty = true;
-          i = run[2];
-          continue;
+      int[] run = RoundTrip.handoverRun(stats, i, RoundTrip.blockEnd(this));
+      // Closing the block takes every local it declares out of scope: a use past the boundary
+      // has to land in the row that takes its slot over at a store, which the printer writes as
+      // a declaration. Anything else and the brace would name a variable that is gone.
+      if (run != null && splittable(stats.get(run[0]))
+          && (run[3] < 0 || splittable(stats.get(run[2])))
+          && RoundTrip.closesCleanly(run[5], run[6])) {
+        int openExp = run[1];
+        int closeExp = run[3];
+        List<Exprent> leading = RoundTrip.leadingExprents(stats.get(run[0]));
+        if (openExp > 0) {
+          // The declarations before the block's own stay outside it.
+          buf.append(ExprProcessor.listToJava(leading.subList(0, openExp), indent));
         }
+        RoundTrip.armSplitDeclarations(run[5], run[6]);
+        buf.appendIndent(indent).append("{").appendLineSeparator();
+        // A block nested in this run that ends where this one does closes on the same brace;
+        // the source's single brace is this one.
+        int previousEnd = RoundTrip.handoverEnd(run[6]);
+        try {
+          if (run[2] == run[0] && closeExp < 0) {
+            printFrom(stats.get(run[0]), openExp, indent + 1, buf);
+            buf.appendIndent(indent).append("}").appendLineSeparator();
+          } else if (run[2] == run[0]) {
+            buf.append(ExprProcessor.listToJava(leading.subList(openExp, closeExp + 1), indent + 1));
+            buf.appendIndent(indent).append("}").appendLineSeparator();
+            printAfter(stats.get(run[0]), closeExp, indent, buf);
+          } else {
+            printFrom(stats.get(run[0]), openExp, indent + 1, buf);
+            for (int j = run[0] + 1; j < run[2]; j++) {
+              buf.append(ExprProcessor.jmpWrapper(stats.get(j), indent + 1, true));
+            }
+            List<Statement> childSplit = run.length > 9 && run[9] >= 0
+              ? ((SequenceStatement) stats.get(run[2])).getStats() : null;
+            if (childSplit != null) {
+              // The boundary is between two of the closing sequence's statements: its print
+              // splits there, and the rest runs after the brace.
+              for (int k = 0; k <= run[9]; k++) {
+                buf.append(ExprProcessor.jmpWrapper(childSplit.get(k), indent + 1, true));
+              }
+              buf.appendIndent(indent).append("}").appendLineSeparator();
+              for (int k = run[9] + 1; k < childSplit.size(); k++) {
+                buf.append(ExprProcessor.jmpWrapper(childSplit.get(k), indent, true));
+              }
+            } else if (closeExp < 0) {
+              buf.append(ExprProcessor.jmpWrapper(stats.get(run[2]), indent + 1, true));
+              buf.appendIndent(indent).append("}").appendLineSeparator();
+            } else {
+              List<Exprent> tail = RoundTrip.leadingExprents(stats.get(run[2]));
+              buf.append(ExprProcessor.listToJava(tail.subList(0, closeExp + 1), indent + 1));
+              buf.appendIndent(indent).append("}").appendLineSeparator();
+              printAfter(stats.get(run[2]), closeExp, indent, buf);
+            }
+          }
+        } finally {
+          RoundTrip.restoreHandoverEnd(previousEnd);
+        }
+        notempty = true;
+        i = run[2];
+        continue;
       }
       // A local whose row ends at a statement boundary inside this block, without a handover to
       // prove it — a loop's head variable is the common case. Closing the block there keeps the
       // scope javac recorded; the printer still has no `for` for the loop it belongs to.
-      if (RoundTrip.selector("bareblock")) {
-        int windowEnd = i + 1 < stats.size()
-          ? Math.max(RoundTrip.blockEnd(st), RoundTrip.firstOffset(stats.get(i + 1)) - 1)
-          : RoundTrip.blockEnd(st);
-        // A statement's recorded extent ends at its last exprent's instruction. A method body can
-        // end with instructions no exprent records -- a loop's back edge and the silent return --
-        // so its block's true end is the method's code end, and a row ending between the two
-        // closed a block of its own in front of them.
-        int enclosingEnd = RoundTrip.blockEnd(this);
-        if (getParent() instanceof RootStatement && RoundTrip.methodEndsWithSilentReturn()) {
-          int codeEnd = RoundTrip.methodCodeEnd();
-          if (codeEnd > enclosingEnd) {
-            enclosingEnd = codeEnd;
+      int windowEnd = i + 1 < stats.size()
+        ? Math.max(RoundTrip.blockEnd(st), RoundTrip.firstOffset(stats.get(i + 1)) - 1)
+        : RoundTrip.blockEnd(st);
+      // A statement's recorded extent ends at its last exprent's instruction. A method body can
+      // end with instructions no exprent records -- a loop's back edge and the silent return --
+      // so its block's true end is the method's code end, and a row ending between the two
+      // closed a block of its own in front of them.
+      int enclosingEnd = RoundTrip.blockEnd(this);
+      if (getParent() instanceof RootStatement && RoundTrip.methodEndsWithSilentReturn()) {
+        int codeEnd = RoundTrip.methodCodeEnd();
+        if (codeEnd > enclosingEnd) {
+          enclosingEnd = codeEnd;
+        }
+      }
+      int[] scope = RoundTrip.nestedBlockScope(st, windowEnd, enclosingEnd);
+      // The local has to be declared by this statement itself, and the block it lived in has to
+      // reach past it; otherwise the run is just this statement and the braces buy nothing.
+      if (scope != null && scope[0] <= RoundTrip.blockEnd(st)) {
+        int close = -1;
+        for (int j = i; j < stats.size(); j++) {
+          int end = RoundTrip.blockEnd(stats.get(j));
+          // The closing brace sits right after the run's last instruction; the back edge that
+          // ends the statement may add up to a few bytes past the last exprent offset.
+          if (Math.abs(end - scope[1]) <= 5) {
+            close = j;
+            break;
+          }
+          if (end > scope[1]) {
+            break;
           }
         }
-        int[] scope = RoundTrip.nestedBlockScope(st, windowEnd, enclosingEnd);
-        // The local has to be declared by this statement itself, and the block it lived in has to
-        // reach past it; otherwise the run is just this statement and the braces buy nothing.
-        if (scope != null && scope[0] <= RoundTrip.blockEnd(st)) {
-          int close = -1;
+        boolean exact = close > i;
+        // Closing the block moves everything after it out of the local's scope: allowed only
+        // when nothing there reads the local. Where the target hands the slot to a later local,
+        // the scope provably ended and no read can follow; that also bounds the block for a run
+        // whose last statement ends well before the scope does (a loop's back edge).
+        VarExprent declared = declaredAt(st, scope[0], scope[2]);
+        boolean reusable = declared != null && RoundTrip.slotReusedAfter(scope[2], scope[1]);
+        boolean basicBlock = st.getExprents() != null && !st.getExprents().isEmpty();
+        if (!exact && basicBlock) {
           for (int j = i; j < stats.size(); j++) {
             int end = RoundTrip.blockEnd(stats.get(j));
-            // The closing brace sits right after the run's last instruction; the back edge that
-            // ends the statement may add up to a few bytes past the last exprent offset.
-            if (Math.abs(end - scope[1]) <= 5) {
+            // The next statement that prints anything is the boundary; one that prints nothing
+            // (a hidden final return) leaves the run to the end of the enclosing block.
+            boolean atBoundary = true;
+            for (int k = j + 1; k < stats.size(); k++) {
+              int next = RoundTrip.statementStart(stats.get(k));
+              if (next < 0) {
+                continue;
+              }
+              atBoundary = next >= scope[1];
+              break;
+            }
+            if (end <= scope[1] + 5 && atBoundary) {
               close = j;
               break;
             }
-            if (end > scope[1]) {
+            if (end > scope[1] + 5) {
               break;
             }
           }
-          boolean exact = close > i;
-          // Closing the block moves everything after it out of the local's scope: allowed only
-          // when nothing there reads the local. Where the target hands the slot to a later local,
-          // the scope provably ended and no read can follow; that also bounds the block for a run
-          // whose last statement ends well before the scope does (a loop's back edge).
-          VarExprent declared = declaredAt(st, scope[0], scope[2]);
-          boolean reusable = declared != null && RoundTrip.slotReusedAfter(scope[2], scope[1]);
-          boolean basicBlock = st.getExprents() != null && !st.getExprents().isEmpty();
-          if (!exact && basicBlock) {
-            for (int j = i; j < stats.size(); j++) {
-              int end = RoundTrip.blockEnd(stats.get(j));
-              // The next statement that prints anything is the boundary; one that prints nothing
-              // (a hidden final return) leaves the run to the end of the enclosing block.
-              boolean atBoundary = true;
-              for (int k = j + 1; k < stats.size(); k++) {
-                int next = RoundTrip.statementStart(stats.get(k));
-                if (next < 0) {
-                  continue;
-                }
-                atBoundary = next >= scope[1];
-                break;
-              }
-              if (end <= scope[1] + 5 && atBoundary) {
-                close = j;
-                break;
-              }
-              if (end > scope[1] + 5) {
-                break;
-              }
-            }
-            // A loop's own variable opens at the loop's head; its declaration belongs to the for
-            // statement, not to a block in front of it.
-            if (close > i && loopHeadReads(stats.get(close), scope[0], scope[2])) {
-              close = -1;
-              basicBlock = false;
-            }
+          // A loop's own variable opens at the loop's head; its declaration belongs to the for
+          // statement, not to a block in front of it.
+          if (close > i && loopHeadReads(stats.get(close), scope[0], scope[2])) {
+            close = -1;
+            basicBlock = false;
           }
-          boolean closedEarly = exact
-            ? !RoundTrip.slotUsedFrom(stats, close + 1, scope[2])
-            : close > i && basicBlock
-              && (!RoundTrip.slotUsedFrom(stats, close + 1, scope[2])
-                  || reusable && !usedLater(stats, close + 1, declared));
-          if (close > i && close < stats.size() - 1 && closedEarly) {
-            int split = RoundTrip.exprentAtOffset(st, scope[0]);
-            List<Exprent> exprents = st.getExprents();
-            if (split < 0 && exprents != null && !exprents.isEmpty()) {
-              // The declaration's store can sit past every exprent's recorded offsets; the block's
-              // last exprent is the one that declares it.
-              split = exprents.size() - 1;
-            }
-            if (exprents != null && split > 0) {
-              // The declaration is one exprent of this block: the exprents before it stay outside.
-              buf.append(ExprProcessor.listToJava(exprents.subList(0, split), indent));
-            }
-            buf.appendIndent(indent).append("{").appendLineSeparator();
-            if (exprents != null && split >= 0) {
-              buf.append(ExprProcessor.listToJava(exprents.subList(split, exprents.size()), indent + 1));
-            } else {
-              buf.append(ExprProcessor.jmpWrapper(st, indent + 1, true));
-            }
-            for (int j = i + 1; j <= close; j++) {
-              buf.append(ExprProcessor.jmpWrapper(stats.get(j), indent + 1, true));
-            }
-            buf.appendIndent(indent).append("}").appendLineSeparator();
-            notempty = true;
-            i = close;
-            continue;
+        }
+        boolean closedEarly = exact
+          ? !RoundTrip.slotUsedFrom(stats, close + 1, scope[2])
+          : close > i && basicBlock
+            && (!RoundTrip.slotUsedFrom(stats, close + 1, scope[2])
+                || reusable && !usedLater(stats, close + 1, declared));
+        if (close > i && close < stats.size() - 1 && closedEarly) {
+          int split = RoundTrip.exprentAtOffset(st, scope[0]);
+          List<Exprent> exprents = st.getExprents();
+          if (split < 0 && exprents != null && !exprents.isEmpty()) {
+            // The declaration's store can sit past every exprent's recorded offsets; the block's
+            // last exprent is the one that declares it.
+            split = exprents.size() - 1;
           }
+          if (exprents != null && split > 0) {
+            // The declaration is one exprent of this block: the exprents before it stay outside.
+            buf.append(ExprProcessor.listToJava(exprents.subList(0, split), indent));
+          }
+          buf.appendIndent(indent).append("{").appendLineSeparator();
+          if (exprents != null && split >= 0) {
+            buf.append(ExprProcessor.listToJava(exprents.subList(split, exprents.size()), indent + 1));
+          } else {
+            buf.append(ExprProcessor.jmpWrapper(st, indent + 1, true));
+          }
+          for (int j = i + 1; j <= close; j++) {
+            buf.append(ExprProcessor.jmpWrapper(stats.get(j), indent + 1, true));
+          }
+          buf.appendIndent(indent).append("}").appendLineSeparator();
+          notempty = true;
+          i = close;
+          continue;
         }
       }
 
@@ -447,7 +442,6 @@ public class SequenceStatement extends Statement {
           && ifStatement.getIfstat() == null && !ifStatement.isLabeled() && !stats.get(i + 1).isLabeled()
           && !ifStatement.isPatternMatched()
           && hasContent(stats.subList(i + 1, stats.size()))
-          && RoundTrip.selector("elseexit")
           && RoundTrip.exitBranchLandsOn(ifStatement.getHeadexprent(), ifStatement.getIfEdge())) {
         Exprent condition = ifStatement.getHeadexprent().getCondition();
         IfExprent head = (IfExprent) ifStatement.getHeadexprent().copy();
@@ -645,7 +639,6 @@ public class SequenceStatement extends Statement {
           && second.iftype == IfStatement.IFTYPE_IF && second.getElsestat() == null
           && !second.isLabeled() && !stats.get(i + 1).isLabeled() && !isLabeled()
           && second.getIfstat() != null && second.getFirst() != null
-          && RoundTrip.selector("elseifelse")
           && exits(first.getIfstat())
           && patternSlot(second) >= 0 && firstDeclaredSlot(first.getIfstat()) > patternSlot(second)) {
         Statement arm = second.getIfstat();
@@ -709,7 +702,6 @@ public class SequenceStatement extends Statement {
           && !ifStatement.isLabeled() && !stats.get(i + 1).isLabeled()
           && !isLabeled()
           && ifStatement.getIfstat() != null
-          && RoundTrip.selector("elseover")
           && RoundTrip.lastBranchTarget(ifStatement.getHeadexprent()) >= 0
           && RoundTrip.lastBranchTarget(ifStatement.getHeadexprent()) <= RoundTrip.statementStart(stats.get(i + 1))) {
         Statement arm = ifStatement.getIfstat();
@@ -764,8 +756,7 @@ public class SequenceStatement extends Statement {
             // The copy's own instruction is the method's last return, which the enclosing flow
             // prints; when that return is not the next thing this sequence would print (an
             // enclosing else prints between them), the copy's offset still names the join.
-            join = RoundTrip.selector("elsejoin")
-              ? RoundTrip.firstOffset(arm.getStats().get(bodyEnd)) : RoundTrip.printedAfter(this);
+            join = RoundTrip.firstOffset(arm.getStats().get(bodyEnd));
             if (join != elseStop) {
               int enclosing = RoundTrip.printedAfter(this);
               join = enclosing == elseStop ? enclosing : join;
@@ -916,7 +907,6 @@ public class SequenceStatement extends Statement {
                && negated.getFuncType() == FunctionExprent.FunctionType.BOOL_NOT)
           && !ifStatement.isLabeled() && !stats.get(i + 1).isLabeled() && !isLabeled()
           && !(stats.get(i + 1) instanceof IfStatement next && patternVar(next) != null)
-          && RoundTrip.selector("elsechain")
           && exits(ifStatement.getIfstat())) {
         int pattern = patternSlot(ifStatement);
         int fresh = pattern < 0 ? -1 : firstDeclaredSlot(stats.get(i + 1));
@@ -1288,8 +1278,7 @@ public class SequenceStatement extends Statement {
         if (exit instanceof ExitExprent tailExit
             && !writesAny(java.util.Collections.singletonList(ifStatement.getIfstat()), readLocals(tailExit.getValue()))
             && RoundTrip.returnGuard(ifStatement.getIfstat(), tail)) {
-          int armSplit = RoundTrip.selector("armscope")
-            ? RoundTrip.armScopeSplit(ifStatement.getIfstat()) : -1;
+          int armSplit = RoundTrip.armScopeSplit(ifStatement.getIfstat());
           IfExprent head = (IfExprent) ifStatement.getHeadexprent().copy();
           head.setCondition(RoundTrip.negateCondition(head.getCondition()));
           // A test the target's table anchors at a later operand's first instruction was written
@@ -1346,9 +1335,9 @@ public class SequenceStatement extends Statement {
           && !ifStatement.isLabeled() && !stats.get(i + 1).isLabeled()
           && ifStatement.getIfstat() != null
           && hasContent(stats.subList(i + 1, stats.size()))) {
-        java.util.List<Statement> run = stats.subList(i + 1, stats.size());
+        java.util.List<Statement> following = stats.subList(i + 1, stats.size());
         int continuation = RoundTrip.realElseContinuation(ifStatement.getHeadexprent(),
-          ifStatement.getIfstat(), run);
+          ifStatement.getIfstat(), following);
         if (continuation >= 0) {
           // The statements starting before the join are the source's then arm; a basic block that
           // straddles the join keeps its exprents before it in the arm and prints the rest after.
@@ -1404,7 +1393,6 @@ public class SequenceStatement extends Statement {
           && ifStatement.iftype == IfStatement.IFTYPE_IF && ifStatement.getElsestat() == null
           && !ifStatement.isLabeled() && !stats.get(i + 1).isLabeled()
           && ifStatement.getIfstat() instanceof SequenceStatement arm
-          && RoundTrip.selector("elsepost")
           && printSplitJoinElse(buf, indent, ifStatement, arm, stats.get(i + 1))) {
         notempty = true;
         break;
@@ -1558,7 +1546,7 @@ public class SequenceStatement extends Statement {
         // is the statement's own, so the print has to spell it out for the alignment; the arm's
         // fall-through and the continue reach the same loop head.
         int restContinue = -1;
-        if (RoundTrip.selector("continueflat") && straddle == null && afterIf.isEmpty()
+        if (straddle == null && afterIf.isEmpty()
             && shellTail.isEmpty() && restCopy == null && !restStats.isEmpty()) {
           restContinue = RoundTrip.flatContinueSite(restStats.get(restStats.size() - 1), elseArm);
         }
@@ -1665,8 +1653,7 @@ public class SequenceStatement extends Statement {
           // The target's table can prove the arm held an else block that closed before a
           // trailing return: the first local the arm declares ends its row at that return's
           // first instruction. The flat print would keep the local alive through the return.
-          int armSplit = !asElse && RoundTrip.selector("armscope")
-            ? RoundTrip.armScopeSplit(ifStatement.getIfstat()) : -1;
+          int armSplit = !asElse ? RoundTrip.armScopeSplit(ifStatement.getIfstat()) : -1;
           boolean splitElse = armSplit > 0;
           asElse |= splitElse;
           // The rest runs only up to the branch shell; the target laid the statements past it
@@ -1993,7 +1980,7 @@ public class SequenceStatement extends Statement {
    * first: landing on the tree's arm means the source wrote the negated test with that arm last.
    */
   private boolean printLabelledElse(TextBuffer buf, int indent) {
-    if (!RoundTrip.selector("elsearm") || stats.size() != 2
+    if (stats.size() != 2
         || !(stats.get(0) instanceof IfStatement branch) || !isPlainIf(branch)) {
       return false;
     }
@@ -2535,7 +2522,7 @@ public class SequenceStatement extends Statement {
    * if would print through one of its special shapes, which the caller's other rules own.
    */
   private boolean printArmScope(TextBuffer buf, int indent, int i) {
-    if (!RoundTrip.selector("armscope") || isLabeled() || i + 1 >= stats.size()) {
+    if (isLabeled() || i + 1 >= stats.size()) {
       return false;
     }
     Statement st = stats.get(i);

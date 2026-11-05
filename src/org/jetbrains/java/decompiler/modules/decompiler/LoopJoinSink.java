@@ -26,9 +26,6 @@ public final class LoopJoinSink {
   private LoopJoinSink() {}
 
   public static boolean sink(Statement root) {
-    if (!RoundTrip.selector("joinsink")) {
-      return false;
-    }
     return sinkRec(root);
   }
 

@@ -652,7 +652,7 @@ public final class IfHelper {
       boolean guardRefuse = ifstat.getIfstat() != null && endsWithReturn(ifstat.getIfstat())
         && !(tailReturnEndsArm(ifstat.getIfstat())
              && RoundTrip.canCompleteNormally(ifstat.getIfstat()));
-      if (RoundTrip.selector("guardmerge") && ifstat.getIfstat() != null && guardRefuse
+      if (ifstat.getIfstat() != null && guardRefuse
           && !mentionsAssertionsDisabled(ifstat)) {
         // The target's slots can still prove the source wrote an else chain: the else's binding
         // is hoisted above the then arm's scope, which a closed branch cannot be.
@@ -923,7 +923,7 @@ public final class IfHelper {
       Statement elseStat = ifSt.getElsestat();
 
       // Both arms are single exits: the target's layout says which arm the source had first.
-      if (RoundTrip.selector("swap") && ifStat != null && elseStat != null && isExit(ifStat) && isExit(elseStat)) {
+      if (ifStat != null && elseStat != null && isExit(ifStat) && isExit(elseStat)) {
         int ifOffset = firstOffset(ifStat);
         int elseOffset = firstOffset(elseStat);
         if (ifOffset >= 0 && elseOffset >= 0 && elseOffset < ifOffset) {

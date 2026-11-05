@@ -467,7 +467,7 @@ public final class SecondaryFunctionsHelper {
         Exprent right = asexpr.getRight();
         Exprent left = asexpr.getLeft();
 
-        if (RoundTrip.enabled() && right instanceof FunctionExprent compound) {
+        if (right instanceof FunctionExprent compound) {
           Exprent operand = compoundOperand(left, compound);
           Exprent matching = null;
           for (Exprent candidate : compound.getLstOperands()) {

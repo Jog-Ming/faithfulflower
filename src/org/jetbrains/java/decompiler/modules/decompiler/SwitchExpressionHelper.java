@@ -235,7 +235,7 @@ public final class SwitchExpressionHelper {
       // overwrites it), but the target still runs it before the selector and the variable's
       // local row opens right after its store, so the source declared it there. Print it back
       // before the switch-expression assignment.
-      int[] prelude = RoundTrip.selector("switchjoin") ? switchPrelude(stat, exprents) : null;
+      int[] prelude = switchPrelude(stat, exprents);
 
       VarExprent vExpr = new VarExprent(relevantVar.getIndex(), relevantVar.getVarType(), relevantVar.getProcessor());
       vExpr.setStack(true); // We want to inline

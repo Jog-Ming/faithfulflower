@@ -11,7 +11,6 @@ import org.jetbrains.java.decompiler.main.extern.*;
 import org.jetbrains.java.decompiler.main.plugins.JarPluginLoader;
 import org.jetbrains.java.decompiler.api.plugin.PluginSource;
 import org.jetbrains.java.decompiler.main.plugins.PluginSources;
-import org.jetbrains.java.decompiler.modules.decompiler.RoundTrip;
 import org.jetbrains.java.decompiler.modules.renamer.ConverterHelper;
 import org.jetbrains.java.decompiler.modules.renamer.IdentifierConverter;
 import org.jetbrains.java.decompiler.modules.renamer.PoolInterceptor;
@@ -213,9 +212,6 @@ public class Fernflower implements IDecompiledData {
 
   /** Restores named constants when the pool proves the original wrote one; never compiles. */
   private String named(String text, StructClass cl) {
-    if (!RoundTrip.selector("rt-constant-names")) {
-      return text;
-    }
     try {
       ClassesProcessor.ClassNode root = classProcessor.getMapRootClasses().get(cl.qualifiedName);
       return ConstantNames.restore(text, root);
@@ -236,19 +232,16 @@ public class Fernflower implements IDecompiledData {
       buffer.append(DecompilerContext.getProperty(IFernflowerPreferences.BANNER).toString());
       classProcessor.writeClass(cl, buffer);
 
-      if (RoundTrip.selector("linealign")) {
-        try {
-          String aligned = LineAlign.align(buffer,
-            classProcessor.getMapRootClasses().get(cl.qualifiedName));
-          if (aligned != null) {
-            // The site-aware pass already ran inside LineAlign on the unaligned text; the old
-            // whole-file pass must not run a second time over the aligned text.
-            return RoundTrip.selector("rt-constant-sites")
-              ? aligned : named(aligned, cl);
-          }
-        } catch (RuntimeException e) {
-          // A class must not be lost because its line table could not be aligned.
+      try {
+        String aligned = LineAlign.align(buffer,
+          classProcessor.getMapRootClasses().get(cl.qualifiedName));
+        if (aligned != null) {
+          // The site-aware pass already ran inside LineAlign on the unaligned text; the old
+          // whole-file pass must not run a second time over the aligned text.
+          return aligned;
         }
+      } catch (RuntimeException e) {
+        // A class must not be lost because its line table could not be aligned.
       }
 
       String res = buffer.convertToStringAndAllowDataDiscard();

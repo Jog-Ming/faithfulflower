@@ -571,7 +571,7 @@ public class NewExprent extends Exprent {
    * {@code new} and the element type, as in {@code new @Nullable String[128]}.
    */
   private void appendNewExpressionTypeAnnotations(TextBuffer buf) {
-    if (!RoundTrip.selector("typeuse") || bytecode == null || bytecode.isEmpty()) {
+    if (bytecode == null || bytecode.isEmpty()) {
       return;
     }
     // A field's initializer is printed outside a method-writing context; the writer names the
@@ -685,8 +685,7 @@ public class NewExprent extends Exprent {
       if (!lambda && constructor != null) {
         List<VarType> args = constructor.getGenericArgs();
         boolean diamond = args.size() == 1 && args.get(0) == GenericType.DUMMY_VAR;
-        if (args.isEmpty() && RoundTrip.selector("rt-diamond")
-            && hasTypeParameters(newType)) {
+        if (args.isEmpty() && hasTypeParameters(newType)) {
           // No type arguments were recovered, but javac can infer them from the context; the
           // original wrote `new Foo<>()`, and the raw type would break the caller's inference.
           buf.append("<>");
@@ -790,7 +789,7 @@ public class NewExprent extends Exprent {
         new ClassWriter().classLambdaToJava(child, buf, methodObject, indent,
           callLine >= 0 ? callLine : RoundTrip.sourceLine(this), methodReferenceQualifier(), getFunctionalReturnType(),
           getFunctionalParameterTypes());
-        if (isMethodReference() && RoundTrip.selector("arg-head-line")) {
+        if (isMethodReference()) {
           // A method reference has no body method whose table could anchor its text: javac records
           // the invokedynamic (and the null check of a captured receiver) on the line the
           // reference is written on, and only that entry can tell the aligner where the text sits.
@@ -905,7 +904,7 @@ public class NewExprent extends Exprent {
             // pinned them: a diamond there has no target to infer from.
             appendParameters(buf, expectedCreationArgs);
           }
-          else if (args.isEmpty() && RoundTrip.selector("rt-diamond") && hasTypeParameters(newType)
+          else if (args.isEmpty() && hasTypeParameters(newType)
               && !receiverDiamond && (InvocationExprent.inArgument() || expectedCreationType != null)) {
             // No recovered type arguments, but javac infers them from the context; the original
             // wrote the diamond, and a raw type would break the caller's inference.
@@ -933,7 +932,6 @@ public class NewExprent extends Exprent {
       // point across any run of variables and fields: an element after them still proves its own
       // break when its entry sits below that line, and the field simply shares the earlier line
       // in the printed text, which the table gives no entry of its own to contradict.
-      boolean enabled = RoundTrip.selector("vararg-elements");
       for (int i = 0; i < lstArrayElements.size(); i++) {
         Exprent element = lstArrayElements.get(i);
         int line = RoundTrip.sourceLine(element);
@@ -941,8 +939,8 @@ public class NewExprent extends Exprent {
         // An element the original put on a later line starts a line here. A later element whose
         // own line is inherited but whose invoke is later was written on that later line, for the
         // same reason as an argument.
-        boolean later = enabled && line >= 0 && previousEnd >= 0 && line > previousEnd;
-        boolean ownLater = enabled && element instanceof InvocationExprent
+        boolean later = line >= 0 && previousEnd >= 0 && line > previousEnd;
+        boolean ownLater = element instanceof InvocationExprent
           && line >= 0 && previousEnd >= 0 && line <= previousEnd && end > previousEnd;
         boolean elementStartsLine = later || ownLater;
         if (i > 0) {
@@ -1567,7 +1565,6 @@ public class NewExprent extends Exprent {
    */
   private void appendAnonymousSuperType(TextBuffer buf, VarType superType, ClassNode node) {
     if (superType instanceof GenericType && !((GenericType)superType).getArguments().isEmpty()
-        && RoundTrip.selector("rt-diamond")
         && node.classStruct != null) {
       for (StructMethod method : node.classStruct.getMethods()) {
         if (CodeConstants.INIT_NAME.equals(method.getName()) && !method.getDescriptor().startsWith("()")) {
@@ -2411,7 +2408,7 @@ public class NewExprent extends Exprent {
    * own type variables: only a diamond lets javac infer the expected arguments from the target.
    */
   private boolean expectsWiderArguments(VarType upperBound) {
-    if (!RoundTrip.selector("rt-diamond") || constructor == null
+    if (constructor == null
       || !(upperBound instanceof GenericType target) || target.type != CodeType.OBJECT
       || target.arrayDim != 0 || target.getWildcard() != GenericType.WILDCARD_NO
       || !target.value.equals(newType.value)) {
@@ -2561,8 +2558,7 @@ public class NewExprent extends Exprent {
    * instantiation names a type variable that is in scope and is not that bound.
    */
   private VarType methodReferenceQualifier() {
-    if (!RoundTrip.selector("rt-demand-witness")
-      || !lambda || !isMethodReference() || inferredLambdaType == null || !inferredLambdaType.isGeneric()) {
+    if (!lambda || !isMethodReference() || inferredLambdaType == null || !inferredLambdaType.isGeneric()) {
       return null;
     }
     ClassNode node = DecompilerContext.getClassProcessor().getMapRootClasses().get(newType.value);
