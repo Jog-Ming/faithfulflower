@@ -3257,6 +3257,29 @@ public class InvocationExprent extends Exprent {
   }
 
   /**
+   * Whether the declared parameter of the argument being printed names none of the called
+   * method's own type variables. The parameter's type is then fixed by the signature (and the
+   * receiver's instantiation) alone, so a raw value there is the source's implicit unchecked
+   * conversion and the complete instantiation it converts to can be named at the call site. A
+   * parameter the call still has to infer from this argument disqualifies the site: a cast would
+   * pin an inference the source left to javac.
+   */
+  public static boolean currentArgumentParameterFixedBySignature() {
+    InvocationExprent call = ARGUMENT_CALL.get();
+    Integer index = ARGUMENT_INDEX.get();
+    if (call == null || index == null || call.desc == null || call.desc.getSignature() == null) {
+      return false;
+    }
+    GenericMethodDescriptor signature = call.desc.getSignature();
+    if (signature.parameterTypes.size() != call.lstParameters.size()
+      || index < 0 || index >= signature.parameterTypes.size()) {
+      return false;
+    }
+    VarType parameter = signature.parameterTypes.get(index);
+    return parameter != null && !mentionsTypeVariable(parameter, signature.typeParameters);
+  }
+
+  /**
    * Whether the value's recorded type already fits the declared parameter type of the argument
    * being printed, with the called method's own type variables instantiated by this argument and
    * by the other arguments' recorded types. A variable this argument binds is checked again

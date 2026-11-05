@@ -2237,6 +2237,31 @@ public class ExprProcessor implements CodeConstants {
       }
     }
 
+    // A raw generic argument of a subclass passed to a parameterized supertype the signature
+    // fixes without any of the called method's own variables: javac converts the value
+    // implicitly and infers nothing from it, so the source's unchecked conversion is writable as
+    // a cast to the complete instantiation, one checked argument in place of the call's implicit
+    // one. The cast is a widening reference conversion to the parameter's erasure, so javac emits
+    // no checkcast for it. A same-class raw value is covered by the sites above; only a complete,
+    // nameable instantiation is printed, and a parameter still naming a callee variable is
+    // excluded because a cast there would pin an inference javac had left open.
+    if (!cast && !castAlways && InvocationExprent.inArgument()
+      && InvocationExprent.isDirectArgument(exprent)
+      && (exprent instanceof VarExprent || exprent instanceof FieldExprent)
+      && rightType != null && rightType.type == CodeType.OBJECT && rightType.arrayDim == 0
+      && !rightType.isGeneric() && rightType.value != null
+      && isGenericClass(rightType.value)
+      && leftType instanceof GenericType argumentTarget && argumentTarget.type == CodeType.OBJECT
+      && argumentTarget.arrayDim == 0 && argumentTarget.getWildcard() == GenericType.WILDCARD_NO
+      && !argumentTarget.getArguments().isEmpty() && !rightType.value.equals(argumentTarget.value)
+      && DecompilerContext.getStructContext().instanceOf(rightType.value, argumentTarget.value)
+      && !hasWildcard(leftType) && !hasRawTypeArgument(leftType)
+      && !hasInScopeTypeVariable(leftType, exprent.getNamedGenerics())
+      && isNameableCastInstantiation(leftType, exprent.getNamedGenerics())
+      && InvocationExprent.currentArgumentParameterFixedBySignature()) {
+      cast = true;
+    }
+
     if (castNull == NullCastType.DONT_CAST_AT_ALL && rightType.type == CodeType.NULL) {
       cast = castAlways;
     }
