@@ -87,12 +87,19 @@ public final class Main {
         }
         boolean casts = rest.contains("--casts");
         boolean raw = rest.contains("--raw");
+        boolean doubles = rest.contains("--doubles");
+        boolean unchecked = rest.contains("--unchecked");
+        // --tree scores a hand-edited tree outside the cache, the ground-truth projects included.
+        String treePath = stringFlag(rest, "--tree", null);
         if (versions.size() > 1) {
           if (stringFlag(rest, "--since", null) != null) {
             throw new IllegalArgumentException("--since needs a single version");
           }
-          if (casts || raw) {
-            throw new IllegalArgumentException("--casts/--raw need a single version");
+          if (treePath != null) {
+            throw new IllegalArgumentException("--tree needs a single version");
+          }
+          if (casts || raw || doubles || unchecked) {
+            throw new IllegalArgumentException("--casts/--raw/--doubles/--unchecked need a single version");
           }
           scoreMany(workspace, versions, rest);
         } else {
@@ -105,11 +112,18 @@ public final class Main {
           if (since != null && only != null) {
             throw new IllegalArgumentException("--since compares whole trees; it cannot be used with --only");
           }
-          Path tree = decompiler.tree(version, threads, noCache, only, optionsFlag(rest));
+          Path tree = treePath != null
+            ? Path.of(treePath).toAbsolutePath()
+            : decompiler.tree(version, threads, noCache, only, optionsFlag(rest));
           Verifier verifier = new Verifier(workspace, minecraft);
           verifier.score(version, tree, only, threads, json, since == null ? null : Path.of(since));
-          if (casts || raw) {
-            for (String site : verifier.sites(version, tree, threads, casts, raw)) {
+          if (casts || raw || unchecked) {
+            for (String site : verifier.sites(version, tree, threads, casts, raw, unchecked)) {
+              System.out.println(site);
+            }
+          }
+          if (doubles) {
+            for (String site : verifier.doubleCastSites(tree)) {
               System.out.println(site);
             }
           }
@@ -860,14 +874,16 @@ public final class Main {
         versions [--no-cache]                  list Mojang's versions
         decompile <version> [--no-cache] [--threads N] [--only Class]
         tree      <version> [--only Class]    print the cached tree path
-        score     <version> [<version>...] [--no-cache] [--only Class] [--threads N] [--json] [--timeout minutes] [--since Tree] [--casts|--raw]
+        score     <version> [<version>...] [--no-cache] [--only Class] [--threads N] [--json] [--timeout minutes] [--since Tree] [--tree <dir>] [--casts|--raw|--doubles|--unchecked]
                                              several versions run one at a time and each
                                              summary carries the quality counters (raw uses,
                                              redundant casts, double casts, redundant double
                                              casts, unchecked); --since lists what changed
-                                             against an earlier tree; the two listing flags
-                                             need a single version and print the diagnostics
-                                             the same compile cached
+                                             against an earlier tree; the four listing
+                                             flags need a single version and print the
+                                             diagnostics the same compile cached; --tree
+                                             scores a tree outside the cache (a ground-truth
+                                             project's src/main/java)
         diff      <version> <Class> [<Class>...] [--full|--tree <dir>] [--dump] [--dump-bytes]
                                              verify classes and explain every failing attribute;
                                              --full verifies against the whole-tree source the

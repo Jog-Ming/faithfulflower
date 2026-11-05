@@ -105,8 +105,8 @@ public final class Verifier {
    * The lint and raw-use sites of a tree, read from the compile cache: the same compilation that
    * produced the counters also records where each warning fell, so a listing never recompiles.
    */
-  public List<String> sites(String version, Path target, int threads, boolean casts, boolean raw)
-      throws Exception {
+  public List<String> sites(String version, Path target, int threads, boolean casts, boolean raw,
+                            boolean unchecked) throws Exception {
     Path client = minecraft.clientJar(version, false);
     List<Path> classpath = minecraft.classpath(version, false);
     int release = releaseOf(client);
@@ -129,6 +129,10 @@ public final class Verifier {
           if (raw && site.code().equals("raw.use")) {
             lines.add(relative + ":" + site.line() + " " + site.message());
           }
+          if (unchecked && (site.code().startsWith("compiler.warn.unchecked")
+              || site.code().startsWith("compiler.warn.prob.found.req"))) {
+            lines.add(relative + ":" + site.line() + " " + site.message());
+          }
         }
         return lines;
       });
@@ -142,6 +146,24 @@ public final class Verifier {
       pool.shutdown();
     }
     Collections.sort(all);
+    return all;
+  }
+
+  /** Every double cast in a tree's source, with its line: the sites the deletion trials act on. */
+  public List<String> doubleCastSites(Path target) throws IOException {
+    List<String> all = new ArrayList<>();
+    try (var walk = Files.walk(target)) {
+      for (Path source : walk.filter(p -> p.toString().endsWith(".java") && Files.isRegularFile(p))
+        .sorted().toList()) {
+        String text = Files.readString(source);
+        String relative = target.relativize(source).toString().replace('\\', '/');
+        for (SourceMetrics.DoubleCast site : SourceMetrics.doubleCasts(text)) {
+          int line = 1 + (int) text.substring(0, site.outer().start()).chars()
+            .filter(c -> c == '\n').count();
+          all.add(relative + ":" + line + " double cast");
+        }
+      }
+    }
     return all;
   }
 

@@ -127,12 +127,13 @@ killed after `--timeout` minutes per version (default 15); its staging tree is d
 devtools/cli versions [--no-cache]                    list Mojang's versions
 devtools/cli decompile <version> [--no-cache] [--threads N] [--only Class] [--options "..."] [--timeout minutes]
 devtools/cli tree      <version> [--only Class]       print the cached tree path
-devtools/cli score     <version> [<version>...] [--no-cache] [--only Class] [--threads N] [--json] [--options "..."] [--timeout minutes] [--since Tree] [--casts|--raw]
+devtools/cli score     <version> [<version>...] [--no-cache] [--only Class] [--threads N] [--json] [--options "..."] [--timeout minutes] [--since Tree] [--tree <dir>] [--casts|--raw|--doubles|--unchecked]
                                              score a tree; every version's summary carries the
                                              quality counters (raw uses, redundant casts, double
                                              casts, redundant double casts, unchecked); the
                                              listing flags need a single version and print the
-                                             sites the same compile cached
+                                             sites the same compile cached; --tree scores a tree
+                                             outside the cache (a GT project's src/main/java)
 devtools/cli diff      <version> <Class> [<Class>...] [--full] [--dump] [--dump-bytes]
                                              verify classes and explain every failing attribute;
                                              --full uses the whole-tree source the score measures
