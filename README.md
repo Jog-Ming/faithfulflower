@@ -6,7 +6,7 @@ the most faithful one: the generated Java, compiled again with javac, must repro
 class file byte for byte — instructions, line tables, local variable tables, signatures, annotations
 and every other attribute.
 
-## Disclaimer
+## DISCLAIMER
 
 faithfulflower is developed with AI assistance: research, implementation and measurement are
 carried out together with Claude (Anthropic's Claude Code), and this README is written by AI. Every
