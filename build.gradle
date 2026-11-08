@@ -334,3 +334,31 @@ signing {
     sign publishing.publications.mavenJava
   }
 }
+
+sourceSets {
+  bench {
+    java.srcDirs 'bench'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += sourceSets.main.output
+  }
+}
+
+configurations {
+  benchImplementation.extendsFrom implementation
+  benchRuntimeOnly.extendsFrom runtimeOnly
+}
+
+tasks.register('bench', JavaExec) {
+  group = 'verification'
+  description = 'Runs the in-process decompiler benchmarks'
+  classpath = sourceSets.bench.runtimeClasspath
+  mainClass = 'org.jetbrains.java.decompiler.bench.DecompilerBench'
+  if (project.hasProperty('benchArgs')) {
+    args project.property('benchArgs').split(' ')
+  }
+  if (project.hasProperty('benchJava')) {
+    javaLauncher = javaToolchains.launcherFor {
+      languageVersion = JavaLanguageVersion.of(project.property('benchJava') as Integer)
+    }
+  }
+}
