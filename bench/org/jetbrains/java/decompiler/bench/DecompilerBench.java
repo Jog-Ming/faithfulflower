@@ -96,13 +96,14 @@ public final class DecompilerBench {
       }
     }
 
-    System.out.println("scenario\tround\tclasses\tallocatedBytes\tcpuNanos\twallNanos");
+    System.out.println("scenario\tround\tclasses\tallocatedBytes\tthreadCpuNanos\tprocessCpuNanos\twallNanos");
     for (int round = 0; round < rounds; round++) {
       for (Scenario scenario : scenarios) {
         long[] metrics = measure(scenario.sources(), classesDir);
         results.get(scenario.name()).add(metrics);
-        System.out.printf(Locale.ROOT, "%s\t%d\t%d\t%d\t%d\t%d%n",
-          scenario.name(), round, scenario.sources().size(), metrics[0], metrics[1], metrics[2]);
+        System.out.printf(Locale.ROOT, "%s\t%d\t%d\t%d\t%d\t%d\t%d%n",
+          scenario.name(), round, scenario.sources().size(), metrics[0], metrics[1], metrics[2],
+          metrics[3]);
       }
     }
     printSummary(results);
@@ -113,27 +114,34 @@ public final class DecompilerBench {
 
   private static long[] measure(List<File> sources, File library) {
     long allocated = allocatedBytes();
-    long cpu = cpuNanos();
+    long threadCpu = threadCpuNanos();
+    long processCpu = processCpuNanos();
     long start = System.nanoTime();
     decompile(sources, library);
     long wall = System.nanoTime() - start;
-    long cpuEnd = cpuNanos();
+    long threadCpuEnd = threadCpuNanos();
+    long processCpuEnd = processCpuNanos();
     long allocatedEnd = allocatedBytes();
     return new long[]{
       allocated < 0 || allocatedEnd < 0 ? -1 : allocatedEnd - allocated,
-      cpu < 0 || cpuEnd < 0 ? -1 : cpuEnd - cpu,
+      threadCpu < 0 || threadCpuEnd < 0 ? -1 : threadCpuEnd - threadCpu,
+      processCpu < 0 || processCpuEnd < 0 ? -1 : processCpuEnd - processCpu,
       wall};
   }
 
   private static void printSummary(Map<String, List<long[]>> results) {
-    System.out.println("summary\tscenario\trounds\tallocatedBytesMedian\tallocatedBytesMad\tcpuNanosMedian\tcpuNanosMad\twallNanosMedian\twallNanosMad");
+    System.out.println("summary\tscenario\trounds\tallocatedBytesMedian\tallocatedBytesMad\tthreadCpuNanosMedian\tthreadCpuNanosMad\tprocessCpuNanosMedian\tprocessCpuNanosMad\twallNanosMedian\twallNanosMad");
     for (Map.Entry<String, List<long[]>> entry : results.entrySet()) {
       List<Long> allocated = column(entry.getValue(), 0);
-      List<Long> cpu = column(entry.getValue(), 1);
-      List<Long> wall = column(entry.getValue(), 2);
-      System.out.printf(Locale.ROOT, "summary\t%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d%n",
+      List<Long> threadCpu = column(entry.getValue(), 1);
+      List<Long> processCpu = column(entry.getValue(), 2);
+      List<Long> wall = column(entry.getValue(), 3);
+      System.out.printf(Locale.ROOT, "summary\t%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d%n",
         entry.getKey(), entry.getValue().size(),
-        median(allocated), mad(allocated), median(cpu), mad(cpu), median(wall), mad(wall));
+        median(allocated), mad(allocated),
+        median(threadCpu), mad(threadCpu),
+        median(processCpu), mad(processCpu),
+        median(wall), mad(wall));
     }
   }
 
@@ -194,9 +202,15 @@ public final class DecompilerBench {
     return -1;
   }
 
-  private static long cpuNanos() {
+  private static long threadCpuNanos() {
     java.lang.management.ThreadMXBean thread = ManagementFactory.getThreadMXBean();
     return thread.isCurrentThreadCpuTimeSupported() ? thread.getCurrentThreadCpuTime() : -1;
+  }
+
+  private static long processCpuNanos() {
+    return ProcessHandle.current().info().totalCpuDuration()
+      .map(java.time.Duration::toNanos)
+      .orElse(-1L);
   }
 
   private static Map<String, String> parse(String[] args) {
