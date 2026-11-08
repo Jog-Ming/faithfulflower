@@ -2880,7 +2880,7 @@ public class ClassWriter implements StatementWriter {
     }
     StructLocalVariableTableAttribute table = mt.getLocalVariableAttr();
     if (table != null) {
-      for (StructLocalVariableTableAttribute.LocalVariable var : table.getVariables().toList()) {
+      for (StructLocalVariableTableAttribute.LocalVariable var : table.getVariableList()) {
         used = Math.max(used, var.getIndex() + var.getVarType().stackSize);
       }
     }

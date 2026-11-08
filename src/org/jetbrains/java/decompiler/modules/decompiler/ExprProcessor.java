@@ -1607,7 +1607,7 @@ public class ExprProcessor implements CodeConstants {
     }
     if (lvt.getSignature() != null) {
       try {
-        return GenericType.parse(lvt.getSignature());
+        return lvt.getSignatureType();
       } catch (RuntimeException ignored) {
         return lvt.getVarType();
       }

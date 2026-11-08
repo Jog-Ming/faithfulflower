@@ -583,7 +583,7 @@ public final class NestedLoopMerge {
     }
     int slot = var.getIndex();
     Integer original = varproc == null ? null : varproc.getVarOriginalIndex(slot);
-    for (LocalVariable local : table.getVariables().toList()) {
+    for (LocalVariable local : table.getVariableList()) {
       if (local.getIndex() == slot || (original != null && local.getIndex() == original)) {
         return true;
       }

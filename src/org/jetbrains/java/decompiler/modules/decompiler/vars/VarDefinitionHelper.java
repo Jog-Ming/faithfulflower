@@ -1431,7 +1431,7 @@ public class VarDefinitionHelper {
 
     private VarInfo(LocalVariable lvt, VarType type) {
       if (lvt != null && lvt.getSignature() != null)
-        this.cast = ExprProcessor.getCastTypeName(GenericType.parse(lvt.getSignature()), false);
+        this.cast = ExprProcessor.getCastTypeName(lvt.getSignatureType(), false);
       else if (lvt != null)
         this.cast = ExprProcessor.getCastTypeName(lvt.getVarType(), false);
       else if (type != null)

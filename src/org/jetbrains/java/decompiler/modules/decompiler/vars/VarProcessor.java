@@ -17,7 +17,6 @@ import org.jetbrains.java.decompiler.util.TextUtil;
 
 import java.util.*;
 import java.util.Map.Entry;
-import java.util.stream.Collectors;
 
 public class VarProcessor {
   private final VarNamesCollector varNamesCollector = new VarNamesCollector();
@@ -213,15 +212,14 @@ public class VarProcessor {
   public List<LocalVariable> getCandidates(int origindex) {
     if (!hasLVT())
         return null;
-    return method.getLocalVariableAttr().matchingVars(origindex).collect(Collectors.toList());
+    return method.getLocalVariableAttr().variablesAt(origindex);
   }
 
   public void findLVT(VarExprent exprent, int start) {
     if (!hasLVT())
       return;
 
-    LocalVariable lvt = method.getLocalVariableAttr().getVariables()
-      .filter(v -> v.getVersion().var == exprent.getIndex() && v.getStart() == start).findFirst().orElse(null);
+    LocalVariable lvt = method.getLocalVariableAttr().findAtStart(exprent.getIndex(), start);
 
     if (lvt != null) {
       exprent.setLVT(lvt);

@@ -150,7 +150,7 @@ public final class ReturnedVariable {
     if (table == null) {
       return null;
     }
-    for (LocalVariable var : table.getVariables().toList()) {
+    for (LocalVariable var : table.getVariableList()) {
       if (var.getIndex() == slot && var.getStart() <= offset && var.getEnd() > offset) {
         return var;
       }

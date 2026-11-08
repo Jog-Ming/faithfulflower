@@ -117,7 +117,7 @@ public final class NamedDeadStore {
     }
     LocalVariable found = null;
     int entries = 0;
-    for (LocalVariable var : table.getVariables().toList()) {
+    for (LocalVariable var : table.getVariableList()) {
       if (var.getIndex() != slot) {
         continue;
       }

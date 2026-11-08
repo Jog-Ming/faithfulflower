@@ -85,7 +85,7 @@ public final class RowMerge {
     if (table == null || seq == null) {
       return;
     }
-    List<LocalVariable> rows = table.getVariables().toList();
+    List<LocalVariable> rows = table.getVariableList();
     if (rows.size() < 2) {
       return;
     }

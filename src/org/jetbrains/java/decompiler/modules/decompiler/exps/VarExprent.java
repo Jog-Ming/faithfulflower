@@ -97,7 +97,7 @@ public class VarExprent extends Exprent implements Pattern {
     if (lvt != null && lvt.getSignature() != null) {
       // TODO; figure out why it's crashing, ugly fix for now
       try {
-        return GenericType.parse(lvt.getSignature());
+        return lvt.getSignatureType();
       } catch (StringIndexOutOfBoundsException ex) {
         ex.printStackTrace();
       }

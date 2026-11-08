@@ -392,7 +392,7 @@ public final class RoundTrip {
              offset = entry.getValue().nextSetBit(offset + 1)) {
           boolean named = false;
           for (org.jetbrains.java.decompiler.struct.attr.StructLocalVariableTableAttribute.LocalVariable row
-              : storeRows.getVariables().toList()) {
+              : storeRows.getVariableList()) {
             if (row.getIndex() == entry.getKey() && row.getStart() <= offset && row.getEnd() > offset) {
               named = true;
               break;
@@ -565,7 +565,7 @@ public final class RoundTrip {
         int retEnd = ret.startOffset + ret.length;
         org.jetbrains.java.decompiler.struct.attr.StructLocalVariableTableAttribute.LocalVariable first = null;
         int matches = 0;
-        for (org.jetbrains.java.decompiler.struct.attr.StructLocalVariableTableAttribute.LocalVariable var : lvt.getVariables().toList()) {
+        for (org.jetbrains.java.decompiler.struct.attr.StructLocalVariableTableAttribute.LocalVariable var : lvt.getVariableList()) {
           if (var.getIndex() != slot) {
             continue;
           }
@@ -664,7 +664,7 @@ public final class RoundTrip {
     if (table == null) {
       return starts;
     }
-    List<LocalVariable> rows = table.getVariables().toList();
+    List<LocalVariable> rows = table.getVariableList();
     for (LocalVariable first : rows) {
       if (first.getEnd() <= first.getStart()) {
         continue;
@@ -750,7 +750,7 @@ public final class RoundTrip {
     if (table == null) {
       return false;
     }
-    for (LocalVariable row : table.getVariables().toList()) {
+    for (LocalVariable row : table.getVariableList()) {
       if (row.getIndex() == slot && row.getStart() <= offset && row.getEnd() > offset) {
         return true;
       }
@@ -790,7 +790,7 @@ public final class RoundTrip {
       return null;
     }
     Statement firstStat = children.get(i);
-    LocalVariable first = closingRange(table.getVariables().toList(), firstPrefixLocal(firstStat));
+    LocalVariable first = closingRange(table.getVariableList(), firstPrefixLocal(firstStat));
     int childStart = firstOffset(firstStat);
     int close = lastEnd(owner);
     if (first == null || first.getStart() <= 0 || childStart < 0 || close < 0
@@ -806,7 +806,7 @@ public final class RoundTrip {
       ImplicitVars implicit = enclosingImplicitVars(firstStat);
       int flat = 0;
       int nested = 0;
-      for (LocalVariable row : table.getVariables().toList()) {
+      for (LocalVariable row : table.getVariableList()) {
         if (row.getOrder() < 0 || row.getStart() >= childStart || row.getEnd() != close
             || implicit != null && implicit.matches(row)) {
           continue;
@@ -849,7 +849,7 @@ public final class RoundTrip {
       return null;
     }
     ImplicitVars implicit = enclosingImplicitVars(firstStat);
-    for (LocalVariable row : table.getVariables().toList()) {
+    for (LocalVariable row : table.getVariableList()) {
       if (row.getOrder() < 0 || row.getStart() >= childStart
           || implicit != null && implicit.matches(row)) {
         continue;
@@ -897,7 +897,7 @@ public final class RoundTrip {
     if (close < 0) {
       return -1;
     }
-    java.util.List<LocalVariable> rows = table.getVariables().toList();
+    java.util.List<LocalVariable> rows = table.getVariableList();
     ImplicitVars implicit = enclosingImplicitVars(st);
     for (int a = 0; a < exprents.size(); a++) {
       int s1 = lastEndOf(exprents.get(a));
@@ -935,7 +935,7 @@ public final class RoundTrip {
     if (lvt == null) {
       return false;
     }
-    List<LocalVariable> vars = lvt.getVariables().toList();
+    List<LocalVariable> vars = lvt.getVariableList();
     int paramsStart = Integer.MAX_VALUE;
     int maxEnd = 0;
     for (LocalVariable v : vars) {
@@ -981,7 +981,7 @@ public final class RoundTrip {
     if (lvt == null) {
       return false;
     }
-    List<LocalVariable> vars = lvt.getVariables().toList();
+    List<LocalVariable> vars = lvt.getVariableList();
     int paramsEnd = -1;
     for (LocalVariable v : vars) {
       if (v.getStart() == 0) {
@@ -1055,7 +1055,7 @@ public final class RoundTrip {
     // precedes the parameters in the table.
     if (table != null) {
       int paramsEnd = -1;
-      for (LocalVariable var : table.getVariables().toList()) {
+      for (LocalVariable var : table.getVariableList()) {
         if (var.getStart() == 0) {
           paramsEnd = Math.max(paramsEnd, var.getOrder());
         }
@@ -1071,7 +1071,7 @@ public final class RoundTrip {
     int thenStart = firstOffset(ifstat.getIfstat());
     int thenEnd = lastEnd(ifstat.getIfstat());
     if (table != null && thenStart >= 0 && thenEnd > thenStart) {
-      for (LocalVariable var : table.getVariables().toList()) {
+      for (LocalVariable var : table.getVariableList()) {
         if (var.getStart() > 0 && var.getStart() >= thenStart && var.getStart() < thenEnd) {
           thenSlots.add(var.getIndex());
         }
@@ -1082,7 +1082,7 @@ public final class RoundTrip {
     }
     int elseStart = firstOffset(lead);
     if (table != null && elseStart >= 0) {
-      for (LocalVariable var : table.getVariables().toList()) {
+      for (LocalVariable var : table.getVariableList()) {
         if (var.getStart() < elseStart && var.getEnd() > elseStart
             && thenSlots.contains(var.getIndex())) {
           return false;
@@ -1097,7 +1097,7 @@ public final class RoundTrip {
       // slot. A row there with the same slot is the binding's own scope closing with the then
       // arm, and the rest of the arm declares in the freed slot.
       if (table != null) {
-        for (LocalVariable var : table.getVariables().toList()) {
+        for (LocalVariable var : table.getVariableList()) {
           if (var.getStart() > 0 && var.getStart() >= elseStart && var.getStart() < elseEnd
               && var.getIndex() == elseLocal.getIndex() && !sameLocal(var, elseLocal)) {
             return false;
@@ -1189,7 +1189,7 @@ public final class RoundTrip {
       return null;
     }
     LocalVariable best = null;
-    for (LocalVariable var : table.getVariables().toList()) {
+    for (LocalVariable var : table.getVariableList()) {
       if (var.getStart() > 0 && var.getStart() >= start && var.getStart() < end
           && !sameLocal(var, skip)
           && (best == null || var.getStart() < best.getStart())) {
@@ -1398,7 +1398,7 @@ public final class RoundTrip {
     // Only a local of the block our own declaration lives in closes with it; parameters and
     // method-scope locals are written after both and say nothing about the nesting.
     boolean anyEnclosing = false;
-    for (LocalVariable var : table.getVariables().toList()) {
+    for (LocalVariable var : table.getVariableList()) {
       if (var.getEnd() == local.getEnd() && var.getOrder() != local.getOrder()
           && var.getStart() <= enclosingStart) {
         if (var.getOrder() > local.getOrder()) {
@@ -2871,7 +2871,7 @@ public final class RoundTrip {
     if (at < 0) {
       return -1;
     }
-    for (LocalVariable row : table.matchingVars(slot).toList()) {
+    for (LocalVariable row : table.variablesAt(slot)) {
       if (row.getStart() <= at && at < row.getEnd()) {
         return row.getEnd();
       }
@@ -2919,7 +2919,7 @@ public final class RoundTrip {
     if (bodyStart < 0) {
       return false;
     }
-    for (LocalVariable row : table.getVariables().toList()) {
+    for (LocalVariable row : table.getVariableList()) {
       if (row.getStart() > bodyStart && row.getEnd() == offset) {
         return true;
       }
@@ -7649,7 +7649,7 @@ public final class RoundTrip {
     if (table == null || start < 0 || end < 0) {
       return -1;
     }
-    for (LocalVariable row : table.getVariables().toList()) {
+    for (LocalVariable row : table.getVariableList()) {
       int close = row.getEnd();
       if (row.getStart() < start || row.getStart() > end || close <= row.getStart()) {
         continue;
@@ -8882,7 +8882,7 @@ public final class RoundTrip {
     if (gotos == null || !gotos.containsKey(end) || jumpEnd == null) {
       return false;
     }
-    for (LocalVariable row : table.getRange(start, Integer.MAX_VALUE).toList()) {
+    for (LocalVariable row : table.getRangeList(start, Integer.MAX_VALUE)) {
       if (row.getStart() > end || row.getEnd() < end) {
         continue;
       }
@@ -9214,7 +9214,7 @@ public final class RoundTrip {
       }
     }
     Integer jumpEnd = jump >= 0 && ends != null ? ends.get(jump) : null;
-    for (LocalVariable row : table.getRange(start, Integer.MAX_VALUE).toList()) {
+    for (LocalVariable row : table.getRangeList(start, Integer.MAX_VALUE)) {
       if (row.getStart() > end || row.getEnd() < end) {
         continue;
       }
@@ -9547,7 +9547,7 @@ public final class RoundTrip {
     if (table == null) {
       return false;
     }
-    for (LocalVariable row : table.getVariables().toList()) {
+    for (LocalVariable row : table.getVariableList()) {
       if (row.getIndex() == slot && row.getStart() == join && row.getEnd() > row.getStart()) {
         return true;
       }
@@ -10265,7 +10265,7 @@ public final class RoundTrip {
       if (armRow.getOrder() < 0) {
         continue;
       }
-      for (LocalVariable row : table.getVariables().toList()) {
+      for (LocalVariable row : table.getVariableList()) {
         // Rows opened inside the arm (its own locals and nested blocks' locals) end with the
         // arm's scope and say nothing about the enclosing block; a row opened before it does.
         if (row.getOrder() < 0 || row.getStart() >= armStart || row.getEnd() != armRow.getEnd()) {
@@ -10960,7 +10960,7 @@ public final class RoundTrip {
     if (table == null) {
       return out;
     }
-    java.util.List<StructLocalVariableTableAttribute.LocalVariable> rows = table.getVariables().toList();
+    java.util.List<StructLocalVariableTableAttribute.LocalVariable> rows = table.getVariableList();
     StructLocalVariableTableAttribute.LocalVariable selector = null;
     for (StructLocalVariableTableAttribute.LocalVariable row : rows) {
       if (!stringSwitchTemp(row) || row.getName().charAt(0) != 's'
@@ -11098,7 +11098,7 @@ public final class RoundTrip {
     }
     int ownLast = -1;
     int patternFirst = Integer.MAX_VALUE;
-    for (StructLocalVariableTableAttribute.LocalVariable row : table.getVariables().toList()) {
+    for (StructLocalVariableTableAttribute.LocalVariable row : table.getVariableList()) {
       if (row.getEnd() != end || row.getOrder() < 0) {
         continue;
       }
@@ -11210,7 +11210,7 @@ public final class RoundTrip {
     if (leading == null) {
       return null;
     }
-    List<LocalVariable> rows = table.getVariables().toList();
+    List<LocalVariable> rows = table.getVariableList();
     for (int a = 0; a < leading.size(); a++) {
       int s1 = lastEndOf(leading.get(a));
       if (s1 < 0) {
@@ -11406,7 +11406,7 @@ public final class RoundTrip {
     if (table == null) {
       return null;
     }
-    List<LocalVariable> rows = table.getVariables().toList();
+    List<LocalVariable> rows = table.getVariableList();
     // The block around this list closes at its own last instruction. A run that ends earlier
     // closed a block of its own; the enclosing block's rows (including the method's parameters)
     // close later and were written after it, which is the proof. The end has to come from the
@@ -11569,7 +11569,7 @@ public final class RoundTrip {
         || enclosingEnd < 0 || first.getEnd() < enclosingEnd || first.getEnd() > enclosingEnd + 8) {
       return false;
     }
-    return rowOrderProvesBlock(table.getVariables().toList(), first, start, first.getEnd(), enclosingEnd,
+    return rowOrderProvesBlock(table.getVariableList(), first, start, first.getEnd(), enclosingEnd,
       enclosingImplicitVars(firstTail));
   }
 
@@ -11744,7 +11744,7 @@ public final class RoundTrip {
     if (table == null) {
       return;
     }
-    List<LocalVariable> rows = table.getVariables().toList();
+    List<LocalVariable> rows = table.getVariableList();
     BitSet armed = SPLIT_DECLARATIONS.get().computeIfAbsent(method, key -> new BitSet());
     for (LocalVariable closed : rows) {
       if (closed.getStart() < start || closed.getStart() >= end || closed.getEnd() != end) {
@@ -11785,7 +11785,7 @@ public final class RoundTrip {
     if (table == null) {
       return false;
     }
-    List<LocalVariable> rows = table.getVariables().toList();
+    List<LocalVariable> rows = table.getVariableList();
     BitSet handovers = HANDOVER_STARTS.get(method);
     if (handovers == null) {
       handovers = new BitSet();
@@ -11889,7 +11889,7 @@ public final class RoundTrip {
 
   private static LocalVariable slotHandover(StructMethod method, StructLocalVariableTableAttribute table,
                                             int slot, int s1, int e1, boolean acrossPathsRequired) {
-    List<LocalVariable> rows = table.getVariables().toList();
+    List<LocalVariable> rows = table.getVariableList();
     LocalVariable first = null;
     for (LocalVariable row : rows) {
       if (row.getIndex() == slot && row.getStart() == s1 && row.getEnd() == e1) {
@@ -12699,7 +12699,7 @@ public final class RoundTrip {
     if (limit < 0) {
       limit = Integer.MAX_VALUE;
     }
-    for (StructLocalVariableTableAttribute.LocalVariable row : table.getVariables().toList()) {
+    for (StructLocalVariableTableAttribute.LocalVariable row : table.getVariableList()) {
       if (row.getStart() > limit) {
         continue;
       }
@@ -13000,7 +13000,7 @@ public final class RoundTrip {
     }
     int bestStart = -1;
     int bestEnd = -1;
-    for (StructLocalVariableTableAttribute.LocalVariable var : table.getVariables().toList()) {
+    for (StructLocalVariableTableAttribute.LocalVariable var : table.getVariableList()) {
       if (var.getStart() <= offset && offset < var.getEnd() && var.getStart() > bestStart) {
         bestStart = var.getStart();
         bestEnd = var.getEnd();
@@ -13137,7 +13137,7 @@ public final class RoundTrip {
     }
     java.util.List<int[]> out = new java.util.ArrayList<>();
     for (org.jetbrains.java.decompiler.struct.attr.StructLocalVariableTableAttribute.LocalVariable var
-        : table.matchingVars(index).toList()) {
+        : table.variablesAt(index)) {
       if (name == null || !name.equals(var.getName())) {
         continue;
       }

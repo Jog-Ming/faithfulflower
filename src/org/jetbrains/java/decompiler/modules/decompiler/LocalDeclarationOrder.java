@@ -63,6 +63,7 @@ public final class LocalDeclarationOrder {
    */
   public static void clear() {
     HIDDEN_LOCALS.clear();
+    ROW_TABLES.clear();
   }
 
   public static void reorder(Statement root) {
@@ -748,6 +749,9 @@ public final class LocalDeclarationOrder {
 
   /** Per method: true when the code uses a slot outside every table row that names it. */
   private static final java.util.Map<StructMethod, Boolean> HIDDEN_LOCALS = new java.util.concurrent.ConcurrentHashMap<>();
+  /** Per method: the local-table rows grouped by slot, for the reserved-slot witness walk. */
+  private static final java.util.Map<StructMethod, java.util.Map<Integer, List<LocalVariable>>> ROW_TABLES =
+    new java.util.concurrent.ConcurrentHashMap<>();
 
   /**
    * javac hands a local the next slot of the block it is declared in. A declaration inside a
@@ -873,11 +877,15 @@ public final class LocalDeclarationOrder {
 
   /** The method's local-table rows grouped by slot. */
   private static java.util.Map<Integer, List<LocalVariable>> rowTable(StructMethod method) {
+    return ROW_TABLES.computeIfAbsent(method, LocalDeclarationOrder::buildRowTable);
+  }
+
+  private static java.util.Map<Integer, List<LocalVariable>> buildRowTable(StructMethod method) {
     java.util.Map<Integer, List<LocalVariable>> slots = new java.util.HashMap<>();
     StructLocalVariableTableAttribute table =
       method.getAttribute(StructGeneralAttribute.ATTRIBUTE_LOCAL_VARIABLE_TABLE);
     if (table != null) {
-      for (LocalVariable local : table.getVariables().toList()) {
+      for (LocalVariable local : table.getVariableList()) {
         if (local.getIndex() >= 0) {
           slots.computeIfAbsent(local.getIndex(), key -> new ArrayList<>()).add(local);
         }
@@ -2619,7 +2627,7 @@ public final class LocalDeclarationOrder {
       return -1;
     }
     int end = -1;
-    for (LocalVariable other : table.getVariables().toList()) {
+    for (LocalVariable other : table.getVariableList()) {
       if (other.getIndex() == lvt.getIndex()
         && !java.util.Objects.equals(other.getName(), lvt.getName())
         && other.getEnd() <= lvt.getStart()) {

@@ -344,7 +344,7 @@ public class NestedClassProcessor {
       return true;
     }
     boolean named = false;
-    for (LocalVariable v : attr.getVariables().toList()) {
+    for (LocalVariable v : attr.getVariableList()) {
       if (!name.equals(v.getName())) {
         continue;
       }

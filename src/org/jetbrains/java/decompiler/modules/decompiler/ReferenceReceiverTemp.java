@@ -303,7 +303,7 @@ public final class ReferenceReceiverTemp {
     if (table == null) {
       return null;
     }
-    for (LocalVariable row : table.getVariables().toList()) {
+    for (LocalVariable row : table.getVariableList()) {
       if (row.getIndex() == 0 && row.getStart() == 0 && "rec$".equals(row.getName())) {
         return new Bridge(content, bridge, node.lambdaInformation.content_method_descriptor,
           node.lambdaInformation.method_descriptor);
@@ -494,7 +494,7 @@ public final class ReferenceReceiverTemp {
       int offset = var.bytecode.nextSetBit(0);
       StructLocalVariableTableAttribute table = method.getLocalVariableAttr();
       if (table != null) {
-        for (LocalVariable candidate : table.getVariables().toList()) {
+        for (LocalVariable candidate : table.getVariableList()) {
           if (candidate.getIndex() == slot && candidate.getStart() <= offset && candidate.getEnd() > offset) {
             row = candidate;
             break;

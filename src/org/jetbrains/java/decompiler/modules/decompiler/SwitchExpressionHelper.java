@@ -498,7 +498,7 @@ public final class SwitchExpressionHelper {
       return null;
     }
     int rowStart = -1;
-    for (StructLocalVariableTableAttribute.LocalVariable row : table.getVariables().toList()) {
+    for (StructLocalVariableTableAttribute.LocalVariable row : table.getVariableList()) {
       if (row.getIndex() == joinSlot) {
         rowStart = row.getStart();
         break;
@@ -551,7 +551,7 @@ public final class SwitchExpressionHelper {
     if (table == null) {
       return null;
     }
-    for (StructLocalVariableTableAttribute.LocalVariable row : table.getVariables().toList()) {
+    for (StructLocalVariableTableAttribute.LocalVariable row : table.getVariableList()) {
       if (row.getIndex() == slot && row.getStart() <= offset && row.getEnd() > offset) {
         return row.getVarType();
       }

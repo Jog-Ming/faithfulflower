@@ -467,7 +467,7 @@ public class InvocationExprent extends Exprent {
       }
       if (row != null && row.getSignature() != null) {
         try {
-          return GenericType.parse(row.getSignature());
+          return row.getSignatureType();
         } catch (RuntimeException ignored) {
           // A malformed row falls back to the table's own type.
         }
