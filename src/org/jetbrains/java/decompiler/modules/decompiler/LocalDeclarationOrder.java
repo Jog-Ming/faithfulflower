@@ -1841,24 +1841,58 @@ public final class LocalDeclarationOrder {
 
     // The source declared each variable just above the first declaration whose slot is higher:
     // the table's slot order is the source order. Placing a declaration at the sequence's top
-    // would print it above every earlier declaration and diverge from the target.
+    // would print it above every earlier declaration and diverge from the target. One rebuild
+    // reflects every removal above; each insertion is then reflected in this same order, at the
+    // landing exprent's own place, instead of rebuilding the sequence for every hoist.
+    List<Position> live = declarationOrder(seq, varproc);
     for (Position position : hoisted) {
-      Position anchor = null;
-      for (Position candidate : declarationOrder(seq, varproc)) {
+      int anchorIndex = -1;
+      for (int i = 0; i < live.size(); i++) {
+        Position candidate = live.get(i);
         if (candidate.slot > position.slot && afterDeadScope(candidate, position.deadEnd)) {
-          anchor = candidate;
+          anchorIndex = i;
           break;
         }
       }
-      if (anchor == null) {
+      if (anchorIndex < 0) {
         // Nothing higher prints after the dead scope any more; the declaration is put back
         // where it printed before. The slot table offers no landing point that keeps its slot.
         position.list.add(position.exprent);
+        int last = lastPositionOf(live, position.list);
+        if (last < 0) {
+          // The list printed no surviving declaration, so its place in the printed order is not
+          // in the order any more; rebuild to find the place the printer enumerates it at.
+          live = declarationOrder(seq, varproc);
+        } else {
+          live.add(last + 1, new Position(position.exprent, position.list, position.slot,
+            position.owner, -1));
+        }
         continue;
       }
+      Position anchor = live.get(anchorIndex);
       int at = indexOfIdentity(anchor.list, anchor.exprent);
-      anchor.list.add(at < 0 ? anchor.list.size() : at, position.exprent);
+      if (at < 0) {
+        at = anchor.list.size();
+        anchor.list.add(at, position.exprent);
+        int last = lastPositionOf(live, anchor.list);
+        live.add(last + 1, new Position(position.exprent, anchor.list, position.slot,
+          anchor.owner, -1));
+      } else {
+        anchor.list.add(at, position.exprent);
+        live.add(anchorIndex, new Position(position.exprent, anchor.list, position.slot,
+          anchor.owner, -1));
+      }
     }
+  }
+
+  /** The last position printed from this exprent list, or -1 when the list prints none. */
+  private static int lastPositionOf(List<Position> order, List<Exprent> list) {
+    for (int i = order.size() - 1; i >= 0; i--) {
+      if (order.get(i).list == list) {
+        return i;
+      }
+    }
+    return -1;
   }
 
   private static int indexOfIdentity(List<Exprent> list, Exprent exprent) {
