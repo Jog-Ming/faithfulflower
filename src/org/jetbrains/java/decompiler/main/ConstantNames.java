@@ -8116,6 +8116,58 @@ public final class ConstantNames {
    */
   private static List<int[]> initializerRanges(String text, List<int[]> spans, String name) {
     List<int[]> ranges = new ArrayList<>();
+    // A literal scan of the same language the pattern described: the word boundary in front of
+    // the name, optional whitespace, then '='. Reading the characters directly avoids compiling a
+    // pattern per field and matching every span with it; the forms are otherwise identical,
+    // including the resumed search after each match. The two inputs the literal scan cannot
+    // express (an empty name, whose \b has no word character to stand before, and malformed
+    // spans, which region() rejects) keep the pattern path unchanged.
+    if (name.isEmpty() || !spansValid(text, spans)) {
+      return initializerRangesPattern(text, spans, name);
+    }
+    boolean firstWord = isRegexWord(name.charAt(0));
+    int length = name.length();
+    for (int[] span : spans) {
+      int from = span[0];
+      int to = span[1];
+      int i = from;
+      while (i < to) {
+        int found = text.indexOf(name, i);
+        if (found < 0 || found + length > to) {
+          break;
+        }
+        // The region's opaque start has no preceding character, which \b reads as a non-word
+        // one; elsewhere the boundary needs exactly one of the two characters to be a word one.
+        boolean boundary = found == from
+          ? firstWord : firstWord != isRegexWord(text.charAt(found - 1));
+        int after = found + length;
+        while (after < to && isRegexSpace(text.charAt(after))) {
+          after++;
+        }
+        if (boundary && after < to && text.charAt(after) == '=') {
+          int depth = 0;
+          int end = after + 1;
+          while (end < to) {
+            char c = text.charAt(end);
+            if (c == '(' || c == '[' || c == '{') depth++;
+            else if (c == ')' || c == ']' || c == '}') { if (depth == 0) break; depth--; }
+            else if (c == ';' && depth == 0) break;
+            end++;
+          }
+          ranges.add(new int[]{found, end});
+          i = after + 1; // find() resumes after the consumed '='
+        }
+        else {
+          i = found + 1;
+        }
+      }
+    }
+    return ranges;
+  }
+
+  /** The pattern form of {@link #initializerRanges}, kept for inputs no literal scan describes. */
+  private static List<int[]> initializerRangesPattern(String text, List<int[]> spans, String name) {
+    List<int[]> ranges = new ArrayList<>();
     java.util.regex.Matcher matcher = java.util.regex.Pattern
       .compile("\\b" + java.util.regex.Pattern.quote(name) + "\\s*=")
       .matcher(text);
@@ -8135,6 +8187,25 @@ public final class ConstantNames {
       }
     }
     return ranges;
+  }
+
+  private static boolean spansValid(String text, List<int[]> spans) {
+    for (int[] span : spans) {
+      if (span[0] < 0 || span[0] > span[1] || span[1] > text.length()) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /** The character class of the pattern's {@code \b}, which is ASCII word characters. */
+  private static boolean isRegexWord(char c) {
+    return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_';
+  }
+
+  /** The character class of the pattern's {@code \s} without Unicode character classes. */
+  private static boolean isRegexSpace(char c) {
+    return c == ' ' || c == '\t' || c == '\n' || c == 0x0b || c == '\f' || c == '\r';
   }
 
   /**
