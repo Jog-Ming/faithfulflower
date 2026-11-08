@@ -232,7 +232,7 @@ public final class ConstantNames {
    * approximates it when an instruction has no printed position.
    */
   private record Placement(Map<String, int[]> windows, Map<String, long[]> coordinates,
-                           List<SiteSpace> spaces, Set<String> strict,
+                           SpaceIndex spaces, Set<String> strict,
                            Set<String> anchored, Set<String> direct,
                            Map<String, Double> folded, Map<String, Long> internedAt,
                            Map<String, Long> namingAt, Set<String> lexical,
@@ -241,7 +241,7 @@ public final class ConstantNames {
                            Set<String> valueRecords, Set<String> bares, Set<String> earlyOwners,
                            boolean ownEarly, boolean ownProven, StructClass cls, String text,
                            Set<String> bare, boolean codeEntry,
-                           Map<String, List<int[]>> declarations) {
+                           DeclarationIndex declarations) {
     /**
      * Whether this text position lies where the pool order proves the owner was named.
      *
@@ -275,7 +275,7 @@ public final class ConstantNames {
       // generation point and is left to the window).
       PairSite pair = pairs == null ? null : pairs.get(owner);
       if (pair != null) {
-        long coordinate = siteCoordinate(spaces, start);
+        long coordinate = coordinateAt(spaces, start);
         if (coordinate != NO_COORDINATE) {
           if (pair.successorKey() != null && !pairProvesBounds(pair, owner, start, this)) {
             return false; // a folded value's own instruction is the only place its naming stood
@@ -297,7 +297,7 @@ public final class ConstantNames {
       // the window.
       int[] window = windows == null ? null : windows.get(owner);
       if (window != null && start >= window[0] && start < window[1]) {
-        long coordinate = siteCoordinate(spaces, start);
+        long coordinate = coordinateAt(spaces, start);
         if (coordinate != NO_COORDINATE && coordinates != null) {
           long[] bounds = coordinates.get(owner);
           if (bounds != null && coordinate <= bounds[0]
@@ -339,7 +339,7 @@ public final class ConstantNames {
       if (naming == null) {
         return true;
       }
-      long nearest = printedCoordinate(spaces, start);
+      long nearest = coordinateAt(spaces, start);
       if (nearest == NO_COORDINATE || nearest >= naming) {
         return true;
       }
@@ -373,7 +373,7 @@ public final class ConstantNames {
       if (bounds == null) {
         return false;
       }
-      long coordinate = siteCoordinate(spaces, start);
+      long coordinate = coordinateAt(spaces, start);
       if (coordinate == NO_COORDINATE) {
         return false;
       }
@@ -395,7 +395,7 @@ public final class ConstantNames {
       if (bounds == null) {
         return false;
       }
-      long coordinate = siteCoordinate(spaces, start);
+      long coordinate = coordinateAt(spaces, start);
       return coordinate != NO_COORDINATE && coordinate > bounds[0] && coordinate < bounds[1];
     }
 
@@ -405,18 +405,202 @@ public final class ConstantNames {
       if (interned == null) {
         return true;
       }
-      long nearest = printedCoordinate(spaces, start);
+      long nearest = coordinateAt(spaces, start);
       return nearest == NO_COORDINATE || nearest >= interned;
     }
   }
 
   private static final Placement NO_PLACEMENT =
-    new Placement(null, null, List.of(), Set.of(), Set.of(), Set.of(), Map.of(), Map.of(), Map.of(),
+    new Placement(null, null, SpaceIndex.EMPTY, Set.of(), Set.of(), Set.of(), Map.of(), Map.of(), Map.of(),
       Set.of(), List.of(), null, Set.of(), Map.of(), Map.of(), Set.of(), Set.of(), Set.of(), false,
-      false, null, "", Set.of(), false, Map.of());
+      false, null, "", Set.of(), false, DeclarationIndex.EMPTY);
 
-  /** One method's printed positions: bytecode offset to character offset, and the method's rank. */
-  private record SiteSpace(int rank, Map<Integer, Integer> positions, int min, int max, String key) {
+  /**
+   * One method's printed positions: bytecode offset to character offset, and the method's rank.
+   *
+   * <p>The distinct printed positions are kept sorted with the lowest offset printed at each, so
+   * the item printed nearest before a text position is one binary search instead of a walk over
+   * every instruction the method printed.
+   */
+  private static final class SiteSpace {
+    final int rank;
+    final Map<Integer, Integer> positions;
+    final int min;
+    final int max;
+    final String key;
+    private final int[] printed;
+    private final int[] lowestOffset;
+
+    SiteSpace(int rank, Map<Integer, Integer> positions, int min, int max, String key) {
+      this.rank = rank;
+      this.positions = positions;
+      this.min = min;
+      this.max = max;
+      this.key = key;
+      int count = positions.size();
+      // A printed position and its offset each fit 31 bits; packing puts them in sort order at
+      // once, and at one printed position the lowest offset (the instruction starting there)
+      // sorts first.
+      long[] ordered = new long[count];
+      int at = 0;
+      for (Map.Entry<Integer, Integer> entry : positions.entrySet()) {
+        ordered[at++] = ((long) entry.getValue() << 32) | (entry.getKey() & 0xffffffffL);
+      }
+      java.util.Arrays.sort(ordered);
+      int distinct = 0;
+      for (int i = 0; i < count; i++) {
+        if (i == 0 || (int) (ordered[i] >>> 32) != (int) (ordered[i - 1] >>> 32)) {
+          distinct++;
+        }
+      }
+      this.printed = new int[distinct];
+      this.lowestOffset = new int[distinct];
+      int found = 0;
+      for (int i = 0; i < count; i++) {
+        int printedAt = (int) (ordered[i] >>> 32);
+        if (i == 0 || printedAt != (int) (ordered[i - 1] >>> 32)) {
+          printed[found] = printedAt;
+          lowestOffset[found] = (int) ordered[i];
+          found++;
+        }
+      }
+    }
+
+    int rank() {
+      return rank;
+    }
+
+    Map<Integer, Integer> positions() {
+      return positions;
+    }
+
+    int min() {
+      return min;
+    }
+
+    int max() {
+      return max;
+    }
+
+    String key() {
+      return key;
+    }
+
+    /** The nearest printed point at or before this position, or {@link #NO_COORDINATE}. */
+    long coordinateAt(int position) {
+      int low = 0;
+      int high = printed.length - 1;
+      int found = -1;
+      while (low <= high) {
+        int mid = (low + high) >>> 1;
+        if (printed[mid] <= position) {
+          found = mid;
+          low = mid + 1;
+        }
+        else {
+          high = mid - 1;
+        }
+      }
+      return found < 0 ? NO_COORDINATE : coordinate(rank, lowestOffset[found]);
+    }
+  }
+
+  /**
+   * The printed method blocks of one class, indexed for the innermost-block query.
+   *
+   * <p>Ranges nest (a lambda body is printed inside the expression that creates it), so the blocks
+   * are held as an interval tree over their starts: a query visits only the subtrees whose smallest
+   * start is at or before the position and whose greatest end reaches it. Among the blocks that
+   * contain the position the narrowest wins, and at one width the block earlier in the original
+   * list, exactly as the linear scan chose.
+   */
+  private static final class SpaceIndex implements Iterable<SiteSpace> {
+    static final SpaceIndex EMPTY = new SpaceIndex(List.of());
+    private final List<SiteSpace> spaces;
+    private final int[] order;
+    private final int[] maxEnd;
+
+    SpaceIndex(List<SiteSpace> spaces) {
+      this.spaces = spaces;
+      int count = spaces.size();
+      Integer[] sorted = new Integer[count];
+      for (int i = 0; i < count; i++) {
+        sorted[i] = i;
+      }
+      java.util.Arrays.sort(sorted, (a, b) -> {
+        int byStart = Integer.compare(spaces.get(a).min, spaces.get(b).min);
+        return byStart != 0 ? byStart : Integer.compare(a, b);
+      });
+      this.order = new int[count];
+      for (int i = 0; i < count; i++) {
+        order[i] = sorted[i];
+      }
+      this.maxEnd = new int[count];
+      build(0, count - 1);
+    }
+
+    private int build(int lo, int hi) {
+      if (lo > hi) {
+        return Integer.MIN_VALUE;
+      }
+      int mid = (lo + hi) >>> 1;
+      int left = build(lo, mid - 1);
+      int right = build(mid + 1, hi);
+      int greatest = Math.max(spaces.get(order[mid]).max, Math.max(left, right));
+      maxEnd[mid] = greatest;
+      return greatest;
+    }
+
+    SiteSpace innermost(int position) {
+      int found = innermostIndex(0, order.length - 1, position);
+      return found < 0 ? null : spaces.get(found);
+    }
+
+    private int innermostIndex(int lo, int hi, int position) {
+      if (lo > hi) {
+        return -1;
+      }
+      int mid = (lo + hi) >>> 1;
+      int best = -1;
+      SiteSpace space = spaces.get(order[mid]);
+      if (space.min <= position && position <= space.max) {
+        best = order[mid];
+      }
+      // Sorted by start, every interval of a subtree starts at or after its leftmost start: a
+      // subtree whose leftmost start is past the position holds no candidate, and one whose
+      // greatest end is before it holds none either.
+      if (lo < mid && spaces.get(order[lo]).min <= position
+          && maxEnd[(lo + mid - 1) >>> 1] >= position) {
+        best = better(best, innermostIndex(lo, mid - 1, position));
+      }
+      if (mid < hi && spaces.get(order[mid + 1]).min <= position
+          && maxEnd[((mid + 1) + hi) >>> 1] >= position) {
+        best = better(best, innermostIndex(mid + 1, hi, position));
+      }
+      return best;
+    }
+
+    private int better(int first, int second) {
+      if (first < 0) {
+        return second;
+      }
+      if (second < 0) {
+        return first;
+      }
+      SiteSpace a = spaces.get(first);
+      SiteSpace b = spaces.get(second);
+      int widthA = a.max - a.min;
+      int widthB = b.max - b.min;
+      if (widthB < widthA || (widthB == widthA && second < first)) {
+        return second;
+      }
+      return first;
+    }
+
+    @Override
+    public java.util.Iterator<SiteSpace> iterator() {
+      return spaces.iterator();
+    }
   }
 
   /** The first instruction that references a pool entry, in javac's code generation order. */
@@ -462,84 +646,17 @@ public final class ConstantNames {
    * <p>Only positions the printer recorded can place a site. The literal a name replaces usually
    * has no position of its own (it is folded before printing), so the point is the greatest offset
    * printed at or before it, inside the method block whose printed positions bracket the site.
-   */
-  private static long siteCoordinate(List<SiteSpace> spaces, int position) {
-    SiteSpace space = innermost(spaces, position);
-    if (space != null) {
-      int bestPosition = Integer.MIN_VALUE;
-      int offset = -1;
-      for (Map.Entry<Integer, Integer> entry : space.positions.entrySet()) {
-        int printed = entry.getValue();
-        if (printed > position) {
-          continue;
-        }
-        // The nearest printed item before the site, and at one position the instruction that
-        // starts there (the lowest offset). A lambda body records its synthetic exit at the body
-        // start with a high offset; taking the highest offset instead would mistake it for the
-        // item nearest the site.
-        if (printed > bestPosition || (printed == bestPosition && (offset < 0 || entry.getKey() < offset))) {
-          bestPosition = printed;
-          offset = entry.getKey();
-        }
-      }
-      if (offset >= 0) {
-        return coordinate(space.rank, offset);
-      }
-    }
-    return NO_COORDINATE;
-  }
-
-  /**
-   * The printed method block a text position belongs to.
+   * A lambda body is printed inside the expression that creates it, so the innermost bracket is the
+   * lambda's own generation order.
    *
-   * <p>A lambda body is printed inside the expression that creates it, so the creating method's
-   * printed range encloses the lambda's. A position inside the lambda belongs to the lambda's own
-   * generation order, not the enclosing method's: the innermost range containing it.
+   * <p>Text order, not bytecode order, picks the printed item: a call's name and invoke are printed
+   * before its arguments although the arguments are generated first, so an argument's offset can
+   * be lower than the offset printed at the call. At one printed position the lowest offset is the
+   * instruction that starts there; higher offsets are bytes inside it.
    */
-  private static SiteSpace innermost(List<SiteSpace> spaces, int position) {
-    SiteSpace best = null;
-    for (SiteSpace space : spaces) {
-      if (position < space.min || position > space.max) {
-        continue;
-      }
-      if (best == null || space.max - space.min < best.max - best.min) {
-        best = space;
-      }
-    }
-    return best;
-  }
-
-  /**
-   * The generation point of the item printed nearest before this text position, or
-   * {@link #NO_COORDINATE}.
-   *
-   * <p>Text order, not bytecode order, picks that item: a call's name and invoke are printed before
-   * its arguments although the arguments are generated first, so an argument's offset can be lower
-   * than the offset printed at the call. At one printed position the lowest offset is the
-   * instruction that starts there; higher offsets are bytes inside it. This is the position the
-   * source occupies at the site, so it can contradict the pool order even where the looser
-   * {@link #siteCoordinate} admits a window.
-   */
-  private static long printedCoordinate(List<SiteSpace> spaces, int position) {
-    SiteSpace space = innermost(spaces, position);
-    if (space != null) {
-      int bestPosition = Integer.MIN_VALUE;
-      int offset = -1;
-      for (Map.Entry<Integer, Integer> entry : space.positions.entrySet()) {
-        int printed = entry.getValue();
-        if (printed > position) {
-          continue;
-        }
-        if (printed > bestPosition || (printed == bestPosition && (offset < 0 || entry.getKey() < offset))) {
-          bestPosition = printed;
-          offset = entry.getKey();
-        }
-      }
-      if (offset >= 0) {
-        return coordinate(space.rank, offset);
-      }
-    }
-    return NO_COORDINATE;
+  private static long coordinateAt(SpaceIndex spaces, int position) {
+    SiteSpace space = spaces == null ? null : spaces.innermost(position);
+    return space == null ? NO_COORDINATE : space.coordinateAt(position);
   }
 
   /**
@@ -1179,7 +1296,7 @@ public final class ConstantNames {
       return null;
     }
     return new Rules(candidates,
-      new Placement(windows, coordinates, spaces(own, positions), strict, anchored, direct,
+      new Placement(windows, coordinates, new SpaceIndex(spaces(own, positions)), strict, anchored, direct,
         folded, internedAt, namingAt, lexical, spans, new HashSet<>(prefixOwners(own)),
         inheritedNames, activePairs, activeValues, valueRecords, bares, earlyOwners, ownEarly,
         ownProven, own, text, bare, !firstUses.isEmpty(), fieldDeclarations(text, spans, own)),
@@ -1618,7 +1735,7 @@ public final class ConstantNames {
     if (cls == null || placement.spaces() == null) {
       return false;
     }
-    long coordinate = siteCoordinate(placement.spaces(), start);
+    long coordinate = coordinateAt(placement.spaces(), start);
     if (coordinate == NO_COORDINATE) {
       return false;
     }
@@ -2780,8 +2897,8 @@ public final class ConstantNames {
    */
   /** Whether a placed site lies earlier in the generation order than another placeable one. */
   private static boolean before(Site site, Site other, Placement placement) {
-    long a = siteCoordinate(placement.spaces(), site.start());
-    long b = siteCoordinate(placement.spaces(), other.start());
+    long a = coordinateAt(placement.spaces(), site.start());
+    long b = coordinateAt(placement.spaces(), other.start());
     return a != NO_COORDINATE && b != NO_COORDINATE && a < b;
   }
 
@@ -2838,7 +2955,7 @@ public final class ConstantNames {
           // leaving the successor's printed point in the same initializer as the only record.
           int anchor = quoted(text, site.start())
             ? site.start() + 1 : site.start();
-          long coordinate = siteCoordinate(rules.placement().spaces(), anchor);
+          long coordinate = coordinateAt(rules.placement().spaces(), anchor);
           boolean atValue = coordinate == valueSite.naming();
           if (!atValue && coordinate == NO_COORDINATE
               && rules.placement().valueRecords().contains(entry.getKey())
@@ -2880,7 +2997,7 @@ public final class ConstantNames {
           // maps the buffer's content, not the quote it adds): the point a string or char naming
           // occupies is that recorded position, exactly as the scan's own anchor rule reads it.
           int anchor = quoted(text, site.start()) ? site.start() + 1 : site.start();
-          long coordinate = siteCoordinate(rules.placement().spaces(), anchor);
+          long coordinate = coordinateAt(rules.placement().spaces(), anchor);
           if (coordinate == NO_COORDINATE) {
             // A field initializer's folded literal is printed in the class body, where the
             // printer maps no instruction point for it. The field reference right after the pair
@@ -3392,7 +3509,7 @@ public final class ConstantNames {
     // The printer maps a quoted literal's content start, one past the opening quote.
     int anchor = key.startsWith(VariableType.STRING.name() + "|")
       || key.startsWith(VariableType.CHAR.name() + "|") ? position + 1 : position;
-    long coordinate = siteCoordinate(placement.spaces(), anchor);
+    long coordinate = coordinateAt(placement.spaces(), anchor);
     if (coordinate == NO_COORDINATE) {
       return false;
     }
@@ -3593,7 +3710,7 @@ public final class ConstantNames {
       Site best = null;
       long bestCoordinate = NO_COORDINATE;
       for (Site site : owned) {
-        long coordinate = siteCoordinate(rules.placement().spaces(), site.start());
+        long coordinate = coordinateAt(rules.placement().spaces(), site.start());
         if (coordinate == NO_COORDINATE || coordinate >= pair.successor()) {
           continue;
         }
@@ -3783,7 +3900,7 @@ public final class ConstantNames {
    */
   private static long pairSiteCoordinate(String text, PairSite pair, Site site, Placement placement) {
     int anchor = quoted(text, site.start()) ? site.start() + 1 : site.start();
-    long coordinate = siteCoordinate(placement.spaces(), anchor);
+    long coordinate = coordinateAt(placement.spaces(), anchor);
     if (coordinate == NO_COORDINATE) {
       return NO_COORDINATE;
     }
@@ -3942,7 +4059,7 @@ public final class ConstantNames {
             // be missing from the recompiled class.
             continue;
           }
-          long coordinate = siteCoordinate(rules.placement().spaces(), start);
+          long coordinate = coordinateAt(rules.placement().spaces(), start);
           if (coordinate == NO_COORDINATE) {
             continue;
           }
@@ -4342,7 +4459,7 @@ public final class ConstantNames {
    * Whether the site is printed on the line of the {@code <field-init>} buffer the successor field
    * reference writes, in the constructor that generated it.
    */
-  private static boolean fieldInitializerSite(String text, List<SiteSpace> spaces, int position,
+  private static boolean fieldInitializerSite(String text, SpaceIndex spaces, int position,
                                               PairSite pair) {
     if (spaces == null || pair.member() == null) {
       return false;
@@ -4369,7 +4486,7 @@ public final class ConstantNames {
     if (placement == null || placement.pairs() == null || placement.spaces() == null) {
       return null;
     }
-    long coordinate = siteCoordinate(placement.spaces(), position);
+    long coordinate = coordinateAt(placement.spaces(), position);
     if (coordinate == NO_COORDINATE) {
       return null;
     }
@@ -4390,7 +4507,7 @@ public final class ConstantNames {
     if (placement.spaces() == null) {
       return false;
     }
-    long coordinate = siteCoordinate(placement.spaces(), position);
+    long coordinate = coordinateAt(placement.spaces(), position);
     if (coordinate == NO_COORDINATE) {
       return false;
     }
@@ -4506,13 +4623,13 @@ public final class ConstantNames {
           if (pair.lowerAt() >= 0 && start <= pair.lowerAt()) {
             continue;
           }
-          long sitePoint = siteCoordinate(placement.spaces(), start);
+          long sitePoint = coordinateAt(placement.spaces(), start);
           if (sitePoint != NO_COORDINATE && sitePoint <= pair.after()) {
             continue;
           }
         }
         else {
-          long sitePoint = siteCoordinate(placement.spaces(), start);
+          long sitePoint = coordinateAt(placement.spaces(), start);
           // The last use before the reference bounds the site only inside the reference's own
           // method: there the offsets order the two exactly. A site in an earlier method is
           // generated before every use in the successor's method, so that comparison would reject
@@ -4706,7 +4823,7 @@ public final class ConstantNames {
       // (the phase rule), never on the printed-position bracket.
       return false;
     }
-    long coordinate = siteCoordinate(placement.spaces(), position);
+    long coordinate = coordinateAt(placement.spaces(), position);
     if (coordinate == NO_COORDINATE) {
       // A field initializer's folded literal is printed at its declaration, where the printer maps
       // no instruction point. A value successor's printed point lying in the same initializer is
@@ -7944,11 +8061,11 @@ public final class ConstantNames {
    * same way, constant or not. Only a range in declaration position counts; an assignment of the
    * same name inside a method body is preceded by a dot or an operator and is left out.
    */
-  private static Map<String, List<int[]>> fieldDeclarations(String text, List<int[]> spans,
-                                                            StructClass own) {
+  private static DeclarationIndex fieldDeclarations(String text, List<int[]> spans,
+                                                    StructClass own) {
     Map<String, List<int[]>> declarations = new HashMap<>();
     if (own == null) {
-      return declarations;
+      return DeclarationIndex.EMPTY;
     }
     for (StructField field : own.getFields()) {
       for (int[] range : initializerRanges(text, spans, field.getName())) {
@@ -7958,7 +8075,101 @@ public final class ConstantNames {
         declarations.computeIfAbsent(field.getName(), k -> new ArrayList<>()).add(range);
       }
     }
-    return declarations;
+    return new DeclarationIndex(declarations);
+  }
+
+  /**
+   * The declared fields' initializer ranges, sorted by start, with the map iteration order kept.
+   *
+   * <p>A position is inside a range strictly, as the linear scan tested. The ranges of one class
+   * are normally disjoint; where they overlap, the scan returned the earliest map entry, so the
+   * query keeps each range's rank in that order and returns the lowest containing rank.
+   */
+  private static final class DeclarationIndex {
+    static final DeclarationIndex EMPTY = new DeclarationIndex(Map.of());
+    private final int[] starts;
+    private final int[] ends;
+    private final String[] names;
+    private final int[] order;
+    private final int[] maxEnd;
+
+    DeclarationIndex(Map<String, List<int[]>> byName) {
+      int count = 0;
+      for (List<int[]> ranges : byName.values()) {
+        count += ranges.size();
+      }
+      this.starts = new int[count];
+      this.ends = new int[count];
+      this.names = new String[count];
+      int rank = 0;
+      for (Map.Entry<String, List<int[]>> entry : byName.entrySet()) {
+        for (int[] range : entry.getValue()) {
+          starts[rank] = range[0];
+          ends[rank] = range[1];
+          names[rank] = entry.getKey();
+          rank++;
+        }
+      }
+      Integer[] sorted = new Integer[count];
+      for (int i = 0; i < count; i++) {
+        sorted[i] = i;
+      }
+      java.util.Arrays.sort(sorted, (a, b) -> {
+        int byStart = Integer.compare(starts[a], starts[b]);
+        return byStart != 0 ? byStart : Integer.compare(a, b);
+      });
+      this.order = new int[count];
+      for (int i = 0; i < count; i++) {
+        order[i] = sorted[i];
+      }
+      this.maxEnd = new int[count];
+      build(0, count - 1);
+    }
+
+    private int build(int lo, int hi) {
+      if (lo > hi) {
+        return Integer.MIN_VALUE;
+      }
+      int mid = (lo + hi) >>> 1;
+      int left = build(lo, mid - 1);
+      int right = build(mid + 1, hi);
+      int greatest = Math.max(ends[order[mid]], Math.max(left, right));
+      maxEnd[mid] = greatest;
+      return greatest;
+    }
+
+    String nameAt(int position) {
+      int found = nameIndex(0, order.length - 1, position);
+      return found < 0 ? null : names[found];
+    }
+
+    private int nameIndex(int lo, int hi, int position) {
+      if (lo > hi) {
+        return -1;
+      }
+      int mid = (lo + hi) >>> 1;
+      int rank = order[mid];
+      int best = starts[rank] < position && position < ends[rank] ? rank : -1;
+      if (lo < mid && starts[order[lo]] < position
+          && maxEnd[(lo + mid - 1) >>> 1] > position) {
+        best = better(best, nameIndex(lo, mid - 1, position));
+      }
+      if (mid < hi && starts[order[mid + 1]] < position
+          && maxEnd[((mid + 1) + hi) >>> 1] > position) {
+        best = better(best, nameIndex(mid + 1, hi, position));
+      }
+      return best;
+    }
+
+    private int better(int first, int second) {
+      if (first < 0) {
+        return second;
+      }
+      if (second < 0) {
+        return first;
+      }
+      return Math.min(first, second);
+    }
   }
 
   /** Whether the field name at this offset is a declaration's, not a member assignment's. */
@@ -7979,14 +8190,7 @@ public final class ConstantNames {
     if (placement == null || placement.declarations() == null) {
       return null;
     }
-    for (Map.Entry<String, List<int[]>> entry : placement.declarations().entrySet()) {
-      for (int[] range : entry.getValue()) {
-        if (position > range[0] && position < range[1]) {
-          return entry.getKey();
-        }
-      }
-    }
-    return null;
+    return placement.declarations().nameAt(position);
   }
 
   /**
@@ -8216,7 +8420,7 @@ public final class ConstantNames {
    * position lies in the {@code <field-init NAME>} buffer, and a literal inside the same printed
    * initializer is the site the value was created at.
    */
-  private static boolean pairedInitializer(String text, List<SiteSpace> spaces, List<int[]> spans,
+  private static boolean pairedInitializer(String text, SpaceIndex spaces, List<int[]> spans,
                                            int site, int successorAt) {
     if (spaces == null || successorAt < 0) {
       return false;
