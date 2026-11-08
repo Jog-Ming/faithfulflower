@@ -34,6 +34,7 @@ import org.jetbrains.java.decompiler.struct.gen.VarType;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -1180,6 +1181,12 @@ public final class LocalDeclarationOrder {
   private static void hoistToPrintedOrder(Statement root, VarProcessor varproc, NameTable names, String method) {
     List<DeclPos> order = new ArrayList<>();
     collectPrintedOrder(root, order);
+    // Every candidate looks its own position up in the printed order, and each successful hoist
+    // inserts one position, so the index is maintained incrementally instead of rescanned.
+    IdentityHashMap<DeclPos, Integer> orderIndex = new IdentityHashMap<>();
+    for (int i = 0; i < order.size(); i++) {
+      orderIndex.put(order.get(i), i);
+    }
     List<DeclPos> candidates = new ArrayList<>();
     for (DeclPos position : order) {
       if (position.list != null && position.var.getLVT() != null && position.slot >= 0) {
@@ -1193,8 +1200,8 @@ public final class LocalDeclarationOrder {
       if (!isRealDefinition(var)) {
         continue;
       }
-      int index = indexOfPosition(order, candidate);
-      if (index < 0) {
+      Integer index = orderIndex.get(candidate);
+      if (index == null) {
         continue;
       }
       DeclPos anchor = null;
@@ -1248,31 +1255,30 @@ public final class LocalDeclarationOrder {
         var.setDefinition(false);
       }
       DeclPos inserted;
-      Statement head = headLanding(candidate, order, anchorIndex);
-      if (head != null && (deadEnd < 0 || firstOffsetAtLeast(head, deadEnd))) {
+      LandingHead head = headLanding(candidate, order, anchorIndex);
+      if (head != null && (deadEnd < 0 || firstOffsetAtLeast(head.stat(), deadEnd))) {
         // The landing point opens the head of a block that encloses the store: the source wrote
         // the declaration before that block, so it prints beside the block, not inside it. The
         // wider scope is what the target's slots for later locals record.
-        int start = firstPositionIndex(order, head);
-        insertByTargetSlot(head.getVarDefinitions(), declaration);
-        inserted = new DeclPos((VarExprent)declaration, declaration, head.getVarDefinitions(),
-          head, candidate.slot);
-        order.add(start, inserted);
-        debug(method, var, "hoisted to the head of a " + head.type + " before slot-" + anchor.slot);
+        insertByTargetSlot(head.stat().getVarDefinitions(), declaration);
+        inserted = new DeclPos((VarExprent)declaration, declaration, head.stat().getVarDefinitions(),
+          head.stat(), candidate.slot);
+        insertPosition(order, orderIndex, head.index(), inserted);
+        debug(method, var, "hoisted to the head of a " + head.stat().type + " before slot-" + anchor.slot);
       } else if (anchor.list == null) {
         // A loop header's declaration prints where the loop is written: the variable was declared
         // just above the loop, so it goes into the loop's own definitions.
         insertByTargetSlot(anchor.owner.getVarDefinitions(), declaration);
         inserted = new DeclPos((VarExprent)declaration, declaration, anchor.owner.getVarDefinitions(),
           anchor.owner, candidate.slot);
-        order.add(anchorIndex, inserted);
+        insertPosition(order, orderIndex, anchorIndex, inserted);
         debug(method, var, "hoisted to the loop header before slot-" + anchor.slot);
       } else {
         int at = indexOfIdentity(anchor.list, anchor.top);
         anchor.list.add(at < 0 ? anchor.list.size() : at, declaration);
         inserted = new DeclPos((VarExprent)declaration, declaration, anchor.list, anchor.owner,
           candidate.slot);
-        order.add(anchorIndex, inserted);
+        insertPosition(order, orderIndex, anchorIndex, inserted);
         debug(method, var, "hoisted to the printed order before slot-" + anchor.slot);
       }
       // The other alive ranges of the same source variable lose their own declarations.
@@ -1282,12 +1288,16 @@ public final class LocalDeclarationOrder {
     }
   }
 
+  /** The statement a declaration opens the head of, and the order index of that position. */
+  private record LandingHead(Statement stat, int index) {
+  }
+
   /**
    * The outermost enclosing statement whose first declaration is the anchor itself: everything
    * printed before it has a lower slot, so a declaration can open that block's head without
    * disturbing the order, and the block's start is a wider scope than the store's own.
    */
-  private static Statement headLanding(DeclPos candidate, List<DeclPos> order, int anchorIndex) {
+  private static LandingHead headLanding(DeclPos candidate, List<DeclPos> order, int anchorIndex) {
     int lastLower = -1;
     for (int i = 0; i < anchorIndex; i++) {
       int slot = order.get(i).slot;
@@ -1295,50 +1305,57 @@ public final class LocalDeclarationOrder {
         lastLower = i;
       }
     }
+    if (anchorIndex <= lastLower) {
+      return null;
+    }
     List<Statement> ancestors = new ArrayList<>();
+    Set<Statement> chain = java.util.Collections.newSetFromMap(new IdentityHashMap<>());
     for (Statement stat = candidate.owner; stat != null; stat = stat.getParent()) {
       ancestors.add(stat);
+      chain.add(stat);
+    }
+    // The first printed declaration inside a statement's subtree: one walk over the printed
+    // prefix marks every ancestor chain statement the position lies in. A position's ancestors
+    // are a path to the root, so marking can stop at the first ancestor already recorded; the
+    // scan itself stops once every chain statement has its first position.
+    IdentityHashMap<Statement, Integer> firstIndex = new IdentityHashMap<>();
+    for (int i = 0; i <= anchorIndex && firstIndex.size() < chain.size(); i++) {
+      Statement stat = order.get(i).owner;
+      while (stat != null && !chain.contains(stat)) {
+        stat = stat.getParent();
+      }
+      while (stat != null) {
+        if (firstIndex.putIfAbsent(stat, i) != null) {
+          break;
+        }
+        stat = stat.getParent();
+      }
     }
     for (int i = ancestors.size() - 1; i >= 0; i--) {
       Statement head = ancestors.get(i);
-      if (firstPositionIndex(order, head) == anchorIndex && anchorIndex > lastLower) {
-        return head;
+      Integer first = firstIndex.get(head);
+      if (first != null && first == anchorIndex) {
+        return new LandingHead(head, anchorIndex);
       }
     }
     return null;
   }
 
-  /** The first printed declaration inside this statement's subtree, as an index in the order. */
-  private static int firstPositionIndex(List<DeclPos> order, Statement head) {
-    for (int i = 0; i < order.size(); i++) {
-      if (isAncestor(head, order.get(i).owner)) {
-        return i;
-      }
+  /**
+   * Inserts a declaration into the printed order at a given index and shifts the recorded
+   * positions after it, in one pass over the tail the list insertion itself already moves.
+   */
+  private static void insertPosition(List<DeclPos> order, IdentityHashMap<DeclPos, Integer> index,
+                                     int at, DeclPos position) {
+    order.add(at, position);
+    for (int i = at; i < order.size(); i++) {
+      index.put(order.get(i), i);
     }
-    return -1;
-  }
-
-  private static boolean isAncestor(Statement ancestor, Statement stat) {
-    for (Statement s = stat; s != null; s = s.getParent()) {
-      if (s == ancestor) {
-        return true;
-      }
-    }
-    return false;
   }
 
   private static boolean firstOffsetAtLeast(Statement head, int offset) {
     int first = RoundTrip.firstOffset(head);
     return first >= 0 && first >= offset;
-  }
-
-  private static int indexOfPosition(List<DeclPos> order, DeclPos position) {
-    for (int i = 0; i < order.size(); i++) {
-      if (order.get(i) == position) {
-        return i;
-      }
-    }
-    return -1;
   }
 
   /**
