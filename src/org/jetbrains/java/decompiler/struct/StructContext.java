@@ -53,6 +53,10 @@ public class StructContext {
   private final Map<String, String> badlyPlacedClasses = new ConcurrentHashMap<>(); // original -> corrected
   private final Map<String, ContextUnit> unitsByClassName = new ConcurrentHashMap<>();
   private final Map<String, List<String>> abstractNames = new HashMap<>();
+  // Hierarchy answers depend only on the names involved and the run's class files, so repeated
+  // pair queries are memoized. Both maps go away with the classes they describe.
+  private final Map<String, Map<String, Boolean>> instanceOfCache = new ConcurrentHashMap<>();
+  private final Map<String, Map<String, Optional<StructClass>>> commonAncestorCache = new ConcurrentHashMap<>();
   
   private final PluginContext pluginContext = new PluginContext();
 
@@ -153,6 +157,8 @@ public class StructContext {
 
   public void reloadContext() throws IOException {
     this.classes.clear();
+    this.instanceOfCache.clear();
+    this.commonAncestorCache.clear();
     this.unitsByClassName.clear();
     this.abstractNames.clear();
 
@@ -283,6 +289,20 @@ public class StructContext {
       return true;
     }
 
+    Map<String, Boolean> byRef = instanceOfCache.get(valclass);
+    if (byRef != null) {
+      Boolean known = byRef.get(refclass);
+      if (known != null) {
+        return known;
+      }
+    }
+
+    boolean result = computeInstanceOf(valclass, refclass);
+    instanceOfCache.computeIfAbsent(valclass, key -> new ConcurrentHashMap<>()).put(refclass, result);
+    return result;
+  }
+
+  private boolean computeInstanceOf(String valclass, String refclass) {
     StructClass cl = this.getClass(valclass);
     // Don't know what we are? We must at least be an object.
     if ((cl == null || cl.superClass == null) && refclass.equals("java/lang/Object")) {
@@ -308,6 +328,25 @@ public class StructContext {
 
   // JOIN both classes on the lattice. Find a common ancestor.
   public @Nullable StructClass findCommonAncestor(String classA, String classB) {
+    if (classA == null || classB == null) {
+      return null;
+    }
+
+    Map<String, Optional<StructClass>> byB = commonAncestorCache.get(classA);
+    if (byB != null) {
+      Optional<StructClass> known = byB.get(classB);
+      if (known != null) {
+        return known.orElse(null);
+      }
+    }
+
+    StructClass result = computeCommonAncestor(classA, classB);
+    commonAncestorCache.computeIfAbsent(classA, key -> new ConcurrentHashMap<>())
+      .put(classB, Optional.ofNullable(result));
+    return result;
+  }
+
+  private @Nullable StructClass computeCommonAncestor(String classA, String classB) {
     StructClass a = this.getClass(classA);
     StructClass b = this.getClass(classB);
 
@@ -379,6 +418,8 @@ public class StructContext {
     this.units.clear();
     this.unitsByClassName.clear();
     this.classes.clear();
+    this.instanceOfCache.clear();
+    this.commonAncestorCache.clear();
   }
 
   public List<ContextUnit> getUnits() {
