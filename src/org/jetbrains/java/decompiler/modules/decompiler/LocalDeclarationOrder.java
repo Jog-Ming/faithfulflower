@@ -56,6 +56,15 @@ public final class LocalDeclarationOrder {
   private LocalDeclarationOrder() {
   }
 
+  /**
+   * Releases the per-method facts recorded for a decompilation. The map is keyed by the run's
+   * {@link StructMethod} instances; once their context is gone the answers cannot be asked for
+   * again, and keeping them would make every decompiled method reachable for the process's life.
+   */
+  public static void clear() {
+    HIDDEN_LOCALS.clear();
+  }
+
   public static void reorder(Statement root) {
     MethodWrapper wrapper = (MethodWrapper)DecompilerContext.getContextProperty(DecompilerContext.CURRENT_METHOD_WRAPPER);
     VarProcessor varproc = wrapper == null ? null : wrapper.varproc;

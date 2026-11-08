@@ -141,6 +141,56 @@ public final class RoundTrip {
 
   private RoundTrip() {}
 
+  /**
+   * Releases the per-method facts recorded for a decompilation. The maps are keyed by the run's
+   * {@link StructMethod} and {@link Statement} instances, so nothing recorded can be asked for
+   * again once the context that owns those instances is gone; without this, every class's facts
+   * stay reachable from the static fields for the life of the process.
+   */
+  public static void clear() {
+    VOID_RETURNS.clear();
+    TEMP_STORES.clear();
+    INSTRUCTION_ENDS.clear();
+    INSTRUCTION_BY_END.clear();
+    HANDLER_ENDS.clear();
+    TRY_EXIT_TARGETS.clear();
+    CLOSE_CALLS.clear();
+    CONSUMED_GUARD_EXITS.clear();
+    CONTINUE_GUARDS.clear();
+    CONTINUE_SITES.clear();
+    CONTINUE_ELSE_GUARDS.clear();
+    CONTINUE_ELSE_SITES.clear();
+    BRANCHES.clear();
+    BRANCH_TARGETS.clear();
+    BRANCH_STARTS.clear();
+    GOTO_TARGETS.clear();
+    SWITCH_TARGETS.clear();
+    FINALLY_COPY_ENDS.clear();
+    MATCH_CATCH_SLOTS.clear();
+    MATCH_CATCH_ENTRIES.clear();
+    LAST_INSTRUCTION.clear();
+    METHOD_ENTRY.clear();
+    NO_FALLTHROUGH.clear();
+    POP_SITES.clear();
+    EXCEPTION_RANGES.clear();
+    HANDOVER_STARTS.clear();
+    RETURN_STORES.clear();
+    TWR_RETURN_STORES.clear();
+    VALUE_SINKS.clear();
+    DUP_STORES.clear();
+    STORE_SITES.clear();
+    LOAD_SITES.clear();
+    LOAD_STARTS.clear();
+    STORE_SLOTS.clear();
+    ALL_STORE_SLOTS.clear();
+    TRY_RETURN_STORES.clear();
+    LOOP_UPDATE_ARMS.clear();
+    LOOP_GUARDS.clear();
+    EMPTY_CATCHES.clear();
+    HANDLER_STORES.clear();
+    CATCH_PARAMS.clear();
+  }
+
   /** Remember where a method's void returns are; the instruction sequence is gone by print time. */
   public static void recordMethod(StructClass cl, StructMethod method, FullInstructionSequence seq) {
     BitSet returns = new BitSet();

@@ -11,6 +11,8 @@ import org.jetbrains.java.decompiler.main.extern.*;
 import org.jetbrains.java.decompiler.main.plugins.JarPluginLoader;
 import org.jetbrains.java.decompiler.api.plugin.PluginSource;
 import org.jetbrains.java.decompiler.main.plugins.PluginSources;
+import org.jetbrains.java.decompiler.modules.decompiler.LocalDeclarationOrder;
+import org.jetbrains.java.decompiler.modules.decompiler.RoundTrip;
 import org.jetbrains.java.decompiler.modules.renamer.ConverterHelper;
 import org.jetbrains.java.decompiler.modules.renamer.IdentifierConverter;
 import org.jetbrains.java.decompiler.modules.renamer.PoolInterceptor;
@@ -161,6 +163,10 @@ public class Fernflower implements IDecompiledData {
 
   public void clearContext() {
     structContext.clear();
+    // The per-method facts are keyed by this context's methods and statements; release them with
+    // the context, or a long-lived process keeps every decompiled method reachable.
+    RoundTrip.clear();
+    LocalDeclarationOrder.clear();
     DecompilerContext.setCurrentContext(null);
   }
 
