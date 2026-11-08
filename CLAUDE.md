@@ -180,8 +180,8 @@ devtools/cli compile   <version> <Class>             compile that one class like
 devtools/cli reports   [--version V] [--limit N]      list past scores
 devtools/cli clean     [--trees] [--compile] [--downloads] [--all]
 devtools/cli cache     [--measure]                    show cache usage; --measure sizes old trees once
-devtools/cli bench     [quick|precise]                run the in-process decompiler benchmark
-                                                     (Gradle benchQuick / benchPrecise; default quick)
+devtools/cli bench     [fast|medium|slow]            run the in-process decompiler benchmark
+                                                     (Gradle benchFast / benchMedium / benchSlow)
 ```
 
 Raw uses are counted by our own attributed-tree checker, which also sees raw casts that javac's

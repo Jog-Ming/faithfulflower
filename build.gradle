@@ -366,36 +366,40 @@ tasks.register('bench', JavaExec) {
   }
 }
 
-tasks.register('benchQuick', JavaExec) {
+def benchVersions = [
+  '1.21.11_unobfuscated',
+  '26.1',
+  '26.2',
+  '26.3',
+  '26.4-snapshot-1',
+  '26.4-snapshot-2',
+  '26.4-snapshot-3',
+  '26.4-snapshot-4',
+  '26.4-snapshot-5'
+]
+def benchVersionArgs = []
+benchVersions.each { benchVersionArgs.addAll(['--version', it]) }
+
+tasks.register('benchFast', JavaExec) {
   group = 'verification'
-  description = 'Fast, noisy decompiler benchmark (JIT, 50-class sample of every version, 1 warmup + 2 rounds)'
+  description = 'Fastest decompiler benchmark (under 2 minutes, no warmup, one round, 30-class sample per version)'
   classpath = sourceSets.bench.runtimeClasspath
   mainClass = 'org.jetbrains.java.decompiler.bench.DecompilerBench'
-  args '--warmup', '1', '--rounds', '2', '--sample', '50',
-    '--version', '1.21.11_unobfuscated',
-    '--version', '26.1',
-    '--version', '26.2',
-    '--version', '26.3',
-    '--version', '26.4-snapshot-1',
-    '--version', '26.4-snapshot-2',
-    '--version', '26.4-snapshot-3',
-    '--version', '26.4-snapshot-4',
-    '--version', '26.4-snapshot-5'
+  args = ['--warmup', '0', '--rounds', '1', '--sample', '20', '--diagnostics', '0'] + benchVersionArgs
 }
 
-tasks.register('benchPrecise', JavaExec) {
+tasks.register('benchMedium', JavaExec) {
   group = 'verification'
-  description = 'Slow, steady-state decompiler benchmark (JIT, 200-class sample of every version, 2 warmup + 5 rounds)'
+  description = 'Medium decompiler benchmark (under 5 minutes, 1 warmup + 1 round, 100-class sample per version)'
   classpath = sourceSets.bench.runtimeClasspath
   mainClass = 'org.jetbrains.java.decompiler.bench.DecompilerBench'
-  args '--warmup', '2', '--rounds', '5', '--sample', '200',
-    '--version', '1.21.11_unobfuscated',
-    '--version', '26.1',
-    '--version', '26.2',
-    '--version', '26.3',
-    '--version', '26.4-snapshot-1',
-    '--version', '26.4-snapshot-2',
-    '--version', '26.4-snapshot-3',
-    '--version', '26.4-snapshot-4',
-    '--version', '26.4-snapshot-5'
+  args = ['--warmup', '1', '--rounds', '1', '--sample', '100'] + benchVersionArgs
+}
+
+tasks.register('benchSlow', JavaExec) {
+  group = 'verification'
+  description = 'Slow decompiler benchmark (under 20 minutes, 2 warmup + 3 rounds, 300-class sample per version)'
+  classpath = sourceSets.bench.runtimeClasspath
+  mainClass = 'org.jetbrains.java.decompiler.bench.DecompilerBench'
+  args = ['--warmup', '2', '--rounds', '3', '--sample', '300'] + benchVersionArgs
 }

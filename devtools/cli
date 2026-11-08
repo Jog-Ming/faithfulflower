@@ -23,10 +23,11 @@ decompiler="$root/build/libs/faithfulflower-1.13.0+local.jar"
 # The benchmark runs in the decompiler's own JVM (allocation and CPU counters are per-process), so
 # it is a Gradle task rather than a devtools subcommand; this is only the stable entry point.
 if [ "${1:-}" = "bench" ]; then
-  case "${2:-quick}" in
-    quick) task=benchQuick ;;
-    precise) task=benchPrecise ;;
-    *) echo "devtools/cli bench: expected quick or precise" >&2; exit 2 ;;
+  case "${2:-fast}" in
+    fast) task=benchFast ;;
+    medium) task=benchMedium ;;
+    slow) task=benchSlow ;;
+    *) echo "devtools/cli bench: expected fast, medium or slow" >&2; exit 2 ;;
   esac
   echo "devtools/cli: $task" >&2
   exec "$root/gradlew" -p "$root" "$task"

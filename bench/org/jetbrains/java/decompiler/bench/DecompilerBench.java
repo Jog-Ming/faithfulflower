@@ -74,6 +74,7 @@ public final class DecompilerBench {
     int warmup = Integer.parseInt(options.getOrDefault("warmup", "1"));
     int rounds = Integer.parseInt(options.getOrDefault("rounds", "5"));
     int sampleSize = Integer.parseInt(options.getOrDefault("sample", "0"));
+    boolean includeDiagnostics = !"0".equals(options.getOrDefault("diagnostics", "1"));
     File versionsDir = new File(options.getOrDefault("versions-dir", ".dev/cache/versions"));
     File classesOverride = options.containsKey("classes-dir")
       ? new File(options.get("classes-dir"))
@@ -86,7 +87,7 @@ public final class DecompilerBench {
 
     List<Scenario> scenarios = new ArrayList<>();
     List<LayerReport> layerReports = new ArrayList<>();
-    boolean diagnostics = true;
+    boolean diagnostics = includeDiagnostics;
     for (String version : versions) {
       File classesDir = classesOverride != null
         ? classesOverride
