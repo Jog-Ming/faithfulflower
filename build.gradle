@@ -386,6 +386,7 @@ tasks.register('benchFast', JavaExec) {
   classpath = sourceSets.bench.runtimeClasspath
   mainClass = 'org.jetbrains.java.decompiler.bench.DecompilerBench'
   args = ['--warmup', '0', '--rounds', '1', '--sample', '20', '--diagnostics', '0'] + benchVersionArgs
+  timeout = Duration.ofMinutes(5)
 }
 
 tasks.register('benchMedium', JavaExec) {
@@ -394,6 +395,7 @@ tasks.register('benchMedium', JavaExec) {
   classpath = sourceSets.bench.runtimeClasspath
   mainClass = 'org.jetbrains.java.decompiler.bench.DecompilerBench'
   args = ['--warmup', '1', '--rounds', '2', '--sample', '100'] + benchVersionArgs
+  timeout = Duration.ofMinutes(10)
 }
 
 tasks.register('benchSlow', JavaExec) {
@@ -402,4 +404,5 @@ tasks.register('benchSlow', JavaExec) {
   classpath = sourceSets.bench.runtimeClasspath
   mainClass = 'org.jetbrains.java.decompiler.bench.DecompilerBench'
   args = ['--warmup', '3', '--rounds', '7', '--sample', '400'] + benchVersionArgs
+  timeout = Duration.ofMinutes(30)
 }
