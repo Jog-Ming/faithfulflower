@@ -38,10 +38,10 @@ public class TextBuffer {
   private boolean myHasReformatted = false;
   private final StringBuilder myStringBuilder;
   private Map<Integer, Integer> myLineToOffsetMapping = null;
-  private final Map<BytecodeMappingKey, Integer> myBytecodeOffsetMapping = new LinkedHashMap<>(); // bytecode offset -> offset in text
+  private final MappingStore myBytecodeOffsetMapping = new MappingStore(); // bytecode offset -> offset in text
   // Positions the line aligner uses that are not evidence for the constant-name pass: an anchor
   // the aligner needs must not join that pass's pool-order model.
-  private final Map<BytecodeMappingKey, Integer> myAlignOnlyMapping = new LinkedHashMap<>(); // bytecode offset -> offset in text
+  private final MappingStore myAlignOnlyMapping = new MappingStore(); // bytecode offset -> offset in text
   private final List<ClassRegion> myClassRegions = new ArrayList<>(); // text ranges a nested class was printed into
   private final Deque<ClassRegion> myOpenClassRegions = new ArrayDeque<>();
   private final DebugTrace myDebugTrace = DecompilerContext.getOption(IFernflowerPreferences.UNIT_TEST_MODE) ? new DebugTrace(this) : null;
@@ -226,7 +226,7 @@ public class TextBuffer {
     if (myDebugTrace != null) {
       myDebugTrace.myPreventDeletion = true;
     }
-    myBytecodeOffsetMapping.put(new BytecodeMappingKey(bytecodeOffset, null, null), myStringBuilder.length());
+    myBytecodeOffsetMapping.add(bytecodeOffset, myStringBuilder.length());
   }
 
   /**
@@ -239,7 +239,7 @@ public class TextBuffer {
     if (myDebugTrace != null) {
       myDebugTrace.myPreventDeletion = true;
     }
-    myAlignOnlyMapping.put(new BytecodeMappingKey(bytecodeOffset, null, null), myStringBuilder.length());
+    myAlignOnlyMapping.add(bytecodeOffset, myStringBuilder.length());
   }
 
   public void addAlignOnlyBytecodeMapping(BitSet bytecodeOffsets) {
@@ -257,14 +257,14 @@ public class TextBuffer {
    * `continue;`) owns that jump and its line; the brace must not claim it.
    */
   public boolean hasBytecodeMapping(int bytecodeOffset) {
-    return myBytecodeOffsetMapping.containsKey(new BytecodeMappingKey(bytecodeOffset, null, null));
+    return myBytecodeOffsetMapping.containsUnresolved(bytecodeOffset);
   }
 
   public void addStartBytecodeMapping(int bytecodeOffset) {
     if (myDebugTrace != null) {
       myDebugTrace.myPreventDeletion = true;
     }
-    myBytecodeOffsetMapping.putIfAbsent(new BytecodeMappingKey(bytecodeOffset, null, null), 0);
+    myBytecodeOffsetMapping.addIfAbsent(bytecodeOffset, 0);
   }
 
   /**
@@ -275,8 +275,7 @@ public class TextBuffer {
     if (myDebugTrace != null) {
       myDebugTrace.myPreventDeletion = true;
     }
-    myBytecodeOffsetMapping.putIfAbsent(new BytecodeMappingKey(bytecodeOffset, className, methodKey),
-      textOffset);
+    myBytecodeOffsetMapping.addIfAbsent(bytecodeOffset, className, methodKey, textOffset);
   }
 
   public void addBytecodeMapping(BitSet bytecodeOffsets) {
@@ -304,15 +303,11 @@ public class TextBuffer {
    * after the dot, and only the class-name text carries that line.
    */
   public void moveBytecodeMappings(java.util.function.IntPredicate select, int textOffset) {
-    for (Map.Entry<BytecodeMappingKey, Integer> entry : myBytecodeOffsetMapping.entrySet()) {
-      if (entry.getKey().myClass == null && select.test(entry.getKey().myBytecodeOffset)) {
-        entry.setValue(textOffset);
-      }
-    }
+    myBytecodeOffsetMapping.moveUnresolvedPositions(select, textOffset);
   }
 
   public void clearUnassignedBytecodeMappingData() {
-    myBytecodeOffsetMapping.keySet().removeIf(key -> key.myClass == null);
+    myBytecodeOffsetMapping.clearUnresolved();
   }
 
   /**
@@ -348,14 +343,7 @@ public class TextBuffer {
    * only when their buffer is appended into a larger one.
    */
   public Map<Pair<String, String>, Map<Integer, Integer>> getBytecodePositions() {
-    Map<Pair<String, String>, Map<Integer, Integer>> positions = new LinkedHashMap<>();
-    myBytecodeOffsetMapping.forEach((key, position) -> {
-      if (key.myClass != null && key.myMethod != null) {
-        Map<Integer, Integer> method = positions.computeIfAbsent(Pair.of(key.myClass, key.myMethod), k -> new LinkedHashMap<>());
-        method.putIfAbsent(key.myBytecodeOffset, position);
-      }
-    });
-    return positions;
+    return myBytecodeOffsetMapping.toPositions();
   }
 
   public Map<Pair<String, String>, BytecodeMappingTracer> getTracers() {
@@ -363,22 +351,7 @@ public class TextBuffer {
     for (int i = myStringBuilder.indexOf(myLineSeparator); i != -1; i = myStringBuilder.indexOf(myLineSeparator, i + 1)) {
       newlineOffsets.add(i);
     }
-    Map<Pair<String, String>, BytecodeMappingTracer> tracers = new LinkedHashMap<>();
-    Map<BytecodeMappingKey, Integer> all = new LinkedHashMap<>(myBytecodeOffsetMapping);
-    all.putAll(myAlignOnlyMapping);
-    all.forEach((key, textOffset) -> {
-      if (key.myClass == null) {
-        throw new IllegalStateException("getTracers called when not all bytecode offsets have a valid class and method");
-      }
-      BytecodeMappingTracer tracer = tracers.computeIfAbsent(Pair.of(key.myClass, key.myMethod), k -> new BytecodeMappingTracer());
-      int lineNo = Collections.binarySearch(newlineOffsets, textOffset);
-      if (lineNo < 0) {
-        lineNo = -lineNo - 1;
-      }
-      tracer.setCurrentSourceLine(lineNo);
-      tracer.addMapping(key.myBytecodeOffset);
-    });
-    return tracers;
+    return myBytecodeOffsetMapping.toTracers(myAlignOnlyMapping, newlineOffsets);
   }
 
   /**
@@ -510,8 +483,8 @@ public class TextBuffer {
     offsetMapping.add(0);
     reformatGroup(myRootGroup, offsetMapping, 0);
 
-    myBytecodeOffsetMapping.replaceAll((key, value) -> value + offsetMapping.get(value));
-    myAlignOnlyMapping.replaceAll((key, value) -> value + offsetMapping.get(value));
+    myBytecodeOffsetMapping.mapPositions(offsetMapping);
+    myAlignOnlyMapping.mapPositions(offsetMapping);
     for (ClassRegion region : myClassRegions) {
       int start = region.myStart;
       int end = region.myEnd;
@@ -667,7 +640,7 @@ public class TextBuffer {
   public void addBytecodeMappingAtLastToken(int bytecodeOffset) {
     for (int i = myStringBuilder.length() - 1; i >= 0; i--) {
       if (!Character.isWhitespace(myStringBuilder.charAt(i))) {
-        myBytecodeOffsetMapping.put(new BytecodeMappingKey(bytecodeOffset, null, null), i);
+        myBytecodeOffsetMapping.add(bytecodeOffset, i);
         return;
       }
     }
@@ -678,9 +651,7 @@ public class TextBuffer {
    * ignored: it was recorded by an enclosing buffer, not by the text this buffer holds.
    */
   public int ownBytecodeMappingPosition(int bytecodeOffset) {
-    Integer position = myBytecodeOffsetMapping.get(
-      new BytecodeMappingKey(bytecodeOffset, null, null));
-    return position == null ? -1 : position;
+    return myBytecodeOffsetMapping.unresolvedPosition(bytecodeOffset);
   }
 
   /**
@@ -763,18 +734,9 @@ public class TextBuffer {
         myLineToOffsetMapping.put(entry.getKey(), entry.getValue() + myStringBuilder.length());
       }
     }
-    buffer.myBytecodeOffsetMapping.forEach((key, value) -> {
-      if (key.myClass == null) {
-        key = new BytecodeMappingKey(key.myBytecodeOffset, className, methodKey);
-      }
-      myBytecodeOffsetMapping.putIfAbsent(key, value + myStringBuilder.length());
-    });
-    buffer.myAlignOnlyMapping.forEach((key, value) -> {
-      if (key.myClass == null) {
-        key = new BytecodeMappingKey(key.myBytecodeOffset, className, methodKey);
-      }
-      myAlignOnlyMapping.putIfAbsent(key, value + myStringBuilder.length());
-    });
+    int textBase = myStringBuilder.length();
+    myBytecodeOffsetMapping.append(buffer.myBytecodeOffsetMapping, className, methodKey, textBase);
+    myAlignOnlyMapping.append(buffer.myAlignOnlyMapping, className, methodKey, textBase);
     NewlineGroup otherRoot = buffer.myRootGroup.copy();
     otherRoot.shift(myStringBuilder.length());
     myCurrentGroup.myReplacements.addAll(otherRoot.myReplacements);
@@ -820,8 +782,8 @@ public class TextBuffer {
     // A prefix removal can put a mapping before the buffer's start (the lambda path strips the
     // `return` of an expression body). The text it referred to is gone, so the mapping belongs
     // at the new start; a negative position would resolve inside the preceding text instead.
-    myBytecodeOffsetMapping.replaceAll((key, value) -> Math.max(0, value + shiftOffset));
-    myAlignOnlyMapping.replaceAll((key, value) -> Math.max(0, value + shiftOffset));
+    myBytecodeOffsetMapping.shift(shiftOffset);
+    myAlignOnlyMapping.shift(shiftOffset);
     myRootGroup.shift(shiftOffset);
   }
 
@@ -936,36 +898,450 @@ public class TextBuffer {
     }
   }
 
-  private static final class BytecodeMappingKey {
-    private final int myBytecodeOffset;
-    // null signifies the current class
+  /**
+   * Insertion-ordered mapping from bytecode offsets to text positions, grouped by the class and
+   * method that own the offsets.
+   *
+   * <p>The printer writes each method body into its own buffer, recording its offsets without a
+   * class or method; appending that buffer into the class's buffer is what names the owner. One
+   * ordered entry array per class and method lets that append move a whole method's entries with
+   * array copies instead of one hash-map insertion per entry. The flat insertion order the readers
+   * rely on is reproduced by the per-group order plus the order in which the groups were created.
+   */
+  private static final class MappingStore {
+    private final LinkedHashMap<GroupKey, MappingGroup> myGroups = new LinkedHashMap<>();
+    // Offsets recorded without a class or method; the unresolved group takes the appended buffer's
+    // class and method when it is appended, and stays unresolved when that class is null.
+    private MappingGroup myUnresolvedGroup;
+    private int myNextSeq; // insertion sequence of the next new entry
+
+    void add(int bytecodeOffset, int textOffset) {
+      MappingGroup group = myUnresolvedGroup;
+      if (group == null) {
+        group = new MappingGroup(myNextSeq);
+        myUnresolvedGroup = group;
+      }
+      if (group.put(bytecodeOffset, textOffset, myNextSeq)) {
+        myNextSeq++;
+      }
+    }
+
+    void addIfAbsent(int bytecodeOffset, int textOffset) {
+      MappingGroup group = myUnresolvedGroup;
+      if (group == null) {
+        group = new MappingGroup(myNextSeq);
+        myUnresolvedGroup = group;
+      }
+      if (group.putIfAbsent(bytecodeOffset, textOffset, myNextSeq)) {
+        myNextSeq++;
+      }
+    }
+
+    void addIfAbsent(int bytecodeOffset, String className, String methodKey, int textOffset) {
+      if (className == null) {
+        addIfAbsent(bytecodeOffset, textOffset);
+        return;
+      }
+      GroupKey key = new GroupKey(className, methodKey);
+      MappingGroup group = myGroups.get(key);
+      if (group == null) {
+        group = new MappingGroup(myNextSeq);
+        myGroups.put(key, group);
+      }
+      if (group.putIfAbsent(bytecodeOffset, textOffset, myNextSeq)) {
+        myNextSeq++;
+      }
+    }
+
+    boolean containsUnresolved(int bytecodeOffset) {
+      return myUnresolvedGroup != null && myUnresolvedGroup.find(bytecodeOffset) >= 0;
+    }
+
+    int unresolvedPosition(int bytecodeOffset) {
+      if (myUnresolvedGroup == null) {
+        return -1;
+      }
+      int slot = myUnresolvedGroup.find(bytecodeOffset);
+      return slot < 0 ? -1 : myUnresolvedGroup.myPositions[slot];
+    }
+
+    void moveUnresolvedPositions(java.util.function.IntPredicate select, int textOffset) {
+      if (myUnresolvedGroup == null) {
+        return;
+      }
+      MappingGroup group = myUnresolvedGroup;
+      for (int i = 0; i < group.mySize; i++) {
+        if (select.test(group.myOffsets[i])) {
+          group.myPositions[i] = textOffset;
+        }
+      }
+    }
+
+    void clearUnresolved() {
+      myUnresolvedGroup = null;
+    }
+
+    Map<Pair<String, String>, Map<Integer, Integer>> toPositions() {
+      Map<Pair<String, String>, Map<Integer, Integer>> positions = new LinkedHashMap<>();
+      for (Map.Entry<GroupKey, MappingGroup> entry : myGroups.entrySet()) {
+        GroupKey key = entry.getKey();
+        if (key.myMethod == null) {
+          continue;
+        }
+        MappingGroup group = entry.getValue();
+        Map<Integer, Integer> method = positions.computeIfAbsent(Pair.of(key.myClass, key.myMethod), k -> new LinkedHashMap<>());
+        for (int i = 0; i < group.mySize; i++) {
+          method.put(group.myOffsets[i], group.myPositions[i]);
+        }
+      }
+      return positions;
+    }
+
+    Map<Pair<String, String>, BytecodeMappingTracer> toTracers(MappingStore alignOnly, List<Integer> newlineOffsets) {
+      Map<Pair<String, String>, BytecodeMappingTracer> tracers = new LinkedHashMap<>();
+      if (myUnresolvedGroup != null || alignOnly.myUnresolvedGroup != null) {
+        throw new IllegalStateException("getTracers called when not all bytecode offsets have a valid class and method");
+      }
+      // A position recorded in both maps uses the align-only text offset, at the bytecode map's
+      // place in the order; the flags let the align-only pass skip those entries.
+      Map<GroupKey, boolean[]> matchedAlign = new LinkedHashMap<>();
+      for (Map.Entry<GroupKey, MappingGroup> entry : myGroups.entrySet()) {
+        GroupKey key = entry.getKey();
+        MappingGroup group = entry.getValue();
+        MappingGroup alignGroup = alignOnly.myGroups.get(key);
+        boolean[] matched = null;
+        if (alignGroup != null) {
+          matched = new boolean[alignGroup.mySize];
+          matchedAlign.put(key, matched);
+        }
+        Pair<String, String> pair = Pair.of(key.myClass, key.myMethod);
+        BytecodeMappingTracer tracer = null;
+        for (int i = 0; i < group.mySize; i++) {
+          int textOffset = group.myPositions[i];
+          if (alignGroup != null) {
+            int slot = alignGroup.find(group.myOffsets[i]);
+            if (slot >= 0) {
+              textOffset = alignGroup.myPositions[slot];
+              matched[slot] = true;
+            }
+          }
+          if (tracer == null) {
+            tracer = tracers.get(pair);
+            if (tracer == null) {
+              tracer = new BytecodeMappingTracer();
+              tracers.put(pair, tracer);
+            }
+          }
+          tracer.setCurrentSourceLine(lineAt(newlineOffsets, textOffset));
+          tracer.addMapping(group.myOffsets[i]);
+        }
+      }
+      for (Map.Entry<GroupKey, MappingGroup> entry : alignOnly.myGroups.entrySet()) {
+        GroupKey key = entry.getKey();
+        MappingGroup group = entry.getValue();
+        boolean[] matched = matchedAlign.get(key);
+        Pair<String, String> pair = Pair.of(key.myClass, key.myMethod);
+        BytecodeMappingTracer tracer = null;
+        for (int i = 0; i < group.mySize; i++) {
+          if (matched != null && matched[i]) {
+            continue;
+          }
+          if (tracer == null) {
+            tracer = tracers.get(pair);
+            if (tracer == null) {
+              tracer = new BytecodeMappingTracer();
+              tracers.put(pair, tracer);
+            }
+          }
+          tracer.setCurrentSourceLine(lineAt(newlineOffsets, group.myPositions[i]));
+          tracer.addMapping(group.myOffsets[i]);
+        }
+      }
+      return tracers;
+    }
+
+    private static int lineAt(List<Integer> newlineOffsets, int textOffset) {
+      int lineNo = Collections.binarySearch(newlineOffsets, textOffset);
+      return lineNo < 0 ? -lineNo - 1 : lineNo;
+    }
+
+    /**
+     * Merges the source's entries into this store. The source's unresolved offsets take the class
+     * and method of the appended buffer; an entry whose target key already has its offset keeps
+     * the target's position, exactly as the per-entry putIfAbsent this replaces did.
+     */
+    void append(MappingStore source, String className, String methodKey, int textBase) {
+      if (source.myGroups.isEmpty() && source.myUnresolvedGroup == null) {
+        return;
+      }
+      // Groups in the order their first entry was recorded. Named groups already are; the
+      // unresolved group is inserted at its creation point.
+      List<GroupKey> keys = new ArrayList<>(source.myGroups.size() + 1);
+      List<MappingGroup> groups = new ArrayList<>(source.myGroups.size() + 1);
+      for (Map.Entry<GroupKey, MappingGroup> entry : source.myGroups.entrySet()) {
+        keys.add(entry.getKey());
+        groups.add(entry.getValue());
+      }
+      if (source.myUnresolvedGroup != null) {
+        int at = 0;
+        while (at < groups.size() && groups.get(at).myCreationSeq < source.myUnresolvedGroup.myCreationSeq) {
+          at++;
+        }
+        keys.add(at, className == null ? null : new GroupKey(className, methodKey));
+        groups.add(at, source.myUnresolvedGroup);
+      }
+      // Several source groups can resolve to one target key (the unresolved group and a group the
+      // source already named). They are merged together, earliest sequence first.
+      Map<GroupKey, List<MappingGroup>> byKey = new LinkedHashMap<>();
+      for (int i = 0; i < keys.size(); i++) {
+        byKey.computeIfAbsent(keys.get(i), k -> new ArrayList<>()).add(groups.get(i));
+      }
+      int seqShift = myNextSeq;
+      for (Map.Entry<GroupKey, List<MappingGroup>> entry : byKey.entrySet()) {
+        GroupKey key = entry.getKey();
+        List<MappingGroup> sources = entry.getValue();
+        MappingGroup target = key == null ? myUnresolvedGroup : myGroups.get(key);
+        if (target == null) {
+          target = new MappingGroup(seqShift + sources.get(0).myCreationSeq);
+          if (key == null) {
+            myUnresolvedGroup = target;
+          } else {
+            myGroups.put(key, target);
+          }
+          if (sources.size() == 1) {
+            target.copyFrom(sources.get(0), textBase, seqShift);
+            continue;
+          }
+        }
+        mergeInto(target, sources, textBase, seqShift);
+      }
+      myNextSeq = seqShift + source.myNextSeq;
+    }
+
+    private static void mergeInto(MappingGroup target, List<MappingGroup> sources, int textBase, int seqShift) {
+      if (sources.size() == 1) {
+        MappingGroup source = sources.get(0);
+        for (int i = 0; i < source.mySize; i++) {
+          target.putIfAbsent(source.myOffsets[i], source.myPositions[i] + textBase, source.mySeqs[i] + seqShift);
+        }
+        return;
+      }
+      // The groups' own offsets are unique, but an offset can occur in two of them. Their
+      // insertion sequences decide which comes first.
+      int[] pointers = new int[sources.size()];
+      while (true) {
+        int next = -1;
+        int nextSeq = Integer.MAX_VALUE;
+        for (int i = 0; i < sources.size(); i++) {
+          MappingGroup group = sources.get(i);
+          if (pointers[i] < group.mySize && group.mySeqs[pointers[i]] < nextSeq) {
+            next = i;
+            nextSeq = group.mySeqs[pointers[i]];
+          }
+        }
+        if (next < 0) {
+          return;
+        }
+        MappingGroup group = sources.get(next);
+        int slot = pointers[next]++;
+        target.putIfAbsent(group.myOffsets[slot], group.myPositions[slot] + textBase, group.mySeqs[slot] + seqShift);
+      }
+    }
+
+    void mapPositions(List<Integer> offsetMapping) {
+      if (myUnresolvedGroup != null) {
+        myUnresolvedGroup.mapPositions(offsetMapping);
+      }
+      for (MappingGroup group : myGroups.values()) {
+        group.mapPositions(offsetMapping);
+      }
+    }
+
+    void shift(int shiftOffset) {
+      if (shiftOffset == 0) {
+        return;
+      }
+      if (myUnresolvedGroup != null) {
+        myUnresolvedGroup.shift(shiftOffset);
+      }
+      for (MappingGroup group : myGroups.values()) {
+        group.shift(shiftOffset);
+      }
+    }
+  }
+
+  /** The class and method that own a group of bytecode offsets. */
+  private static final class GroupKey {
     private final String myClass;
     private final String myMethod;
+    private final int myHash;
 
-    public BytecodeMappingKey(int bytecodeOffset, String className, String methodKey) {
-      myBytecodeOffset = bytecodeOffset;
+    GroupKey(String className, String methodKey) {
       myClass = className;
       myMethod = methodKey;
+      myHash = className.hashCode() * 31 + Objects.hashCode(methodKey);
     }
 
     @Override
     public boolean equals(Object o) {
       if (this == o) return true;
       if (o == null || getClass() != o.getClass()) return false;
-      BytecodeMappingKey that = (BytecodeMappingKey)o;
-      return myBytecodeOffset == that.myBytecodeOffset &&
-             Objects.equals(myClass, that.myClass) &&
-             Objects.equals(myMethod, that.myMethod);
+      GroupKey that = (GroupKey)o;
+      return myClass.equals(that.myClass) && Objects.equals(myMethod, that.myMethod);
     }
 
     @Override
     public int hashCode() {
-      return Objects.hash(myBytecodeOffset, myClass, myMethod);
+      return myHash;
+    }
+  }
+
+  /**
+   * One class and method's offsets in insertion order, with an offset index built on first
+   * lookup. Entries are appended, never inserted in the middle; overwriting an offset keeps its
+   * place, as the insertion-ordered map this replaces did.
+   */
+  private static final class MappingGroup {
+    private int[] myOffsets = InterpreterUtil.EMPTY_INT_ARRAY;
+    private int[] myPositions = InterpreterUtil.EMPTY_INT_ARRAY;
+    private int[] mySeqs = InterpreterUtil.EMPTY_INT_ARRAY;
+    private int mySize;
+    private final int myCreationSeq;
+    private int[] myIndex; // offset -> slot + 1; 0 marks a free bucket
+
+    MappingGroup(int creationSeq) {
+      myCreationSeq = creationSeq;
     }
 
-    @Override
-    public String toString() {
-      return myClass + ":" + myMethod + ":" + myBytecodeOffset;
+    int find(int bytecodeOffset) {
+      if (myIndex == null) {
+        buildIndex();
+      }
+      return indexFind(bytecodeOffset);
+    }
+
+    boolean put(int bytecodeOffset, int textOffset, int seq) {
+      if (myIndex == null) {
+        buildIndex();
+      }
+      int slot = indexFind(bytecodeOffset);
+      if (slot >= 0) {
+        myPositions[slot] = textOffset;
+        return false;
+      }
+      insert(bytecodeOffset, textOffset, seq);
+      return true;
+    }
+
+    boolean putIfAbsent(int bytecodeOffset, int textOffset, int seq) {
+      if (myIndex == null) {
+        buildIndex();
+      }
+      if (indexFind(bytecodeOffset) >= 0) {
+        return false;
+      }
+      insert(bytecodeOffset, textOffset, seq);
+      return true;
+    }
+
+    void copyFrom(MappingGroup source, int textBase, int seqShift) {
+      int size = source.mySize;
+      myOffsets = new int[size];
+      myPositions = new int[size];
+      mySeqs = new int[size];
+      System.arraycopy(source.myOffsets, 0, myOffsets, 0, size);
+      if (textBase == 0) {
+        System.arraycopy(source.myPositions, 0, myPositions, 0, size);
+      } else {
+        for (int i = 0; i < size; i++) {
+          myPositions[i] = source.myPositions[i] + textBase;
+        }
+      }
+      if (seqShift == 0) {
+        System.arraycopy(source.mySeqs, 0, mySeqs, 0, size);
+      } else {
+        for (int i = 0; i < size; i++) {
+          mySeqs[i] = source.mySeqs[i] + seqShift;
+        }
+      }
+      mySize = size;
+    }
+
+    void mapPositions(List<Integer> offsetMapping) {
+      for (int i = 0; i < mySize; i++) {
+        int position = myPositions[i];
+        myPositions[i] = position + offsetMapping.get(position);
+      }
+    }
+
+    void shift(int shiftOffset) {
+      for (int i = 0; i < mySize; i++) {
+        myPositions[i] = Math.max(0, myPositions[i] + shiftOffset);
+      }
+    }
+
+    private void insert(int bytecodeOffset, int textOffset, int seq) {
+      if (mySize == myOffsets.length) {
+        grow();
+      }
+      int slot = mySize++;
+      myOffsets[slot] = bytecodeOffset;
+      myPositions[slot] = textOffset;
+      mySeqs[slot] = seq;
+      if (mySize * 2 > myIndex.length) {
+        buildIndex();
+      } else {
+        addToIndex(slot);
+      }
+    }
+
+    private void grow() {
+      int capacity = Math.max(4, myOffsets.length * 2);
+      myOffsets = Arrays.copyOf(myOffsets, capacity);
+      myPositions = Arrays.copyOf(myPositions, capacity);
+      mySeqs = Arrays.copyOf(mySeqs, capacity);
+    }
+
+    private void buildIndex() {
+      int capacity = 4;
+      while (capacity < mySize * 2) {
+        capacity <<= 1;
+      }
+      myIndex = new int[capacity];
+      for (int i = 0; i < mySize; i++) {
+        addToIndex(i);
+      }
+    }
+
+    private void addToIndex(int slot) {
+      int mask = myIndex.length - 1;
+      int bucket = mix(myOffsets[slot]) & mask;
+      while (myIndex[bucket] != 0) {
+        bucket = (bucket + 1) & mask;
+      }
+      myIndex[bucket] = slot + 1;
+    }
+
+    private int indexFind(int bytecodeOffset) {
+      int mask = myIndex.length - 1;
+      int bucket = mix(bytecodeOffset) & mask;
+      while (true) {
+        int slot = myIndex[bucket];
+        if (slot == 0) {
+          return -1;
+        }
+        if (myOffsets[slot - 1] == bytecodeOffset) {
+          return slot - 1;
+        }
+        bucket = (bucket + 1) & mask;
+      }
+    }
+
+    private static int mix(int value) {
+      value ^= value >>> 16;
+      value *= 0x7feb352d;
+      value ^= value >>> 15;
+      return value;
     }
   }
 
