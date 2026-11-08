@@ -27,3 +27,6 @@ bin
 ## Experimental pipeline output
 /.dev/
 /devtools/build/
+
+# Kotlin compiler session cache
+/.kotlin/
