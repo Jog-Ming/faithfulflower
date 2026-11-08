@@ -40,6 +40,11 @@ import java.util.stream.Collectors;
 public class StackVarsProcessor {
   private static final StackSimplifyOptions DEFAULT_OPTIONS = new StackSimplifyOptions();
 
+  // What iterateStatements reports: the exprents it rewrote, and the statements it touched
+  // without counting them as a change (the loop-form downgrade below).
+  private static final int ITERATE_CHANGED = 1;
+  private static final int ITERATE_TOUCHED = 2;
+
   public static void simplifyStackVars(RootStatement root, StructMethod mt, StructClass cl) {
     simplifyStackVars(root, mt, cl, DEFAULT_OPTIONS);
   }
@@ -47,6 +52,7 @@ public class StackVarsProcessor {
   public static void simplifyStackVars(RootStatement root, StructMethod mt, StructClass cl, StackSimplifyOptions options) {
     Set<Integer> setReorderedIfs = new HashSet<>();
     SSAUConstructorSparseEx ssau = null;
+    boolean finalPass = true;
     while (true) {
       boolean found = false;
       boolean first = ssau == null;
@@ -72,7 +78,8 @@ public class StackVarsProcessor {
         ValidationHelper.validateStatement(root);
       }
 
-      if (iterateStatements(root, ssau, options)) {
+      int iterated = iterateStatements(root, ssau, options);
+      if ((iterated & ITERATE_CHANGED) != 0) {
         ValidationHelper.validateStatement(root);
         found = true;
       }
@@ -80,18 +87,24 @@ public class StackVarsProcessor {
       setVersionsToNull(root);
 
       if (!found) {
+        // The trailing pass would rebuild the same SSAU over a tree this iteration did not change
+        // and reach the same verdict, so it can only find work when the traversal rewrote
+        // something it does not report as a change: a `for` head downgraded to a `while`.
+        finalPass = (iterated & ITERATE_TOUCHED) != 0;
         break;
       }
     }
 
-    // remove unused assignments
-    ssau = new SSAUConstructorSparseEx();
-    ssau.splitVariables(root, mt);
-    ValidationHelper.validateStatement(root);
+    if (finalPass) {
+      // remove unused assignments
+      ssau = new SSAUConstructorSparseEx();
+      ssau.splitVariables(root, mt);
+      ValidationHelper.validateStatement(root);
 
-    iterateStatements(root, ssau, options);
+      iterateStatements(root, ssau, options);
 
-    setVersionsToNull(root);
+      setVersionsToNull(root);
+    }
   }
 
   public static void setVersionsToNull(Statement stat) {
@@ -120,11 +133,12 @@ public class StackVarsProcessor {
     }
   }
 
-  private static boolean iterateStatements(RootStatement root, SSAUConstructorSparseEx ssa, StackSimplifyOptions options) {
+  private static int iterateStatements(RootStatement root, SSAUConstructorSparseEx ssa, StackSimplifyOptions options) {
     FlattenStatementsHelper flatthelper = new FlattenStatementsHelper();
     DirectGraph dgraph = flatthelper.buildDirectGraph(root);
 
     boolean res = false;
+    boolean touched = false;
 
     Set<DirectNode> setVisited = new HashSet<>();
     LinkedList<DirectNode> stack = new LinkedList<>();
@@ -236,6 +250,7 @@ public class StackVarsProcessor {
               loop.getIncExprent() == null &&
               RoundTrip.headerLocalAssignedInCondition(loop) == null) { // "downgrade" loop to 'while'
             loop.setLooptype(DoStatement.Type.WHILE);
+            touched = true;
           }
         }
       }
@@ -252,7 +267,7 @@ public class StackVarsProcessor {
       return 0;
     });
 
-    return res;
+    return (res ? ITERATE_CHANGED : 0) | (touched ? ITERATE_TOUCHED : 0);
   }
 
   private static Exprent isReplaceableVar(Exprent exprent, Map<VarVersionPair, Exprent> mapVarValues) {
