@@ -9,9 +9,7 @@ and every other attribute.
 ## DISCLAIMER
 
 faithfulflower is developed with AI assistance: research, implementation and measurement are
-carried out together with Claude (Anthropic's Claude Code), and this README is written by AI. Every
-decompile is a deterministic Vineflower run followed by deterministic passes, and the verifier
-decides every change byte for byte.
+carried out together with Claude (Anthropic's Claude Code), and this README is written by AI.
 
 The project is tested only against unobfuscated Minecraft builds. Byte-for-byte fidelity is not
 promised for other Java applications, whose compilers, debug info and language levels differ.
