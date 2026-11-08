@@ -48,6 +48,7 @@ import org.jetbrains.java.decompiler.util.collections.NullableConcurrentHashMap;
 import java.io.IOException;
 import java.lang.reflect.Method;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BiFunction;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
@@ -5305,16 +5306,43 @@ public class InvocationExprent extends Exprent {
     return getMatchedDescriptors(varargs, null);
   }
 
-  private List<StructMethod> getMatchedDescriptors(boolean varargs, @Nullable BiFunction<StructMethod, MethodDescriptor, Boolean> customParamMatcher) {
-    List<StructMethod> matches = new ArrayList<>();
-    ClassNode currCls = DecompilerContext.getContextProperty(DecompilerContext.CURRENT_CLASS_NODE);
-    StructClass cl = DecompilerContext.getStructContext().getClass(classname);
-    if (cl == null) return matches;
-    StructMethod currentMethod = cl.getMethod(InterpreterUtil.makeUniqueKey(name, stringDescriptor));
+  /**
+   * The same-named methods the descriptor matcher may consider, in the exact order the original
+   * breadth-first walk over {@code receiver}'s class hierarchy visited them (including a class
+   * reached through several paths, which that walk visits once per path). {@code ownCount} is how
+   * many entries come from the receiver itself: once those have been matched and any of them
+   * matched, the walk stopped there. The list depends only on the class file hierarchy under
+   * {@code receiver}, so every call with the same class and name reuses it.
+   */
+  private record CandidateMethods(List<StructMethod> methods, int ownCount) {}
+
+  private record MethodLookupKey(StructClass receiver, String name) {}
+
+  private static final Map<MethodLookupKey, CandidateMethods> METHOD_CANDIDATES = new ConcurrentHashMap<>();
+
+  /** Releases the cached candidate lists; they reference this run's struct classes. */
+  public static void clearMethodCandidates() {
+    METHOD_CANDIDATES.clear();
+  }
+
+  private static CandidateMethods candidateMethods(StructClass receiver, String name) {
+    MethodLookupKey key = new MethodLookupKey(receiver, name);
+    CandidateMethods cached = METHOD_CANDIDATES.get(key);
+    if (cached != null) {
+      return cached;
+    }
+    CandidateMethods built = collectCandidateMethods(receiver, name);
+    CandidateMethods prior = METHOD_CANDIDATES.putIfAbsent(key, built);
+    return prior != null ? prior : built;
+  }
+
+  private static CandidateMethods collectCandidateMethods(StructClass receiver, String name) {
+    List<StructMethod> methods = new ArrayList<>();
+    int ownCount = 0;
 
     Set<String> visited = new HashSet<>();
     Queue<StructClass> que = new ArrayDeque<>();
-    que.add(cl);
+    que.add(receiver);
 
     while (!que.isEmpty()) {
       StructClass cls = que.poll();
@@ -5323,25 +5351,12 @@ public class InvocationExprent extends Exprent {
 
       for (StructMethod mt : cls.getMethods()) {
         if (name.equals(mt.getName())) {
-          MethodDescriptor md = mt.plainDescriptor();
-          boolean matchedParams;
-          if (customParamMatcher == null) {
-            if (varargs) {
-              matchedParams = matchesVarargs(md.params, descriptor.params, mt, currentMethod);
-            } else {
-              matchedParams = matches(md.params, descriptor.params);
-            }
-          } else {
-            matchedParams = customParamMatcher.apply(mt, md);
-          }
-          if (matchedParams && (currCls == null || canAccess(currCls.classStruct, mt))) {
-            matches.add(mt);
-          }
+          methods.add(mt);
         }
       }
 
-      if (cls == cl && !matches.isEmpty()) {
-        return matches;
+      if (cls == receiver) {
+        ownCount = methods.size();
       }
 
       visited.add(cls.qualifiedName);
@@ -5361,6 +5376,41 @@ public class InvocationExprent extends Exprent {
         }
       }
 
+    }
+
+    return new CandidateMethods(methods, ownCount);
+  }
+
+  private List<StructMethod> getMatchedDescriptors(boolean varargs, @Nullable BiFunction<StructMethod, MethodDescriptor, Boolean> customParamMatcher) {
+    List<StructMethod> matches = new ArrayList<>();
+    ClassNode currCls = DecompilerContext.getContextProperty(DecompilerContext.CURRENT_CLASS_NODE);
+    StructClass cl = DecompilerContext.getStructContext().getClass(classname);
+    if (cl == null) return matches;
+    StructMethod currentMethod = cl.getMethod(InterpreterUtil.makeUniqueKey(name, stringDescriptor));
+
+    CandidateMethods candidates = candidateMethods(cl, name);
+    List<StructMethod> methods = candidates.methods();
+    int ownCount = candidates.ownCount();
+    for (int i = 0; i < methods.size(); i++) {
+      StructMethod mt = methods.get(i);
+      MethodDescriptor md = mt.plainDescriptor();
+      boolean matchedParams;
+      if (customParamMatcher == null) {
+        if (varargs) {
+          matchedParams = matchesVarargs(md.params, descriptor.params, mt, currentMethod);
+        } else {
+          matchedParams = matches(md.params, descriptor.params);
+        }
+      } else {
+        matchedParams = customParamMatcher.apply(mt, md);
+      }
+      if (matchedParams && (currCls == null || canAccess(currCls.classStruct, mt))) {
+        matches.add(mt);
+      }
+
+      if (i + 1 == ownCount && !matches.isEmpty()) {
+        return matches;
+      }
     }
 
     return matches;

@@ -13,6 +13,7 @@ import org.jetbrains.java.decompiler.api.plugin.PluginSource;
 import org.jetbrains.java.decompiler.main.plugins.PluginSources;
 import org.jetbrains.java.decompiler.modules.decompiler.LocalDeclarationOrder;
 import org.jetbrains.java.decompiler.modules.decompiler.RoundTrip;
+import org.jetbrains.java.decompiler.modules.decompiler.exps.InvocationExprent;
 import org.jetbrains.java.decompiler.modules.renamer.ConverterHelper;
 import org.jetbrains.java.decompiler.modules.renamer.IdentifierConverter;
 import org.jetbrains.java.decompiler.modules.renamer.PoolInterceptor;
@@ -167,6 +168,7 @@ public class Fernflower implements IDecompiledData {
     // the context, or a long-lived process keeps every decompiled method reachable.
     RoundTrip.clear();
     LocalDeclarationOrder.clear();
+    InvocationExprent.clearMethodCandidates();
     DecompilerContext.setCurrentContext(null);
   }
 
