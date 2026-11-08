@@ -16,6 +16,7 @@ import org.jetbrains.java.decompiler.util.Pair;
 import org.jetbrains.java.decompiler.util.TextBuffer;
 
 import java.util.ArrayList;
+import java.util.BitSet;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -67,6 +68,8 @@ public final class LineAlign {
     }
     String separator = DecompilerContext.getNewLineSeparator();
     String[] lines = text.split(java.util.regex.Pattern.quote(separator), -1);
+    // The text-block state of every line, read once per text; every query below is then O(1).
+    int[] textBlocks = textBlockPrefix(lines);
 
     Map<Pair<String, String>, BytecodeMappingTracer> tracers;
     try {
@@ -76,10 +79,12 @@ public final class LineAlign {
     }
     applyFieldDeclarationAnchors(tracers);
 
-    String joined = joinSameTargetLines(text, separator, lines, tracers, lineRecords(tracers, lines));
+    String joined = joinSameTargetLines(text, separator, lines, tracers,
+      lineRecords(tracers, lines), textBlocks);
     if (joined != null) {
       text = joined;
       lines = text.split(java.util.regex.Pattern.quote(separator), -1);
+      textBlocks = textBlockPrefix(lines);
     }
     LineRecords records = lineRecords(tracers, lines);
 
@@ -146,17 +151,17 @@ public final class LineAlign {
     }
 
     List<int[]> inserts = new ArrayList<>();
-    List<Integer> removals = new ArrayList<>();
-    List<Integer> joins = new ArrayList<>();
+    BitSet removals = new BitSet();
+    BitSet joins = new BitSet();
     if (!walkGaps(lines, shifts, unmergeable, inherited, entryLines, joinBlocked, records, inserts,
-        removals, joins)) {
+        removals, joins, textBlocks)) {
       return text;
     }
     if (debug) {
       System.err.println("align " + text.hashCode() + " shifts " + shifts.size()
         + " conflicts " + conflicted.size()
         + " inserts " + inserts.stream().map(a -> a[0] + "+" + a[1]).toList()
-        + " removals " + removals.size() + " joins " + joins.size());
+        + " removals " + removals.cardinality() + " joins " + joins.cardinality());
       String dump = System.getenv("FAITHFULFLOWER_LINEALIGN_DUMP");
       if (dump != null) {
         String[] range = dump.split(",");
@@ -175,10 +180,10 @@ public final class LineAlign {
     for (int[] insert : inserts) {
       edits.add(new int[]{insert[0], 0, insert[1]});
     }
-    for (int removal : removals) {
+    for (int removal = removals.nextSetBit(0); removal >= 0; removal = removals.nextSetBit(removal + 1)) {
       edits.add(new int[]{removal, 1, 0});
     }
-    for (int join : joins) {
+    for (int join = joins.nextSetBit(0); join >= 0; join = joins.nextSetBit(join + 1)) {
       edits.add(new int[]{join, 2, 0});
     }
     edits.sort((a, b) -> Integer.compare(b[0], a[0]));
@@ -279,7 +284,8 @@ public final class LineAlign {
    * begin a statement, so a preceding line with no entry start of its own belongs to it.
    */
   private static String joinSameTargetLines(String text, String separator, String[] lines,
-      Map<Pair<String, String>, BytecodeMappingTracer> tracers, LineRecords records) {
+      Map<Pair<String, String>, BytecodeMappingTracer> tracers, LineRecords records,
+      int[] textBlocks) {
     Map<Integer, Integer> target = new java.util.HashMap<>();
     Map<Integer, String> owner = new java.util.HashMap<>();
     Set<Integer> mixed = new HashSet<>();
@@ -323,9 +329,10 @@ public final class LineAlign {
     }
     java.util.TreeSet<Integer> joins = new java.util.TreeSet<>();
     Map<Integer, Integer> joinAbove = new java.util.HashMap<>();
-    java.util.TreeSet<Integer> removedLines = new java.util.TreeSet<>();
+    boolean[] removedLine = new boolean[lines.length + 1];
     for (int line = 2; line <= lines.length; line++) {
-      if (owner.get(line) == null || sharedOwner.contains(line) || !mergeableWithEvidence(lines, line)) {
+      if (owner.get(line) == null || sharedOwner.contains(line)
+          || !mergeableWithEvidence(lines, line, textBlocks)) {
         continue;
       }
       // A blank line or a label standing alone is not a line of the original: the aligner deletes
@@ -333,7 +340,7 @@ public final class LineAlign {
       // printer put one between them; the skipped lines move onto the joined line with it.
       int aboveLine = line - 1;
       while (aboveLine >= 1 && owner.get(aboveLine) == null && skippablePad(lines[aboveLine - 1])
-          && !insideTextBlock(lines, aboveLine - 1)) {
+          && !insideTextBlock(textBlocks, aboveLine - 1)) {
         aboveLine--;
       }
       if (aboveLine < 1 || owner.get(aboveLine) == null || sharedOwner.contains(aboveLine)) {
@@ -367,12 +374,17 @@ public final class LineAlign {
         joins.add(line);
         joinAbove.put(line, aboveLine);
         for (int removed = line; removed > aboveLine; removed--) {
-          removedLines.add(removed);
+          removedLine[removed] = true;
         }
       }
     }
     if (joins.isEmpty()) {
       return null;
+    }
+    // The number of removed lines at or above each line, so the mapping shift is one lookup.
+    int[] removedPrefix = new int[lines.length + 1];
+    for (int i = 1; i <= lines.length; i++) {
+      removedPrefix[i] = removedPrefix[i - 1] + (removedLine[i] ? 1 : 0);
     }
     List<String> edited = new ArrayList<>(List.of(lines));
     for (int line : joins.descendingSet()) {
@@ -389,7 +401,8 @@ public final class LineAlign {
     for (BytecodeMappingTracer tracer : tracers.values()) {
       for (Map.Entry<Integer, Integer> entry : tracer.getMapping().entrySet()) {
         int line = entry.getValue() + 1;
-        int removed = removedLines.headSet(line, true).size();
+        int removed = line < 1 ? 0
+          : removedPrefix[Math.min(line, lines.length)];
         entry.setValue(line - removed - 1);
       }
     }
@@ -582,12 +595,12 @@ public final class LineAlign {
   }
 
   /** A line that may be joined onto the one above: no comment, no blank, not in a text block. */
-  private static boolean mergeableWithEvidence(String[] lines, int lineNumber) {
+  private static boolean mergeableWithEvidence(String[] lines, int lineNumber, int[] textBlocks) {
     int index = lineNumber - 1;
     if (index <= 0 || index >= lines.length) {
       return false;
     }
-    if (insideTextBlock(lines, index) || insideTextBlock(lines, index - 1)) {
+    if (insideTextBlock(textBlocks, index) || insideTextBlock(textBlocks, index - 1)) {
       return false;
     }
     if (lines[index - 1].contains("//") || lines[index - 1].contains("/*") || lines[index].contains("*/")) {
@@ -1644,8 +1657,8 @@ public final class LineAlign {
    */
   private static boolean walkGaps(String[] lines, TreeMap<Integer, Integer> shifts,
       Set<Integer> unmergeable, Set<Integer> inherited, Set<Integer> entryLines,
-      Set<Integer> joinBlocked, LineRecords records, List<int[]> inserts, List<Integer> removals,
-      List<Integer> joins) {
+      Set<Integer> joinBlocked, LineRecords records, List<int[]> inserts, BitSet removals,
+      BitSet joins, int[] textBlocks) {
     List<int[]> placed = new ArrayList<>(); // {index, paid shift, required shift}
     int previous = 0;
     int previousIndex = -1;
@@ -1657,7 +1670,7 @@ public final class LineAlign {
       }
       int paid = desired;
       if (desired > previous) {
-        if (insideTextBlock(lines, index)) {
+        if (insideTextBlock(textBlocks, index)) {
           return false;
         }
         inserts.add(new int[]{index, desired - previous});
@@ -1667,8 +1680,8 @@ public final class LineAlign {
         int need = want;
         int lowest = previousIndex;
         for (int i = Math.min(index - 1, lines.length - 1); i > lowest && need > 0; i--) {
-          if (removable(lines, i) && !removals.contains(i)) {
-            removals.add(i);
+          if (removable(lines, i, textBlocks) && !removals.get(i)) {
+            removals.set(i);
             need--;
           }
         }
@@ -1681,16 +1694,16 @@ public final class LineAlign {
             boolean anchorLine = i == index
               && selfJoinSafe(entry.getKey(), desired, shifts, unmergeable, inherited, entryLines);
             // A join moves line i onto line i-1, so neither may be a line another edit deletes.
-            if (joinable(lines, i, entryLines, anchorLine)
+            if (joinable(lines, i, entryLines, anchorLine, textBlocks)
                 && joinRecordsSupport(i + 1, i, entry.getKey() + desired, records)
-                && !removals.contains(i) && !removals.contains(i - 1) && !joins.contains(i)) {
-              joins.add(i);
+                && !removals.get(i) && (i <= 0 || !removals.get(i - 1)) && !joins.get(i)) {
+              joins.set(i);
               need--;
             }
           }
         }
         if (need > 0) {
-          need -= reclaim(lines, need, previousIndex, placed, removals, joins);
+          need -= reclaim(lines, need, previousIndex, placed, removals, joins, textBlocks);
         }
         paid = previous - (want - need);
         if (debug && need > 0) {
@@ -1712,7 +1725,7 @@ public final class LineAlign {
    * moves them closer instead of past them. Returns how many lines were taken.
    */
   private static int reclaim(String[] lines, int need, int previousIndex, List<int[]> placed,
-      List<Integer> removals, List<Integer> joins) {
+      BitSet removals, BitSet joins, int[] textBlocks) {
     int found = 0;
     int anchor = placed.size() - 1;
     int limit = Integer.MAX_VALUE;
@@ -1725,9 +1738,9 @@ public final class LineAlign {
         break;
       }
       // A join planned on line i or i-1 claims this one; deleting it would take text with it.
-      if (removable(lines, i) && !removals.contains(i)
-          && !joins.contains(i) && !joins.contains(i + 1)) {
-        removals.add(i);
+      if (removable(lines, i, textBlocks) && !removals.get(i)
+          && !joins.get(i) && !joins.get(i + 1)) {
+        removals.set(i);
         found++;
         need--;
         limit--;
@@ -1772,7 +1785,8 @@ public final class LineAlign {
     return aboveShift != null && aboveShift == desired + 1;
   }
 
-  private static boolean joinable(String[] lines, int index, Set<Integer> entryLines, boolean anchorLine) {
+  private static boolean joinable(String[] lines, int index, Set<Integer> entryLines,
+      boolean anchorLine, int[] textBlocks) {
     if (index <= 0 || index >= lines.length) {
       return false;
     }
@@ -1782,7 +1796,7 @@ public final class LineAlign {
     if (index == lines.length - 1 && lines[index].isEmpty()) {
       return false;
     }
-    if (insideTextBlock(lines, index) || insideTextBlock(lines, index - 1)) {
+    if (insideTextBlock(textBlocks, index) || insideTextBlock(textBlocks, index - 1)) {
       return false;
     }
     if (lines[index - 1].contains("//") || lines[index - 1].contains("/*") || lines[index].contains("*/")) {
@@ -1791,7 +1805,7 @@ public final class LineAlign {
     return !lines[index].trim().isEmpty();
   }
 
-  private static boolean removable(String[] lines, int index) {
+  private static boolean removable(String[] lines, int index, int[] textBlocks) {
     if (index < 0 || index >= lines.length) {
       return false;
     }
@@ -1799,12 +1813,19 @@ public final class LineAlign {
       return false;
     }
     String trimmed = lines[index].trim();
-    return (trimmed.isEmpty() || trimmed.equals(PADDING)) && !insideTextBlock(lines, index);
+    return (trimmed.isEmpty() || trimmed.equals(PADDING)) && !insideTextBlock(textBlocks, index);
   }
 
-  private static boolean insideTextBlock(String[] lines, int index) {
+  /**
+   * The count of text-block delimiters before each line: entry {@code k} holds the number of
+   * {@code """} occurrences in lines {@code 0} to {@code k - 1}. Every occurrence on a line counts,
+   * and the parity that decides whether a line sits inside a text block then costs one lookup
+   * instead of a scan from the top of the file.
+   */
+  private static int[] textBlockPrefix(String[] lines) {
+    int[] prefix = new int[lines.length + 1];
     int delimiters = 0;
-    for (int i = 0; i < index && i < lines.length; i++) {
+    for (int i = 0; i < lines.length; i++) {
       int from = 0;
       while (true) {
         int at = lines[i].indexOf("\"\"\"", from);
@@ -1814,7 +1835,16 @@ public final class LineAlign {
         delimiters++;
         from = at + 3;
       }
+      prefix[i + 1] = delimiters;
     }
-    return delimiters % 2 == 1;
+    return prefix;
+  }
+
+  /** True when the line at {@code index} sits inside a text block, by delimiter parity above it. */
+  private static boolean insideTextBlock(int[] textBlocks, int index) {
+    if (index < 0) {
+      return false;
+    }
+    return textBlocks[Math.min(index, textBlocks.length - 1)] % 2 == 1;
   }
 }
