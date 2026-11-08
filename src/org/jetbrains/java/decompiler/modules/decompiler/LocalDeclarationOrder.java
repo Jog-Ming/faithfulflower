@@ -75,11 +75,15 @@ public final class LocalDeclarationOrder {
 
     collapseAssignedWrappers(root, method);
     NameTable names = NameTable.build(root);
-    hoistAcrossStatements(root, varproc, names, method);
-    hoistReserved(root, varproc, names, method);
-    reorderWithinList(root, varproc);
-    hoistToPrintedOrder(root, varproc, names, method);
-    placeByScope(root, names, method);
+    // A declaration move never changes which fields a subtree names: every moved exprent is a
+    // bare variable, and the one phase that relocates a whole initializing assignment keeps it
+    // inside its own statement's subtree. One cache therefore serves every phase of this method.
+    FieldNames fields = new FieldNames();
+    hoistAcrossStatements(root, varproc, names, fields, method);
+    hoistReserved(root, varproc, names, fields, method);
+    reorderWithinList(root, varproc, fields);
+    hoistToPrintedOrder(root, varproc, names, fields, method);
+    placeByScope(root, names, fields, method);
   }
 
   /**
@@ -98,21 +102,21 @@ public final class LocalDeclarationOrder {
    * </ul>
    * Only declarations move and every store stays where it printed; no evaluation order changes.
    */
-  private static void placeByScope(Statement stat, NameTable names, String method) {
+  private static void placeByScope(Statement stat, NameTable names, FieldNames fields, String method) {
     if (stat instanceof DoStatement loop) {
-      placeAboveLoop(loop, names, method);
+      placeAboveLoop(loop, names, fields, method);
     } else if (stat instanceof IfStatement ifStatement) {
-      if (!mergeChainDeclarations(ifStatement, names, method)) {
-        mergeArmDeclarations(ifStatement, names, method);
-        hoistArmDeclarations(ifStatement, method);
+      if (!mergeChainDeclarations(ifStatement, names, fields, method)) {
+        mergeArmDeclarations(ifStatement, names, fields, method);
+        hoistArmDeclarations(ifStatement, fields, method);
       }
     } else if (stat instanceof CatchAllStatement tryStatement) {
-      placeInsideFinally(tryStatement, names, method);
+      placeInsideFinally(tryStatement, names, fields, method);
     } else if (stat instanceof SwitchStatement switchStatement) {
-      hoistSwitchArmDeclarations(switchStatement, names, method);
+      hoistSwitchArmDeclarations(switchStatement, names, fields, method);
     }
     for (Statement child : stat.getStats()) {
-      placeByScope(child, names, method);
+      placeByScope(child, names, fields, method);
     }
   }
 
@@ -162,7 +166,7 @@ public final class LocalDeclarationOrder {
    * loop: the body's own scope ends at the back edge, so the target proves the source declared it
    * in the enclosing block and assigned it in the body.
    */
-  private static void placeAboveLoop(DoStatement loop, NameTable names, String method) {
+  private static void placeAboveLoop(DoStatement loop, NameTable names, FieldNames fields, String method) {
     // Only a `while (true)` loop that ends the method: its body closes at the back edge, so a
     // local declared in the body keeps a row ending there, while a local declared above the loop
     // spans the whole method. A for-each loop is never taken: its body's scope closes after the
@@ -188,7 +192,7 @@ public final class LocalDeclarationOrder {
         || row.getStart() < start || row.getEnd() != methodEnd || rangeEnd != methodEnd) {
       return;
     }
-    if ((!names.uniqueName(var) && !names.sameSlotName(var)) || mentionsField(loop, var.getName())) {
+    if ((!names.uniqueName(var) && !names.sameSlotName(var)) || fields.mentions(loop, var.getName())) {
       debug(method, var, "rejected: loop-hoisted declaration would capture a name");
       return;
     }
@@ -211,7 +215,7 @@ public final class LocalDeclarationOrder {
    * variable ends past the if: javac splits the range at the join but keeps a frame that names
    * the local there, so the source declared it before the test and only assigned it in the arms.
    */
-  private static void mergeArmDeclarations(IfStatement ifStatement, NameTable names, String method) {
+  private static void mergeArmDeclarations(IfStatement ifStatement, NameTable names, FieldNames fields, String method) {
     PrefixDef thenDef = firstPrefixDefinition(ifStatement.getIfstat());
     PrefixDef elseDef = firstPrefixDefinition(ifStatement.getElsestat());
     if (thenDef == null || elseDef == null) {
@@ -242,7 +246,7 @@ public final class LocalDeclarationOrder {
     if (!thenJoins && !elseJoins) {
       return;
     }
-    if ((!names.uniqueName(thenVar) && !names.sameSlotName(thenVar)) || mentionsField(ifStatement, thenVar.getName())) {
+    if ((!names.uniqueName(thenVar) && !names.sameSlotName(thenVar)) || fields.mentions(ifStatement, thenVar.getName())) {
       debug(method, thenVar, "rejected: merged arm declaration would capture a name");
       return;
     }
@@ -262,7 +266,7 @@ public final class LocalDeclarationOrder {
    * block's rows and follows them shares their scope. The source declared the local bare before
    * the test and only assigned it inside the arm.
    */
-  private static void hoistArmDeclarations(IfStatement ifStatement, String method) {
+  private static void hoistArmDeclarations(IfStatement ifStatement, FieldNames fields, String method) {
     Statement body = ifStatement.getIfstat();
     Statement parent = ifStatement.getParent();
     int testStart = RoundTrip.firstOffset(ifStatement);
@@ -299,7 +303,7 @@ public final class LocalDeclarationOrder {
       }
       // The declaration widens into the test's own head, so a field or another local the block
       // names must not share the name it would capture.
-      if (mentionsField(parent, var.getName()) || mentionsOtherName(parent, var)) {
+      if (fields.mentions(parent, var.getName()) || mentionsOtherName(parent, var)) {
         debug(method, var, "rejected: hoisted arm declaration would capture a name");
         return;
       }
@@ -411,7 +415,8 @@ public final class LocalDeclarationOrder {
    * variable declared there is in scope in every arm and cannot be redeclared inside one, so every
    * arm's matching first definition is the same source variable.
    */
-  private static boolean mergeChainDeclarations(IfStatement first, NameTable names, String method) {
+  private static boolean mergeChainDeclarations(IfStatement first, NameTable names, FieldNames fields,
+                                                String method) {
     List<IfStatement> links = new ArrayList<>();
     List<PrefixDef> defs = new ArrayList<>();
     List<VarExprent> vars = new ArrayList<>();
@@ -469,7 +474,7 @@ public final class LocalDeclarationOrder {
       }
     }
     VarExprent merged = vars.get(0);
-    if ((!names.uniqueName(merged) && !names.sameSlotName(merged)) || mentionsField(first, merged.getName())) {
+    if ((!names.uniqueName(merged) && !names.sameSlotName(merged)) || fields.mentions(first, merged.getName())) {
       debug(method, merged, "rejected: chain-merged declaration would capture a name");
       return false;
     }
@@ -518,7 +523,7 @@ public final class LocalDeclarationOrder {
    * prefix's declarations names the place the source wrote it.
    */
   private static boolean hoistSwitchArmDeclarations(SwitchStatement switchStatement, NameTable names,
-                                                    String method) {
+                                                    FieldNames fields, String method) {
     List<Statement> stats = switchStatement.getStats();
     if (stats.size() < 2) {
       return false;
@@ -555,7 +560,7 @@ public final class LocalDeclarationOrder {
         if (anchor == null) {
           continue;
         }
-        if ((!names.uniqueName(var) && !names.sameSlotName(var)) || mentionsField(switchStatement, var.getName())) {
+        if ((!names.uniqueName(var) && !names.sameSlotName(var)) || fields.mentions(switchStatement, var.getName())) {
           debug(method, var, "rejected: switch-hoisted declaration would capture a name");
           continue;
         }
@@ -632,7 +637,8 @@ public final class LocalDeclarationOrder {
    * inside the try: the body's scope closes at the protected range's end, above the handler, so
    * the target proves the source wrote the declaration inside the braces.
    */
-  private static void placeInsideFinally(CatchAllStatement tryStatement, NameTable names, String method) {
+  private static void placeInsideFinally(CatchAllStatement tryStatement, NameTable names, FieldNames fields,
+                                         String method) {
     Statement body = tryStatement.getFirst();
     if (body == null) {
       return;
@@ -651,7 +657,7 @@ public final class LocalDeclarationOrder {
       if (row.getEnd() <= bodyEnd || row.getEnd() >= tryEnd) {
         continue;
       }
-      if ((!names.uniqueName(var) && !names.sameSlotName(var)) || mentionsField(tryStatement, var.getName())) {
+      if ((!names.uniqueName(var) && !names.sameSlotName(var)) || fields.mentions(tryStatement, var.getName())) {
         debug(method, var, "rejected: try-body declaration would capture a name");
         continue;
       }
@@ -767,21 +773,24 @@ public final class LocalDeclarationOrder {
    * slot no table row names, and that slot can explain the witness's number instead, so a method
    * with any such slot is refused.
    */
-  private static void hoistReserved(Statement root, VarProcessor varproc, NameTable names, String method) {
-    hoistReservedRec(root, varproc, names, method);
+  private static void hoistReserved(Statement root, VarProcessor varproc, NameTable names, FieldNames fields,
+                                    String method) {
+    hoistReservedRec(root, varproc, names, fields, method);
   }
 
-  private static void hoistReservedRec(Statement stat, VarProcessor varproc, NameTable names, String method) {
+  private static void hoistReservedRec(Statement stat, VarProcessor varproc, NameTable names, FieldNames fields,
+                                       String method) {
     if (stat.type == Statement.StatementType.SEQUENCE
         || (stat.type == Statement.StatementType.ROOT && onlyBasicBlocks(stat))) {
-      hoistReservedInSequence(stat, varproc, names, method);
+      hoistReservedInSequence(stat, varproc, names, fields, method);
     }
     for (Statement child : stat.getStats()) {
-      hoistReservedRec(child, varproc, names, method);
+      hoistReservedRec(child, varproc, names, fields, method);
     }
   }
 
-  private static void hoistReservedInSequence(Statement seq, VarProcessor varproc, NameTable names, String method) {
+  private static void hoistReservedInSequence(Statement seq, VarProcessor varproc, NameTable names,
+                                              FieldNames fields, String method) {
     StructMethod structMethod = RoundTrip.currentMethod();
     if (structMethod == null || hiddenLocals(structMethod)) {
       return;
@@ -792,7 +801,7 @@ public final class LocalDeclarationOrder {
     // the landing too).
     while (true) {
       List<Position> order = declarationOrder(seq, varproc);
-      if (!hoistReservedOne(seq, order, rows, names, method)) {
+      if (!hoistReservedOne(seq, order, rows, names, fields, method)) {
         return;
       }
     }
@@ -800,7 +809,7 @@ public final class LocalDeclarationOrder {
 
   private static boolean hoistReservedOne(Statement seq, List<Position> order,
                                           java.util.Map<Integer, List<LocalVariable>> rows,
-                                          NameTable names, String method) {
+                                          NameTable names, FieldNames fields, String method) {
     List<Statement> children = seq.getStats();
     for (int i = 1; i < order.size(); i++) {
       Position position = order.get(i);
@@ -843,7 +852,7 @@ public final class LocalDeclarationOrder {
         debug(method, var, "rejected: the catch header declares it");
         continue;
       }
-      if (mentionsField(seq, var.getName()) || mentionsField(landing.owner, var.getName())) {
+      if (fields.mentions(seq, var.getName()) || fields.mentions(landing.owner, var.getName())) {
         debug(method, var, "rejected: the landing block names a field " + var.getName());
         continue;
       }
@@ -1011,7 +1020,8 @@ public final class LocalDeclarationOrder {
    * enclosing level: the source wrote `T v;` above the loop and assigned inside it. Only the
    * declaration moves; the value is still computed where it was printed.
    */
-  private static void hoistNestedOut(Statement seq, VarProcessor varproc, NameTable names, String method) {
+  private static void hoistNestedOut(Statement seq, VarProcessor varproc, NameTable names, FieldNames fields,
+                                     String method) {
     int maxSlot = -1;
     for (Exprent definition : seq.getVarDefinitions()) {
       maxSlot = Math.max(maxSlot, targetSlot(definition));
@@ -1062,7 +1072,7 @@ public final class LocalDeclarationOrder {
           }
           // A discontinuous table row of the same name and slot is the same source variable, so
           // its later range's declaration is not a second name the hoist could capture.
-          if ((!names.uniqueName(var) && !names.sameSlotName(var)) || mentionsField(seq, var.getName())) {
+          if ((!names.uniqueName(var) && !names.sameSlotName(var)) || fields.mentions(seq, var.getName())) {
             debug(method, var, "rejected: nested declaration would capture a name");
             continue;
           }
@@ -1103,7 +1113,8 @@ public final class LocalDeclarationOrder {
         if (!handlerSlots.isEmpty()) {
           for (Statement sibling : siblingsAfter(children, child)) {
             for (Exprent definition : new ArrayList<>(sibling.getVarDefinitions())) {
-              hoistOutOfHandlerScope(sibling.getVarDefinitions(), definition, child, handlerSlots, seq, names, method);
+              hoistOutOfHandlerScope(sibling.getVarDefinitions(), definition, child, handlerSlots, seq, names, fields,
+                method);
             }
           }
           List<Statement> inner = new ArrayList<>();
@@ -1112,7 +1123,8 @@ public final class LocalDeclarationOrder {
           }
           for (Statement stat : inner) {
             for (Exprent definition : new ArrayList<>(stat.getVarDefinitions())) {
-              hoistOutOfHandlerScope(stat.getVarDefinitions(), definition, child, handlerSlots, seq, names, method);
+              hoistOutOfHandlerScope(stat.getVarDefinitions(), definition, child, handlerSlots, seq, names, fields,
+                method);
             }
           }
         }
@@ -1144,7 +1156,8 @@ public final class LocalDeclarationOrder {
    * number may measure that local instead.
    */
   private static void hoistOutOfHandlerScope(List<Exprent> list, Exprent definition, Statement tryStatement,
-                                             List<Integer> handlerSlots, Statement seq, NameTable names, String method) {
+                                             List<Integer> handlerSlots, Statement seq, NameTable names,
+                                             FieldNames fields, String method) {
     VarExprent var = definedVar(definition);
     if (var == null || !isRealDefinition(var) || var.getLVT() == null) {
       return;
@@ -1153,7 +1166,7 @@ public final class LocalDeclarationOrder {
     if (slot < 0 || !belowHandlerSlot(handlerSlots, var) || slotReuseEnd(var) >= 0) {
       return;
     }
-    if ((!names.uniqueName(var) && !names.sameSlotName(var)) || mentionsField(seq, var.getName())) {
+    if ((!names.uniqueName(var) && !names.sameSlotName(var)) || fields.mentions(seq, var.getName())) {
       debug(method, var, "rejected: handler hoist would capture a name");
       return;
     }
@@ -1178,7 +1191,8 @@ public final class LocalDeclarationOrder {
    * above the first printed declaration with a higher slot, when that point is in a block that
    * encloses the variable's store.
    */
-  private static void hoistToPrintedOrder(Statement root, VarProcessor varproc, NameTable names, String method) {
+  private static void hoistToPrintedOrder(Statement root, VarProcessor varproc, NameTable names, FieldNames fields,
+                                          String method) {
     List<DeclPos> order = new ArrayList<>();
     collectPrintedOrder(root, order);
     // Every candidate looks its own position up in the printed order, and each successful hoist
@@ -1225,7 +1239,7 @@ public final class LocalDeclarationOrder {
         debug(method, var, "rejected: the catch header declares it");
         continue;
       }
-      if (mentionsField(root, var.getName())) {
+      if (fields.mentions(root, var.getName())) {
         debug(method, var, "rejected: the method names a field " + var.getName());
         continue;
       }
@@ -1668,18 +1682,19 @@ public final class LocalDeclarationOrder {
   // cross-statement hoist
   // *****************************************************************************
 
-  private static void hoistAcrossStatements(Statement stat, VarProcessor varproc, NameTable names, String method) {
+  private static void hoistAcrossStatements(Statement stat, VarProcessor varproc, NameTable names,
+                                            FieldNames fields, String method) {
     if (stat.type == Statement.StatementType.SEQUENCE
         || (stat.type == Statement.StatementType.ROOT && onlyBasicBlocks(stat))) {
-      hoistInSequence(stat, varproc, names, method);
+      hoistInSequence(stat, varproc, names, fields, method);
     } else if (stat.type == Statement.StatementType.ROOT) {
       // A method body that is one control statement prints that statement under the root's own
       // declarations: a try there is the root's child, not a sequence's, and a body local the
       // target allocated below a handler's or resource's slot was declared above the whole try.
-      hoistNestedOut(stat, varproc, names, method);
+      hoistNestedOut(stat, varproc, names, fields, method);
     }
     for (Statement child : stat.getStats()) {
-      hoistAcrossStatements(child, varproc, names, method);
+      hoistAcrossStatements(child, varproc, names, fields, method);
     }
   }
 
@@ -1726,8 +1741,9 @@ public final class LocalDeclarationOrder {
     }
   }
 
-  private static void hoistInSequence(Statement seq, VarProcessor varproc, NameTable names, String method) {
-    hoistNestedOut(seq, varproc, names, method);
+  private static void hoistInSequence(Statement seq, VarProcessor varproc, NameTable names, FieldNames fields,
+                                      String method) {
+    hoistNestedOut(seq, varproc, names, fields, method);
     if (seq.isLabeled()) {
       // A labeled sequence prints its varDefinitions before `label: {`, so a declaration moved
       // into them escapes the block and could capture a name used after it.
@@ -1769,7 +1785,7 @@ public final class LocalDeclarationOrder {
         debug(method, var, "rejected: another local prints as " + var.getName());
         continue;
       }
-      if (mentionsField(seq, var.getName())) {
+      if (fields.mentions(seq, var.getName())) {
         debug(method, var, "rejected: the sequence names a field " + var.getName());
         continue;
       }
@@ -1917,43 +1933,62 @@ public final class LocalDeclarationOrder {
     return false;
   }
 
-  private static boolean mentionsField(Statement stat, String name) {
-    for (Exprent exprent : stat.getVarDefinitions()) {
-      if (mentionsField(exprent, name)) {
-        return true;
+  /**
+   * The field names a statement's subtree mentions, cached per statement. The capture checks ask
+   * whether a subtree names a field at all, and only the field's simple name is part of the
+   * question: the owner is not compared, so a set of names answers every query. A statement's
+   * set is its own exprents' field names plus its children's sets, built lazily once and then
+   * queried as a hash lookup instead of walking the subtree again.
+   */
+  private static final class FieldNames {
+    private final IdentityHashMap<Statement, Set<String>> byStatement = new IdentityHashMap<>();
+
+    /** Drops every answer after a move that crosses a statement boundary. */
+    void invalidate() {
+      byStatement.clear();
+    }
+
+    boolean mentions(Statement stat, String name) {
+      return names(stat).contains(name);
+    }
+
+    private Set<String> names(Statement stat) {
+      Set<String> cached = byStatement.get(stat);
+      if (cached != null) {
+        return cached;
+      }
+      Set<String> names = new HashSet<>();
+      collect(stat.getVarDefinitions(), names);
+      List<Exprent> exprents = stat.getExprents();
+      if (exprents != null) {
+        collect(exprents, names);
+      }
+      for (Exprent exprent : stat.getStatExprents()) {
+        add(exprent, names);
+      }
+      for (Statement child : stat.getStats()) {
+        names.addAll(names(child));
+      }
+      byStatement.put(stat, names);
+      return names;
+    }
+
+    private static void collect(List<Exprent> exprents, Set<String> out) {
+      for (Exprent exprent : exprents) {
+        add(exprent, out);
       }
     }
-    List<Exprent> exprents = stat.getExprents();
-    if (exprents != null) {
-      for (Exprent exprent : exprents) {
-        if (mentionsField(exprent, name)) {
-          return true;
+
+    private static void add(Exprent exprent, Set<String> out) {
+      if (exprent == null) {
+        return;
+      }
+      for (Exprent inner : exprent.getAllExprents(true, true)) {
+        if (inner instanceof FieldExprent field) {
+          out.add(field.getName());
         }
       }
     }
-    for (Exprent exprent : stat.getStatExprents()) {
-      if (exprent != null && mentionsField(exprent, name)) {
-        return true;
-      }
-    }
-    for (Statement child : stat.getStats()) {
-      if (mentionsField(child, name)) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  private static boolean mentionsField(Exprent exprent, String name) {
-    if (exprent == null) {
-      return false;
-    }
-    for (Exprent inner : exprent.getAllExprents(true, true)) {
-      if (inner instanceof FieldExprent field && field.getName().equals(name)) {
-        return true;
-      }
-    }
-    return false;
   }
 
   // *****************************************************************************
@@ -2447,7 +2482,7 @@ public final class LocalDeclarationOrder {
   // within-list pass
   // *****************************************************************************
 
-  private static void reorderWithinList(Statement stat, VarProcessor varproc) {
+  private static void reorderWithinList(Statement stat, VarProcessor varproc, FieldNames fields) {
     List<Exprent> exprents = stat.getExprents();
     if (exprents != null) {
       for (int i = 1; i < exprents.size(); i++) {
@@ -2492,10 +2527,10 @@ public final class LocalDeclarationOrder {
       }
     }
     if (!stat.getVarDefinitions().isEmpty()) {
-      reconcileDefinitions(stat, exprents, varproc);
+      reconcileDefinitions(stat, exprents, varproc, fields);
     }
     for (Statement child : stat.getStats()) {
-      reorderWithinList(child, varproc);
+      reorderWithinList(child, varproc, fields);
     }
   }
 
@@ -2505,7 +2540,7 @@ public final class LocalDeclarationOrder {
    * prints after it. The declaration itself is unchanged, so nothing it declares changes value.
    */
   private static void reconcileDefinitionsInto(List<Exprent> definitions, List<Exprent> exprents,
-                                               VarProcessor varproc) {
+                                               VarProcessor varproc, FieldNames fields) {
     for (int d = definitions.size() - 1; d >= 0; d--) {
       Exprent declaration = definitions.get(d);
       int slot = declarationSlot(declaration, varproc);
@@ -2522,6 +2557,9 @@ public final class LocalDeclarationOrder {
       if (target >= 0) {
         definitions.remove(d);
         exprents.add(target + 1, declaration);
+        // The declaration can carry field accesses into a child block's exprents; a cached
+        // subtree set built before this move would not name them.
+        fields.invalidate();
       }
     }
   }
@@ -2553,15 +2591,16 @@ public final class LocalDeclarationOrder {
     return false;
   }
 
-  private static void reconcileDefinitions(Statement stat, List<Exprent> exprents, VarProcessor varproc) {
+  private static void reconcileDefinitions(Statement stat, List<Exprent> exprents, VarProcessor varproc,
+                                           FieldNames fields) {
     // A sequence whose definitions print before its child statements can hide a declaration in
     // the first child block; the source order is still the target's slot order.
     List<Exprent> childExprents = firstChildExprents(stat);
     if (childExprents != null && childExprents != exprents) {
-      reconcileDefinitionsInto(stat.getVarDefinitions(), childExprents, varproc);
+      reconcileDefinitionsInto(stat.getVarDefinitions(), childExprents, varproc, fields);
     }
     if (exprents != null) {
-      reconcileDefinitionsInto(stat.getVarDefinitions(), exprents, varproc);
+      reconcileDefinitionsInto(stat.getVarDefinitions(), exprents, varproc, fields);
     }
   }
 
