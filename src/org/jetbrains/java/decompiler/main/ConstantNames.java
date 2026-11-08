@@ -172,8 +172,8 @@ public final class ConstantNames {
     if (rootRules != null) {
       scanClass(text, rootSpans, rootRules, sites);
     }
-    expressionSites(text, rootSpans, root, sites);
-    initializerSites(text, rootSpans, root, sites);
+    expressionSites(text, rootSpans, root, imports, packageName, sites);
+    initializerSites(text, rootSpans, root, imports, packageName, sites);
     foldedArgumentSites(text, rootSpans, root, sites);
     interfaceStringSites(text, rootSpans, root, sites);
     nanSites(text, rootSpans, root, imports, packageName, sites);
@@ -193,8 +193,8 @@ public final class ConstantNames {
       if (classRules != null) {
         scanClass(text, entry.getValue(), classRules, sites);
       }
-      expressionSites(text, entry.getValue(), node, sites);
-      initializerSites(text, entry.getValue(), node, sites);
+      expressionSites(text, entry.getValue(), node, imports, packageName, sites);
+      initializerSites(text, entry.getValue(), node, imports, packageName, sites);
       foldedArgumentSites(text, entry.getValue(), node, sites);
       interfaceStringSites(text, entry.getValue(), node, sites);
       nanSites(text, entry.getValue(), node, imports, packageName, sites);
@@ -220,7 +220,8 @@ public final class ConstantNames {
                        Set<String> strict, Set<String> missing,
                        Map<String, List<Constant>> compositeCandidates, Set<String> compositeOwners,
                        String own, Map<String, List<int[]>> ownInitializers,
-                       List<String> imports, String packageName, Set<String> earlyNested) {
+                       List<String> imports, String packageName, Set<String> earlyNested,
+                       Literals literals) {
   }
 
   /**
@@ -1301,7 +1302,8 @@ public final class ConstantNames {
         inheritedNames, activePairs, activeValues, valueRecords, bares, earlyOwners, ownEarly,
         ownProven, own, text, bare, !firstUses.isEmpty(), fieldDeclarations(text, spans, own)),
       strict, missing, compositeCandidates, compositeOwners, own.qualifiedName,
-      ownInitializers(text, spans, own), imports, packageName, earlyNested);
+      ownInitializers(text, spans, own), imports, packageName, earlyNested,
+      new Literals(text, spans));
   }
 
   /**
@@ -3136,7 +3138,7 @@ public final class ConstantNames {
     if (cls == null) {
       return;
     }
-    List<long[]> literals = intLiterals(text, spans);
+    List<long[]> literals = rules.literals().ints();
     Map<String, Integer> indices = classIndices(cls);
     for (String owner : rules.placement().bares()) {
       if (siteIn(sites, owner, spans) || rules.placement().pairs().containsKey(owner)) {
@@ -3256,7 +3258,7 @@ public final class ConstantNames {
           continue;
         }
         for (Map.Entry<String, Boolean> literal : bareLiteralKeys(sourceKind, value).entrySet()) {
-          for (int[] span : literalSpansFor(text, spans, literal.getKey())) {
+          for (int[] span : rules.literals().numeric(literal.getKey())) {
             if (last ? span[0] <= best : best >= 0 && span[0] >= best) {
               continue; // an earlier match, or a later one than the first already found
             }
@@ -3297,7 +3299,7 @@ public final class ConstantNames {
           if (!constant.owner().equals(owner) || constant.kind() != VariableType.INT) {
             continue;
           }
-          for (long[] literal : intLiterals(text, spans)) {
+          for (long[] literal : rules.literals().ints()) {
             int start = (int) literal[0];
             long raw = literal[2];
             if (raw < Integer.MIN_VALUE || raw > Integer.MAX_VALUE
@@ -3375,7 +3377,7 @@ public final class ConstantNames {
             || !(value.value instanceof Integer constant)) {
           continue;
         }
-        for (long[] literal : intLiterals(text, spans)) {
+        for (long[] literal : rules.literals().ints()) {
           int start = (int) literal[0];
           if (literal[2] != constant
               || (last ? start <= (found == null ? -1 : found.start())
@@ -3613,7 +3615,7 @@ public final class ConstantNames {
         }
         Set<String> pooledBefore = pooledKeys(cls, pair.classIndex());
         Site best = null;
-        for (long[] literal : intLiterals(text, spans)) {
+        for (long[] literal : rules.literals().ints()) {
           int start = (int) literal[0];
           long raw = literal[2];
           if (start <= open || start >= limit || raw < Integer.MIN_VALUE || raw > Integer.MAX_VALUE) {
@@ -3973,7 +3975,7 @@ public final class ConstantNames {
     if (cls == null) {
       return claimed;
     }
-    List<long[]> literals = intLiterals(text, spans);
+    List<long[]> literals = rules.literals().ints();
     for (List<String> run : runs) {
       PairSite first = pairs.get(run.get(0));
       List<List<SourceConstant>> sources = new ArrayList<>();
@@ -4001,7 +4003,7 @@ public final class ConstantNames {
         String target = successorKey.substring(VariableType.STRING.name().length() + 1);
         String expression = stringChainExpression(target, sources);
         if (expression != null) {
-          for (int[] literal : stringLiteralSpans(text, spans, target)) {
+          for (int[] literal : rules.literals().strings(target)) {
             if (hasSiteAt(sites, literal[0])
                 || !chainProves(first, last, successorKey, literal[0], rules.placement())) {
               continue;
@@ -4017,7 +4019,7 @@ public final class ConstantNames {
         Object value = kindValue(kind, successorKey);
         if (value != null) {
           Set<String> pooledBefore = pooledKeys(cls, first.classIndex());
-          for (int[] literal : literalSpansFor(text, spans, successorKey)) {
+          for (int[] literal : rules.literals().numeric(successorKey)) {
             if (hasSiteAt(sites, literal[0])
                 || !chainProves(first, last, successorKey, literal[0], rules.placement())) {
               continue;
@@ -4124,7 +4126,25 @@ public final class ConstantNames {
     if (site.start() < 0 || site.start() >= site.end() || site.end() > text.length()) {
       return false;
     }
-    return site.replacement().matches("[A-Za-z_$][A-Za-z0-9_$.]*");
+    // The whole replacement must be a dotted Java name; reading it directly avoids compiling the
+    // pattern on every call.
+    String name = site.replacement();
+    if (name.isEmpty()) {
+      return false;
+    }
+    char first = name.charAt(0);
+    if (!(first >= 'a' && first <= 'z' || first >= 'A' && first <= 'Z'
+        || first == '_' || first == '$')) {
+      return false;
+    }
+    for (int i = 1; i < name.length(); i++) {
+      char c = name.charAt(i);
+      if (!(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9'
+          || c == '_' || c == '$' || c == '.')) {
+        return false;
+      }
+    }
+    return true;
   }
 
 
@@ -4169,7 +4189,7 @@ public final class ConstantNames {
     if (byOwner.isEmpty()) {
       return;
     }
-    List<long[]> literals = intLiterals(text, spans);
+    List<long[]> literals = rules.literals().ints();
     Map<Long, Integer> counts = new HashMap<>();
     for (long[] literal : literals) {
       counts.merge(literal[2], 1, Integer::sum);
@@ -4896,7 +4916,8 @@ public final class ConstantNames {
    * <p>The sites are added after the literal scan, so the literals introduced here are never taken
    * as evidence for another constant's naming site.
    */
-  private static void expressionSites(String text, List<int[]> spans, ClassNode node, List<Site> sites) {
+  private static void expressionSites(String text, List<int[]> spans, ClassNode node,
+                                      List<String> imports, String packageName, List<Site> sites) {
     StructClass own = node == null ? null : node.classStruct;
     if (own == null || (own.getAccessFlags() & CodeConstants.ACC_INTERFACE) != 0) {
       return;
@@ -4922,8 +4943,6 @@ public final class ConstantNames {
       return;
     }
     Map<String, List<int[]>> initializers = ownInitializers(text, spans, own);
-    List<String> imports = imports(text);
-    String packageName = packageName(text);
     int last = -1;
     int k = 0;
     while (k < owners.size()) {
@@ -5765,9 +5784,9 @@ public final class ConstantNames {
     }
   }
 
-  /** The spans of the numeric literals whose key is {@code key}. */
-  private static List<int[]> literalSpansFor(String text, List<int[]> spans, String key) {
-    List<int[]> found = new ArrayList<>();
+  /** Every numeric literal of the class text, keyed by the literal key it prints. */
+  private static Map<String, List<int[]>> numericLiteralSpans(String text, List<int[]> spans) {
+    Map<String, List<int[]>> found = new HashMap<>();
     for (int[] span : spans) {
       int i = span[0];
       while (i < span[1]) {
@@ -5809,8 +5828,9 @@ public final class ConstantNames {
             }
             break;
           }
-          if (key.equals(literalKey(text.substring(i, end)))) {
-            found.add(new int[]{i, end});
+          String key = literalKey(text.substring(i, end));
+          if (key != null) {
+            found.computeIfAbsent(key, k -> new ArrayList<>()).add(new int[]{i, end});
           }
           i = end;
           continue;
@@ -5821,9 +5841,9 @@ public final class ConstantNames {
     return found;
   }
 
-  /** The spans of the string literals whose value is {@code value}, quotes included. */
-  private static List<int[]> stringLiteralSpans(String text, List<int[]> spans, String value) {
-    List<int[]> found = new ArrayList<>();
+  /** Every string literal of the class text, keyed by its unescaped value, quotes included. */
+  private static Map<String, List<int[]>> stringLiteralSpans(String text, List<int[]> spans) {
+    Map<String, List<int[]>> found = new HashMap<>();
     for (int[] span : spans) {
       int i = span[0];
       while (i < span[1]) {
@@ -5843,9 +5863,7 @@ public final class ConstantNames {
           int end = skipQuoted(text, i, '"');
           if (!text.startsWith("\"\"\"", i) && end - 1 > i) {
             String content = unescape(text.substring(i + 1, end - 1));
-            if (value.equals(content)) {
-              found.add(new int[]{i, end});
-            }
+            found.computeIfAbsent(content, k -> new ArrayList<>()).add(new int[]{i, end});
           }
           i = end;
           continue;
@@ -5858,6 +5876,48 @@ public final class ConstantNames {
       }
     }
     return found;
+  }
+
+  /**
+   * The class text's literals, scanned at most once and shared by the passes that look them up.
+   *
+   * <p>The rule passes ask for one key at a time from inside nested loops over owners and
+   * constants, so a scan per key would read the whole class repeatedly. Each kind is built the
+   * first time a pass needs it and then answers every lookup; a class that needs none pays
+   * nothing.
+   */
+  private static final class Literals {
+    private final String text;
+    private final List<int[]> spans;
+    private List<long[]> ints;
+    private Map<String, List<int[]>> numeric;
+    private Map<String, List<int[]>> strings;
+
+    Literals(String text, List<int[]> spans) {
+      this.text = text;
+      this.spans = spans;
+    }
+
+    List<long[]> ints() {
+      if (ints == null) {
+        ints = intLiterals(text, spans);
+      }
+      return ints;
+    }
+
+    List<int[]> numeric(String key) {
+      if (numeric == null) {
+        numeric = numericLiteralSpans(text, spans);
+      }
+      return numeric.getOrDefault(key, List.of());
+    }
+
+    List<int[]> strings(String value) {
+      if (strings == null) {
+        strings = stringLiteralSpans(text, spans);
+      }
+      return strings.getOrDefault(value, List.of());
+    }
   }
 
   /** A java string literal for this value, with escapes the compiler reads back unchanged. */
@@ -6050,6 +6110,7 @@ public final class ConstantNames {
    * generates no code and the field data is unchanged.
    */
   private static void earlyConstantInitializerSites(String text, List<int[]> spans, StructClass own,
+                                                    List<String> imports, String packageName,
                                                     List<Site> sites) {
     List<String> prefix = prefixOwners(own);
     if (prefix.isEmpty()) {
@@ -6087,8 +6148,6 @@ public final class ConstantNames {
     // initializer, since normalizeDefs runs first -- while a pair after it was entered by the
     // writer itself or by code (which the ordinary rules place). Only the former is this pass's.
     int ownPrefix = prefix.indexOf(own.qualifiedName);
-    List<String> imports = imports(text);
-    String packageName = packageName(text);
     boolean[] used = new boolean[fields.size()];
     for (int p = 0; p < prefix.size(); p++) {
       String owner = prefix.get(p);
@@ -6157,12 +6216,13 @@ public final class ConstantNames {
    * expression's type. Small values are not dismissed as coincidence either: the pool proves the
    * naming, and the value only chooses among the class's own constants.
    */
-  private static void initializerSites(String text, List<int[]> spans, ClassNode node, List<Site> sites) {
+  private static void initializerSites(String text, List<int[]> spans, ClassNode node,
+                                       List<String> imports, String packageName, List<Site> sites) {
     StructClass own = node == null ? null : node.classStruct;
     if (own == null) {
       return;
     }
-    earlyConstantInitializerSites(text, spans, own, sites);
+    earlyConstantInitializerSites(text, spans, own, imports, packageName, sites);
     if ((own.getAccessFlags() & CodeConstants.ACC_INTERFACE) != 0) {
       return;
     }
