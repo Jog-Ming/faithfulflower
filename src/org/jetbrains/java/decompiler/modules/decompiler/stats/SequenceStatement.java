@@ -145,6 +145,10 @@ public class SequenceStatement extends Statement {
 
     boolean notempty = false;
 
+    // The suffix questions and per-statement extents below are pure reads of this sequence's
+    // tree; answer each once per print instead of rescanning the remaining statements every i.
+    SuffixFacts facts = new SuffixFacts(stats);
+    int sequenceEnd = RoundTrip.blockEnd(this);
 
     for (int i = 0; i < stats.size(); i++) {
 
@@ -211,7 +215,7 @@ public class SequenceStatement extends Statement {
           && ifStatement.iftype == IfStatement.IFTYPE_IF && ifStatement.getElsestat() == null
           && !ifStatement.isLabeled() && !stats.get(i + 1).isLabeled()
           && ifStatement.getIfstat() != null
-          && !hasContent(stats.subList(i + 2, stats.size()))) {
+          && !facts.hasContentFrom(i + 2)) {
         int exit = RoundTrip.negatedPatternGuard(ifStatement.getHeadexprent(),
           ifStatement.getIfstat(), stats.get(i + 1));
         boolean printedExit = exits(stats.get(i + 1));
@@ -269,7 +273,7 @@ public class SequenceStatement extends Statement {
       // where the table says its scope did. Both ends are exprent boundaries — the declaration's
       // own store and the last instruction of the run's last statement — so the braces land
       // exactly where javac closed the source's block.
-      int[] run = RoundTrip.handoverRun(stats, i, RoundTrip.blockEnd(this));
+      int[] run = RoundTrip.handoverRun(stats, i, sequenceEnd);
       // Closing the block takes every local it declares out of scope: a use past the boundary
       // has to land in the row that takes its slot over at a store, which the printer writes as
       // a declaration. Anything else and the brace would name a variable that is gone.
@@ -334,13 +338,13 @@ public class SequenceStatement extends Statement {
       // prove it — a loop's head variable is the common case. Closing the block there keeps the
       // scope javac recorded; the printer still has no `for` for the loop it belongs to.
       int windowEnd = i + 1 < stats.size()
-        ? Math.max(RoundTrip.blockEnd(st), RoundTrip.firstOffset(stats.get(i + 1)) - 1)
-        : RoundTrip.blockEnd(st);
+        ? Math.max(facts.blockEndAt(i), facts.firstOffsetAt(i + 1) - 1)
+        : facts.blockEndAt(i);
       // A statement's recorded extent ends at its last exprent's instruction. A method body can
       // end with instructions no exprent records -- a loop's back edge and the silent return --
       // so its block's true end is the method's code end, and a row ending between the two
       // closed a block of its own in front of them.
-      int enclosingEnd = RoundTrip.blockEnd(this);
+      int enclosingEnd = sequenceEnd;
       if (getParent() instanceof RootStatement && RoundTrip.methodEndsWithSilentReturn()) {
         int codeEnd = RoundTrip.methodCodeEnd();
         if (codeEnd > enclosingEnd) {
@@ -350,10 +354,10 @@ public class SequenceStatement extends Statement {
       int[] scope = RoundTrip.nestedBlockScope(st, windowEnd, enclosingEnd);
       // The local has to be declared by this statement itself, and the block it lived in has to
       // reach past it; otherwise the run is just this statement and the braces buy nothing.
-      if (scope != null && scope[0] <= RoundTrip.blockEnd(st)) {
+      if (scope != null && scope[0] <= facts.blockEndAt(i)) {
         int close = -1;
         for (int j = i; j < stats.size(); j++) {
-          int end = RoundTrip.blockEnd(stats.get(j));
+          int end = facts.blockEndAt(j);
           // The closing brace sits right after the run's last instruction; the back edge that
           // ends the statement may add up to a few bytes past the last exprent offset.
           if (Math.abs(end - scope[1]) <= 5) {
@@ -374,12 +378,12 @@ public class SequenceStatement extends Statement {
         boolean basicBlock = st.getExprents() != null && !st.getExprents().isEmpty();
         if (!exact && basicBlock) {
           for (int j = i; j < stats.size(); j++) {
-            int end = RoundTrip.blockEnd(stats.get(j));
+            int end = facts.blockEndAt(j);
             // The next statement that prints anything is the boundary; one that prints nothing
             // (a hidden final return) leaves the run to the end of the enclosing block.
             boolean atBoundary = true;
             for (int k = j + 1; k < stats.size(); k++) {
-              int next = RoundTrip.statementStart(stats.get(k));
+              int next = facts.startAt(k);
               if (next < 0) {
                 continue;
               }
@@ -441,7 +445,7 @@ public class SequenceStatement extends Statement {
           && ifStatement.iftype == IfStatement.IFTYPE_IF && ifStatement.getElsestat() == null
           && ifStatement.getIfstat() == null && !ifStatement.isLabeled() && !stats.get(i + 1).isLabeled()
           && !ifStatement.isPatternMatched()
-          && hasContent(stats.subList(i + 1, stats.size()))
+          && facts.hasContentFrom(i + 1)
           && RoundTrip.exitBranchLandsOn(ifStatement.getHeadexprent(), ifStatement.getIfEdge())) {
         Exprent condition = ifStatement.getHeadexprent().getCondition();
         IfExprent head = (IfExprent) ifStatement.getHeadexprent().copy();
@@ -970,7 +974,7 @@ public class SequenceStatement extends Statement {
           && ifStatement.getIfstat() != null
           // The exit-first guard of a trailing if is the printer's own; only a rest with content
           // needs this swap, and an empty rest is what that other rule sees.
-          && hasContent(stats.subList(i + 1, stats.size()))
+          && facts.hasContentFrom(i + 1)
           && RoundTrip.voidReturnBeforeBody(ifStatement.getHeadexprent().bytecode, ifStatement.getIfstat()) >= 0) {
         IfExprent head = (IfExprent) ifStatement.getHeadexprent().copy();
         head.setCondition(RoundTrip.negateCondition(head.getCondition()));
@@ -1008,9 +1012,9 @@ public class SequenceStatement extends Statement {
           && !ifStatement.isPatternMatched()
           && ifStatement.getIfstat() != null
           && (endsWithReturn(ifStatement.getIfstat()) || endsWithBreak(ifStatement.getIfstat()))
-          && hasContent(stats.subList(i + 1, stats.size()))
+          && facts.hasContentFrom(i + 1)
           && !RoundTrip.declaresLocal(ifStatement.getIfstat())
-          && stats.subList(i + 1, stats.size()).stream().noneMatch(RoundTrip::declaresLocal)
+          && !facts.anyDeclaresLocalFrom(i + 1)
           && RoundTrip.branchesToBody(ifStatement.getHeadexprent(), ifStatement.getIfstat())) {
         IfExprent head = (IfExprent) ifStatement.getHeadexprent().copy();
         head.setCondition(RoundTrip.negateCondition(head.getCondition()));
@@ -1066,8 +1070,8 @@ public class SequenceStatement extends Statement {
           && ifStatement.getIfstat() instanceof SequenceStatement thenSeq
           && !thenSeq.getStats().isEmpty()
           && bareReturn(thenSeq.getStats().get(thenSeq.getStats().size() - 1)) != null
-          && hasContent(stats.subList(i + 1, stats.size()))
-          && stats.subList(i + 1, stats.size()).stream().noneMatch(RoundTrip::declaresLocalIn)
+          && facts.hasContentFrom(i + 1)
+          && !facts.anyDeclaresLocalInFrom(i + 1)
           && RoundTrip.guardBeforeTail(ifStatement.getHeadexprent(), stats.get(i + 1), thenSeq)) {
         IfExprent head = (IfExprent) ifStatement.getHeadexprent().copy();
         head.setCondition(RoundTrip.negateCondition(head.getCondition()));
@@ -1089,7 +1093,7 @@ public class SequenceStatement extends Statement {
 
       // `if (C) { body; return; }` at the method tail under the strict guard layout: the source
       // wrote `if (!C) { return; } body` (goto body / return / body:).
-      if (!hasContent(stats.subList(i + 1, stats.size())) && st instanceof IfStatement ifStatement
+      if (!facts.hasContentFrom(i + 1) && st instanceof IfStatement ifStatement
           && ifStatement.iftype == IfStatement.IFTYPE_IF && ifStatement.getElsestat() == null
           && !ifStatement.isLabeled()
           && ifStatement.getIfstat() instanceof SequenceStatement thenSeq
@@ -1224,8 +1228,8 @@ public class SequenceStatement extends Statement {
           && ifStatement.iftype == IfStatement.IFTYPE_IF && ifStatement.getElsestat() == null
           && ifStatement.getIfstat() == null && !ifStatement.isLabeled() && !st.isLabeled()
           && !ifStatement.isPatternMatched()
-          && hasContent(stats.subList(i + 1, stats.size()))
-          && stats.subList(i + 1, stats.size()).stream().noneMatch(RoundTrip::declaresLocal)
+          && facts.hasContentFrom(i + 1)
+          && !facts.anyDeclaresLocalFrom(i + 1)
           && RoundTrip.breakBranchLandsOnExit(ifStatement.getHeadexprent(), ifStatement)) {
         IfExprent head = (IfExprent) ifStatement.getHeadexprent().copy();
         head.setCondition(RoundTrip.negateCondition(head.getCondition()));
@@ -1334,7 +1338,7 @@ public class SequenceStatement extends Statement {
           && ifStatement.iftype == IfStatement.IFTYPE_IF && ifStatement.getElsestat() == null
           && !ifStatement.isLabeled() && !stats.get(i + 1).isLabeled()
           && ifStatement.getIfstat() != null
-          && hasContent(stats.subList(i + 1, stats.size()))) {
+          && facts.hasContentFrom(i + 1)) {
         java.util.List<Statement> following = stats.subList(i + 1, stats.size());
         int continuation = RoundTrip.realElseContinuation(ifStatement.getHeadexprent(),
           ifStatement.getIfstat(), following);
@@ -1405,7 +1409,7 @@ public class SequenceStatement extends Statement {
           && ifStatement.iftype == IfStatement.IFTYPE_IF && ifStatement.getElsestat() == null
           && !ifStatement.isLabeled() && !stats.get(i + 1).isLabeled()
           && ifStatement.getIfstat() != null
-          && hasContent(stats.subList(i + 1, stats.size()))
+          && facts.hasContentFrom(i + 1)
           && RoundTrip.guardThenArm(ifStatement.getHeadexprent(), ifStatement.getIfstat(),
                stats.subList(i + 1, stats.size()))) {
         IfExprent head = (IfExprent) ifStatement.getHeadexprent().copy();
@@ -1448,7 +1452,7 @@ public class SequenceStatement extends Statement {
           && ifStatement.iftype == IfStatement.IFTYPE_IF && ifStatement.getElsestat() == null
           && !ifStatement.isLabeled() && !stats.get(i + 1).isLabeled()
           && ifStatement.getIfstat() != null
-          && hasContent(stats.subList(i + 1, stats.size()))
+          && facts.hasContentFrom(i + 1)
           && RoundTrip.guardElseJoin(ifStatement.getHeadexprent(), ifStatement.getIfstat(),
                stats.subList(i + 1, stats.size()))) {
         buf.append(ExprProcessor.listToJava(ifStatement.varDefinitions, indent));
@@ -1494,7 +1498,7 @@ public class SequenceStatement extends Statement {
           && !ifStatement.isLabeled() && !stats.get(i + 1).isLabeled()
           && ifStatement.getIfstat() != null
           && armLeaves(ifStatement.getIfstat())
-          && stats.subList(i + 1, stats.size()).stream().noneMatch(RoundTrip::declaresLocalIn)
+          && !facts.anyDeclaresLocalInFrom(i + 1)
           && RoundTrip.restPrecedesArm(stats.get(i + 1), ifStatement.getIfstat())
           && RoundTrip.soleEntry(ifStatement.getIfstat())
           && RoundTrip.swapIfArmsByTarget(ifStatement.getHeadexprent(), ifStatement.getIfstat(), stats.get(i + 1))) {
@@ -1834,7 +1838,7 @@ public class SequenceStatement extends Statement {
           && ifStatement.iftype == IfStatement.IFTYPE_IF && ifStatement.getElsestat() == null
           && !ifStatement.isLabeled()
           && ifStatement.getIfstat() != null && cannotComplete(ifStatement.getIfstat())
-          && hasContent(stats.subList(i + 1, stats.size()))
+          && facts.hasContentFrom(i + 1)
           // A pattern condition declares its binding in the test, so a swap that printed a
           // negated test around the arm would leave the binding out of scope: only the target's
           // proof that the source wrote the positive form lets the pattern printer join.
@@ -3053,15 +3057,121 @@ public class SequenceStatement extends Statement {
   /** True when any of these statements prints anything. */
   private static boolean hasContent(List<Statement> statements) {
     for (Statement statement : statements) {
-      List<Exprent> exprents = statement.getExprents();
-      if (exprents != null && !exprents.isEmpty()) {
-        return true;
-      }
-      if (exprents == null && hasContent(statement.getStats())) {
+      if (hasContent(statement)) {
         return true;
       }
     }
     return false;
+  }
+
+  /** True when this statement prints anything. */
+  private static boolean hasContent(Statement statement) {
+    List<Exprent> exprents = statement.getExprents();
+    if (exprents != null) {
+      return !exprents.isEmpty();
+    }
+    return hasContent(statement.getStats());
+  }
+
+  /**
+   * The suffix predicates one print of a sequence asks about, each answered once and on demand.
+   *
+   * <p>The print loop tests many positions for "does anything from here on print", "does anything
+   * from here on declare a local", and repeatedly wants a statement's first offset, block end or
+   * start. Every answer is a pure read of the tree, so one cached array per question replaces the
+   * repeated suffix scans and full-subtree walks. Arrays are built on first use, so a print that
+   * never asks a question never pays for it.
+   */
+  private static final class SuffixFacts {
+    private final List<Statement> statements;
+    private boolean[] content;
+    private boolean[] local;
+    private boolean[] localIn;
+    private int[] firstOffsets;
+    private boolean[] firstOffsetSet;
+    private int[] blockEnds;
+    private boolean[] blockEndSet;
+    private int[] starts;
+    private boolean[] startSet;
+
+    SuffixFacts(List<Statement> statements) {
+      this.statements = statements;
+    }
+
+    /** True when any statement at or after {@code from} prints anything. */
+    boolean hasContentFrom(int from) {
+      if (content == null) {
+        int size = statements.size();
+        content = new boolean[size + 1];
+        for (int k = size - 1; k >= 0; k--) {
+          content[k] = content[k + 1] || hasContent(statements.get(k));
+        }
+      }
+      return from < statements.size() && content[from];
+    }
+
+    /** True when any statement at or after {@code from} declares a local. */
+    boolean anyDeclaresLocalFrom(int from) {
+      if (local == null) {
+        local = declaresSuffix(false);
+      }
+      return from < statements.size() && local[from];
+    }
+
+    /** True when any statement at or after {@code from} declares a local in its own offsets. */
+    boolean anyDeclaresLocalInFrom(int from) {
+      if (localIn == null) {
+        localIn = declaresSuffix(true);
+      }
+      return from < statements.size() && localIn[from];
+    }
+
+    private boolean[] declaresSuffix(boolean ownOffsets) {
+      int size = statements.size();
+      boolean[] suffix = new boolean[size + 1];
+      for (int k = size - 1; k >= 0; k--) {
+        suffix[k] = suffix[k + 1] || (ownOffsets
+          ? RoundTrip.declaresLocalIn(statements.get(k))
+          : RoundTrip.declaresLocal(statements.get(k)));
+      }
+      return suffix;
+    }
+
+    int firstOffsetAt(int index) {
+      if (firstOffsets == null) {
+        firstOffsets = new int[statements.size()];
+        firstOffsetSet = new boolean[statements.size()];
+      }
+      if (!firstOffsetSet[index]) {
+        firstOffsets[index] = RoundTrip.firstOffset(statements.get(index));
+        firstOffsetSet[index] = true;
+      }
+      return firstOffsets[index];
+    }
+
+    int blockEndAt(int index) {
+      if (blockEnds == null) {
+        blockEnds = new int[statements.size()];
+        blockEndSet = new boolean[statements.size()];
+      }
+      if (!blockEndSet[index]) {
+        blockEnds[index] = RoundTrip.blockEnd(statements.get(index));
+        blockEndSet[index] = true;
+      }
+      return blockEnds[index];
+    }
+
+    int startAt(int index) {
+      if (starts == null) {
+        starts = new int[statements.size()];
+        startSet = new boolean[statements.size()];
+      }
+      if (!startSet[index]) {
+        starts[index] = RoundTrip.statementStart(statements.get(index));
+        startSet[index] = true;
+      }
+      return starts[index];
+    }
   }
 
   /** True when the last of these statements ends in a return or throw. */

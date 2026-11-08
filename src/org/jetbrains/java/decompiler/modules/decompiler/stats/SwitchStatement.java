@@ -1445,6 +1445,7 @@ public class SwitchStatement extends Statement {
     // the jump layout wants it, and the printer drops the arm, so its block is no ordering evidence.
     boolean skipMatch = !RoundTrip.switchYields(caseStatements);
     List<Integer> layout = new ArrayList<>(size);
+    int[] firstOffsets = new int[size];
     for (int i = 0; i < size; i++) {
       if (skipMatch && RoundTrip.synthesizedMatchThrow(caseStatements.get(i))) {
         continue;
@@ -1453,12 +1454,15 @@ public class SwitchStatement extends Statement {
       if (first < 0) {
         return false;
       }
+      firstOffsets[i] = first;
       if (first == join) {
         continue;
       }
       layout.add(i);
     }
-    layout.sort(Comparator.comparingInt(i -> RoundTrip.firstOffset(caseStatements.get(i))));
+    // The offsets were already read once per arm above; sorting must not walk every arm's
+    // subtree again for every comparison.
+    layout.sort(Comparator.comparingInt(i -> firstOffsets[i]));
     List<Integer> printed = new ArrayList<>();
     for (int i : order) {
       if (skipMatch && RoundTrip.synthesizedMatchThrow(caseStatements.get(i))) {
