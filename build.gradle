@@ -356,6 +356,9 @@ tasks.register('bench', JavaExec) {
   if (project.hasProperty('benchArgs')) {
     args project.property('benchArgs').split(' ')
   }
+  if (project.hasProperty('benchJvmArgs')) {
+    jvmArgs project.property('benchJvmArgs').split(' ')
+  }
   if (project.hasProperty('benchJava')) {
     javaLauncher = javaToolchains.launcherFor {
       languageVersion = JavaLanguageVersion.of(project.property('benchJava') as Integer)

@@ -79,33 +79,96 @@ public final class DecompilerBench {
       sources.add(source);
     }
 
-    System.out.println("scenario\tround\tclasses\tallocatedBytes\tcpuNanos\twallNanos");
-    runScenario("library", List.of(), classesDir, warmup, rounds);
+    List<Scenario> scenarios = new ArrayList<>();
+    scenarios.add(new Scenario("library", List.of()));
     for (int i = 0; i < classNames.size(); i++) {
-      runScenario("single:" + simpleName(classNames.get(i)), List.of(sources.get(i)),
-        classesDir, warmup, rounds);
+      scenarios.add(new Scenario("single:" + simpleName(classNames.get(i)), List.of(sources.get(i))));
     }
-    runScenario("batch", sources, classesDir, warmup, rounds);
-  }
+    scenarios.add(new Scenario("batch", sources));
 
-  private static void runScenario(String scenario, List<File> sources, File library, int warmup,
-                                  int rounds) {
-    for (int round = 0; round < warmup + rounds; round++) {
-      long allocated = allocatedBytes();
-      long cpu = cpuNanos();
-      long start = System.nanoTime();
-      decompile(sources, library);
-      long wall = System.nanoTime() - start;
-      long cpuEnd = cpuNanos();
-      long allocatedEnd = allocatedBytes();
-      if (round >= warmup) {
-        System.out.printf(Locale.ROOT, "%s\t%d\t%d\t%d\t%d\t%d%n",
-          scenario, round - warmup, sources.size(),
-          allocatedEnd < 0 || allocated < 0 ? -1 : allocatedEnd - allocated,
-          cpu < 0 || cpuEnd < 0 ? -1 : cpuEnd - cpu,
-          wall);
+    Map<String, List<long[]>> results = new LinkedHashMap<>();
+    for (Scenario scenario : scenarios) {
+      results.put(scenario.name(), new ArrayList<>());
+    }
+    for (int round = 0; round < warmup; round++) {
+      for (Scenario scenario : scenarios) {
+        decompile(scenario.sources(), classesDir);
       }
     }
+
+    System.out.println("scenario\tround\tclasses\tallocatedBytes\tcpuNanos\twallNanos");
+    for (int round = 0; round < rounds; round++) {
+      for (Scenario scenario : scenarios) {
+        long[] metrics = measure(scenario.sources(), classesDir);
+        results.get(scenario.name()).add(metrics);
+        System.out.printf(Locale.ROOT, "%s\t%d\t%d\t%d\t%d\t%d%n",
+          scenario.name(), round, scenario.sources().size(), metrics[0], metrics[1], metrics[2]);
+      }
+    }
+    printSummary(results);
+  }
+
+  private record Scenario(String name, List<File> sources) {
+  }
+
+  private static long[] measure(List<File> sources, File library) {
+    long allocated = allocatedBytes();
+    long cpu = cpuNanos();
+    long start = System.nanoTime();
+    decompile(sources, library);
+    long wall = System.nanoTime() - start;
+    long cpuEnd = cpuNanos();
+    long allocatedEnd = allocatedBytes();
+    return new long[]{
+      allocated < 0 || allocatedEnd < 0 ? -1 : allocatedEnd - allocated,
+      cpu < 0 || cpuEnd < 0 ? -1 : cpuEnd - cpu,
+      wall};
+  }
+
+  private static void printSummary(Map<String, List<long[]>> results) {
+    System.out.println("summary\tscenario\trounds\tallocatedBytesMedian\tallocatedBytesMad\tcpuNanosMedian\tcpuNanosMad\twallNanosMedian\twallNanosMad");
+    for (Map.Entry<String, List<long[]>> entry : results.entrySet()) {
+      List<Long> allocated = column(entry.getValue(), 0);
+      List<Long> cpu = column(entry.getValue(), 1);
+      List<Long> wall = column(entry.getValue(), 2);
+      System.out.printf(Locale.ROOT, "summary\t%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d%n",
+        entry.getKey(), entry.getValue().size(),
+        median(allocated), mad(allocated), median(cpu), mad(cpu), median(wall), mad(wall));
+    }
+  }
+
+  private static List<Long> column(List<long[]> rows, int index) {
+    List<Long> values = new ArrayList<>();
+    for (long[] row : rows) {
+      if (row[index] >= 0) {
+        values.add(row[index]);
+      }
+    }
+    return values;
+  }
+
+  private static long median(List<Long> values) {
+    if (values.isEmpty()) {
+      return -1;
+    }
+    List<Long> sorted = new ArrayList<>(values);
+    sorted.sort(Long::compare);
+    int middle = sorted.size() / 2;
+    return sorted.size() % 2 == 0
+      ? (sorted.get(middle - 1) + sorted.get(middle)) / 2
+      : sorted.get(middle);
+  }
+
+  private static long mad(List<Long> values) {
+    long median = median(values);
+    if (median < 0) {
+      return -1;
+    }
+    List<Long> deviations = new ArrayList<>();
+    for (long value : values) {
+      deviations.add(Math.abs(value - median));
+    }
+    return median(deviations);
   }
 
   private static void decompile(List<File> sources, File library) {
