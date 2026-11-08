@@ -390,10 +390,10 @@ tasks.register('benchFast', JavaExec) {
 
 tasks.register('benchMedium', JavaExec) {
   group = 'verification'
-  description = 'Medium decompiler benchmark (under 5 minutes, 1 warmup + 1 round, 100-class sample per version)'
+  description = 'Medium decompiler benchmark (about 5 minutes, 1 warmup + 2 rounds, 100-class sample per version)'
   classpath = sourceSets.bench.runtimeClasspath
   mainClass = 'org.jetbrains.java.decompiler.bench.DecompilerBench'
-  args = ['--warmup', '1', '--rounds', '1', '--sample', '100'] + benchVersionArgs
+  args = ['--warmup', '1', '--rounds', '2', '--sample', '100'] + benchVersionArgs
 }
 
 tasks.register('benchSlow', JavaExec) {
