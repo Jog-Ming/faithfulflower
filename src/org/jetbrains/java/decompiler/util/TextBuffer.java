@@ -497,6 +497,15 @@ public class TextBuffer {
 
     myRootGroup.myLength = myStringBuilder.length();
 
+    // The walk only ever changes text when it applies a group, and a group is applied only when one
+    // of its lines exceeds the preferred length. When no line can reach that bound, every offset it
+    // computes stays zero, so skipping it leaves the text, the offset mappings and the class
+    // regions exactly as the walk would have left them. The default preferred length is far above
+    // any line the generator writes, so this is the path a default run takes.
+    if (!mayApplyAnyGroup()) {
+      return;
+    }
+
     List<Integer> offsetMapping = new ArrayList<>(myStringBuilder.length());
     offsetMapping.add(0);
     reformatGroup(myRootGroup, offsetMapping, 0);
@@ -508,6 +517,35 @@ public class TextBuffer {
       int end = region.myEnd;
       region.myStart = start + offsetMapping.get(start);
       region.myEnd = end + offsetMapping.get(end);
+    }
+  }
+
+  /**
+   * Whether {@link #reformatGroup} could apply any group in the tree.
+   *
+   * <p>A group is applied when its longest line exceeds {@link #myPreferredLineLength}, and the
+   * walk measures a line from one separator start to the next or to the group's end, so a group's
+   * value is at most the line's own length plus one separator (the first-line measurement of a
+   * group that starts mid-line includes the separator that precedes it). If even that upper bound
+   * stays within the limit, no group is applied, no extra indent is ever added, and therefore no
+   * replacement or indent insertion can happen anywhere in the walk.
+   */
+  private boolean mayApplyAnyGroup() {
+    int separatorLength = myLineSeparator.length();
+    if (separatorLength == 0) {
+      return true; // no line structure to reason about; let the walk decide
+    }
+    long limit = (long)myPreferredLineLength - separatorLength;
+    int lineStart = 0;
+    while (true) {
+      int separator = myStringBuilder.indexOf(myLineSeparator, lineStart);
+      if (separator < 0) {
+        return myStringBuilder.length() - lineStart > limit;
+      }
+      if (separator - lineStart > limit) {
+        return true;
+      }
+      lineStart = separator + separatorLength;
     }
   }
 
