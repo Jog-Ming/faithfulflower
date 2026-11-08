@@ -20,6 +20,18 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 jar="$root/devtools/build/libs/devtools-all.jar"
 decompiler="$root/build/libs/faithfulflower-1.13.0+local.jar"
 
+# The benchmark runs in the decompiler's own JVM (allocation and CPU counters are per-process), so
+# it is a Gradle task rather than a devtools subcommand; this is only the stable entry point.
+if [ "${1:-}" = "bench" ]; then
+  case "${2:-quick}" in
+    quick) task=benchQuick ;;
+    precise) task=benchPrecise ;;
+    *) echo "devtools/cli bench: expected quick or precise" >&2; exit 2 ;;
+  esac
+  echo "devtools/cli: $task" >&2
+  exec "$root/gradlew" -p "$root" "$task"
+fi
+
 # Only this jar is checked here: a shell `find` over the decompiler's source tree cost seconds on
 # every call. The pipeline rebuilds that jar itself, from Java, where the same walk costs
 # milliseconds (see Main.rebuildDecompilerIfStale).
