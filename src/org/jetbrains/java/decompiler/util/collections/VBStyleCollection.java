@@ -4,12 +4,23 @@ package org.jetbrains.java.decompiler.util.collections;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.Objects;
 
 public class VBStyleCollection<E, K> extends ArrayList<E> {
 
   private HashMap<K, Integer> map = new HashMap<>();
 
   private ArrayList<K> lstKeys = new ArrayList<>();
+
+  /**
+   * The most recent {@link #getWithKey} answer. Consecutive lookups of the same key (the common
+   * case while printing one method) then skip the map. The entry is immutable and replaced as a
+   * whole behind a volatile reference, so a reader racing another thread's update still sees a
+   * consistent key/index pair; every structural change invalidates it.
+   */
+  private volatile Hit<K> lastHit;
+
+  private record Hit<T>(T key, int index) {}
 
   public VBStyleCollection() {
     super();
@@ -23,6 +34,7 @@ public class VBStyleCollection<E, K> extends ArrayList<E> {
 
   @Override
   public boolean add(E element) {
+    lastHit = null;
     lstKeys.add(null);
     super.add(element);
     return true;
@@ -35,6 +47,7 @@ public class VBStyleCollection<E, K> extends ArrayList<E> {
 
   @Override
   public boolean addAll(Collection<? extends E> c) {
+    lastHit = null;
     for (int i = c.size() - 1; i >= 0; i--) {
       lstKeys.add(null);
     }
@@ -42,6 +55,7 @@ public class VBStyleCollection<E, K> extends ArrayList<E> {
   }
 
   public void addAllWithKey(Collection<E> elements, Collection<K> keys) {
+    lastHit = null;
     int index = super.size();
 
     for (K key : keys) {
@@ -53,6 +67,7 @@ public class VBStyleCollection<E, K> extends ArrayList<E> {
   }
 
   public void addWithKey(E element, K key) {
+    lastHit = null;
     map.put(key, super.size());
     super.add(element);
     lstKeys.add(key);
@@ -72,12 +87,14 @@ public class VBStyleCollection<E, K> extends ArrayList<E> {
 
   @Override
   public void add(int index, E element) {
+    lastHit = null;
     addToListIndex(index, 1);
     lstKeys.add(index, null);
     super.add(index, element);
   }
 
   public void addWithKeyAndIndex(int index, E element, K key) {
+    lastHit = null;
     addToListIndex(index, 1);
     map.put(key, index);
     super.add(index, element);
@@ -85,6 +102,7 @@ public class VBStyleCollection<E, K> extends ArrayList<E> {
   }
 
   public void removeWithKey(K key) {
+    lastHit = null;
     Integer indexBox = map.get(key);
     if (indexBox == null) {
       return;
@@ -98,6 +116,7 @@ public class VBStyleCollection<E, K> extends ArrayList<E> {
 
   @Override
   public E remove(int index) {
+    lastHit = null;
     addToListIndex(index + 1, -1);
     K obj = lstKeys.get(index);
     if (obj != null) {
@@ -108,11 +127,14 @@ public class VBStyleCollection<E, K> extends ArrayList<E> {
   }
 
   public E getWithKey(K key) {
-    Integer index = map.get(key);
-    if (index == null) {
-      return null;
+    Hit<K> hit = lastHit;
+    if (hit != null && Objects.equals(hit.key(), key)) {
+      return hit.index() < 0 ? null : super.get(hit.index());
     }
-    return super.get(index);
+    Integer index = map.get(key);
+    int resolved = index == null ? -1 : index;
+    lastHit = new Hit<>(key, resolved);
+    return resolved < 0 ? null : super.get(resolved);
   }
 
   public int getIndexByKey(K key) {
@@ -129,6 +151,7 @@ public class VBStyleCollection<E, K> extends ArrayList<E> {
 
   @Override
   public void clear() {
+    lastHit = null;
     map.clear();
     lstKeys.clear();
     super.clear();
@@ -144,6 +167,7 @@ public class VBStyleCollection<E, K> extends ArrayList<E> {
   }
 
   private void setMap(HashMap<K, Integer> map) {
+    lastHit = null;
     this.map = map;
   }
 
@@ -156,6 +180,7 @@ public class VBStyleCollection<E, K> extends ArrayList<E> {
   }
 
   private void setLstKeys(ArrayList<K> lstKeys) {
+    lastHit = null;
     this.lstKeys = lstKeys;
   }
 
