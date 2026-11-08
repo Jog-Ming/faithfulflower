@@ -737,7 +737,7 @@ public class NestedClassProcessor {
         final Map<Integer, VarVersionPair> mapParamsToNewVars = new HashMap<>();
         if (method.synthParameters != null) {
           int index = 0, varIndex = 1;
-          MethodDescriptor md = MethodDescriptor.parseDescriptor(method.methodStruct.getDescriptor());
+          MethodDescriptor md = method.methodStruct.plainDescriptor();
 
           for (VarVersionPair pair : method.synthParameters) {
             if (pair != null) {
@@ -979,7 +979,7 @@ public class NestedClassProcessor {
 
       for (StructMethod mt : cl.getMethods()) {
         if (CodeConstants.INIT_NAME.equals(mt.getName())) {
-          MethodDescriptor md = MethodDescriptor.parseDescriptor(mt.getDescriptor());
+          MethodDescriptor md = mt.plainDescriptor();
           MethodWrapper method = wrapper.getMethodWrapper(CodeConstants.INIT_NAME, mt.getDescriptor());
           DirectGraph graph = method.getOrBuildGraph();
 

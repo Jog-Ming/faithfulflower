@@ -5125,7 +5125,7 @@ public final class RoundTrip {
   /** The implicit first frame's length: the method's parameters, counting long and double twice. */
   private static int initialLocalSlots(StructMethod method) {
     org.jetbrains.java.decompiler.struct.gen.MethodDescriptor descriptor =
-      org.jetbrains.java.decompiler.struct.gen.MethodDescriptor.parseDescriptor(method.getDescriptor());
+      method.plainDescriptor();
     int slots = method.hasModifier(CodeConstants.ACC_STATIC) ? 0 : 1;
     for (VarType param : descriptor.params) {
       slots += param.stackSize;

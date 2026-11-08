@@ -794,7 +794,7 @@ public final class RowMerge {
 
   private static int paramSlots(StructMethod mt) {
     int slots = mt.hasModifier(CodeConstants.ACC_STATIC) ? 0 : 1;
-    for (VarType param : MethodDescriptor.parseDescriptor(mt.getDescriptor()).params) {
+    for (VarType param : mt.plainDescriptor().params) {
       slots += param.stackSize;
     }
     return slots;

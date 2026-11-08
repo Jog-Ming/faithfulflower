@@ -61,7 +61,7 @@ public class MethodWrapper {
   }
 
   public MethodDescriptor desc() {
-    return MethodDescriptor.parseDescriptor(methodStruct, null);
+    return methodStruct.methodDescriptor();
   }
 
   @Override

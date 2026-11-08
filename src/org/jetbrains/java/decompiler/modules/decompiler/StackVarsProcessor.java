@@ -1190,7 +1190,7 @@ public class StackVarsProcessor {
           if (!newExpr.isLambda()) {
             for (StructMethod mt : node.classStruct.getMethods()) {
               if (mt.getName().equals(CodeConstants.INIT_NAME)) {
-                List<VarType> paramTypes = Arrays.asList(MethodDescriptor.parseDescriptor(mt.getDescriptor()).params);
+                List<VarType> paramTypes = Arrays.asList(mt.plainDescriptor().params);
 
                 for (int i = Math.max(0, index - paramTypes.size()); i < index; ++i) {
                   Exprent temp = list.get(i);

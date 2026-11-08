@@ -200,7 +200,7 @@ public class LambdaProcessor {
       if (owner == null) {
         continue;
       }
-      MethodDescriptor md = MethodDescriptor.parseDescriptor(lambda.getDescriptor());
+      MethodDescriptor md = lambda.plainDescriptor();
       String functional = "(" + md.params[md.params.length - 1] + ")V";
 
       ClassNode orphan = new ClassNode(cl.qualifiedName, lambda.getName(), lambda.getDescriptor(),
@@ -255,7 +255,7 @@ public class LambdaProcessor {
       return false;
     }
 
-    MethodDescriptor md = MethodDescriptor.parseDescriptor(lambda.getDescriptor());
+    MethodDescriptor md = lambda.plainDescriptor();
     if (md.params.length < 1 || !VarType.VARTYPE_VOID.equals(md.ret)) {
       return false;
     }
@@ -293,7 +293,7 @@ public class LambdaProcessor {
     if (lvt == null) {
       return false;
     }
-    MethodDescriptor md = MethodDescriptor.parseDescriptor(owner.getDescriptor());
+    MethodDescriptor md = owner.plainDescriptor();
     int slot = owner.hasModifier(CodeConstants.ACC_STATIC) ? 0 : 1;
     for (VarType param : md.params) {
       if (name.equals(lvt.getName(slot, 0)) && (!matchType || param.equals(type))) {

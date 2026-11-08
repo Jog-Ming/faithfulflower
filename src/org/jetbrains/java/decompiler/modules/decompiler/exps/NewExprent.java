@@ -1958,7 +1958,7 @@ public class NewExprent extends Exprent {
     if (sam.getSignature() != null) {
       parameters = sam.getSignature().parameterTypes;
     } else {
-      parameters = Arrays.asList(MethodDescriptor.parseDescriptor(sam.getDescriptor()).params);
+      parameters = Arrays.asList(sam.plainDescriptor().params);
     }
     Map<VarType, VarType> map = null;
     if (inferredLambdaType.isGeneric()) {
@@ -1973,7 +1973,7 @@ public class NewExprent extends Exprent {
     // inference the source's own cast may have been written to guide.
     VarType samReturn = sam.getSignature() != null && sam.getSignature().returnType != null
       ? sam.getSignature().returnType
-      : MethodDescriptor.parseDescriptor(sam.getDescriptor()).ret;
+      : sam.plainDescriptor().ret;
     if (map != null) {
       samReturn = samReturn.remap(map);
     }
@@ -2444,7 +2444,7 @@ public class NewExprent extends Exprent {
     } else {
       // No constructor Signature: the erased parameters must still be the class's variables'
       // bounds, in order, for the target to drive inference through them.
-      VarType[] parameters = MethodDescriptor.parseDescriptor(desc.getDescriptor()).params;
+      VarType[] parameters = desc.plainDescriptor().params;
       if (parameters.length != signature.fparameters.size()) {
         return false;
       }

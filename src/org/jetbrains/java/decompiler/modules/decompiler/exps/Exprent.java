@@ -509,7 +509,7 @@ public abstract class Exprent implements IMatchable {
       if (!"<init>".equals(method.getName())) {
         continue;
       }
-      MethodDescriptor descriptor = MethodDescriptor.parseDescriptor(method.getDescriptor());
+      MethodDescriptor descriptor = method.plainDescriptor();
       if (descriptor.params.length > 0 && descriptor.params[0].type == CodeType.OBJECT
         && outer.qualifiedName.equals(descriptor.params[0].value)) {
         return true;

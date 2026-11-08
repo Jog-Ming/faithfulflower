@@ -87,6 +87,10 @@ public class StructMethod extends StructMember {
   private final String classQualifiedName;
   private final GenericMethodDescriptor signature;
   private IVariableNameProvider renamer;
+  // The descriptor is fixed at class load. Both forms are built on demand; a racing first caller
+  // may build twice, and either complete instance answers identically.
+  private volatile MethodDescriptor plainDescriptor;
+  private volatile MethodDescriptor fullDescriptor;
 
   private StructMethod(int accessFlags,
                        Map<Key<?>, Object> attributes,
@@ -424,8 +428,24 @@ public class StructMethod extends StructMember {
     return descriptor;
   }
 
+  /** The descriptor with the method's generic signature applied; read-only after construction. */
   public MethodDescriptor methodDescriptor() {
-    return MethodDescriptor.parseDescriptor(this, null);
+    MethodDescriptor md = fullDescriptor;
+    if (md == null) {
+      md = MethodDescriptor.parseDescriptor(this, null);
+      fullDescriptor = md;
+    }
+    return md;
+  }
+
+  /** The erasure descriptor alone; read-only after construction. */
+  public MethodDescriptor plainDescriptor() {
+    MethodDescriptor md = plainDescriptor;
+    if (md == null) {
+      md = MethodDescriptor.parseDescriptor(descriptor);
+      plainDescriptor = md;
+    }
+    return md;
   }
 
   public BytecodeVersion getBytecodeVersion() {

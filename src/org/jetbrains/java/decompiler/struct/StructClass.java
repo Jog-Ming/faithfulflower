@@ -3,6 +3,7 @@ package org.jetbrains.java.decompiler.struct;
 
 import org.jetbrains.annotations.Nullable;
 import org.jetbrains.java.decompiler.code.BytecodeVersion;
+import org.jetbrains.java.decompiler.code.CodeConstants;
 import org.jetbrains.java.decompiler.main.DecompilerContext;
 import org.jetbrains.java.decompiler.main.extern.IFernflowerLogger;
 import org.jetbrains.java.decompiler.main.extern.IFernflowerPreferences;
@@ -232,6 +233,33 @@ public class StructClass extends StructMember {
 
   public VBStyleCollection<StructMethod, String> getMethods() {
     return methods;
+  }
+
+  private volatile Set<Integer> overloadedConstructorArities;
+
+  /**
+   * Whether more than one constructor declares this many parameters. Overload resolution's
+   * answer depends only on the class file, so the arities are counted once and then looked up.
+   */
+  public boolean hasOverloadedConstructor(int arity) {
+    Set<Integer> arities = overloadedConstructorArities;
+    if (arities == null) {
+      Map<Integer, Integer> counts = new HashMap<>();
+      for (StructMethod method : methods) {
+        if (CodeConstants.INIT_NAME.equals(method.getName())) {
+          counts.merge(method.plainDescriptor().params.length, 1, Integer::sum);
+        }
+      }
+      Set<Integer> overloaded = new HashSet<>();
+      for (Map.Entry<Integer, Integer> entry : counts.entrySet()) {
+        if (entry.getValue() > 1) {
+          overloaded.add(entry.getKey());
+        }
+      }
+      arities = Collections.unmodifiableSet(overloaded);
+      overloadedConstructorArities = arities;
+    }
+    return arities.contains(arity);
   }
 
   public VBStyleCollection<StructField, String> getFields() {

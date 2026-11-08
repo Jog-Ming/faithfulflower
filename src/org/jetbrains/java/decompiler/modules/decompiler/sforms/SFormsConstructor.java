@@ -424,7 +424,7 @@ public abstract class SFormsConstructor {
   private SFormsFastMapDirect createFirstMap() {
     boolean hasThis = !this.mt.hasModifier(CodeConstants.ACC_STATIC);
 
-    MethodDescriptor md = MethodDescriptor.parseDescriptor(this.mt.getDescriptor());
+    MethodDescriptor md = this.mt.plainDescriptor();
 
     int paramCount = md.params.length + (hasThis ? 1 : 0);
 

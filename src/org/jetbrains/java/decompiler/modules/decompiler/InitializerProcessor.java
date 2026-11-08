@@ -152,7 +152,7 @@ public final class InitializerProcessor {
       String desc = mt.getDescriptor();
 
       if (mt.isSynthetic() && CodeConstants.INIT_NAME.equals(name)) {
-        MethodDescriptor md = MethodDescriptor.parseDescriptor(desc);
+        MethodDescriptor md = mt.plainDescriptor();
         if (md.params.length > 0) {
           VarType type = md.params[md.params.length - 1];
           if (type.type == CodeType.OBJECT) {

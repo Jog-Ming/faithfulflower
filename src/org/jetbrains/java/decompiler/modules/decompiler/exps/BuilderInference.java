@@ -118,7 +118,7 @@ public final class BuilderInference {
       if (!referenceNode.lambdaInformation.method_name.equals(candidate.getName())
         || candidate.hasModifier(CodeConstants.ACC_STATIC)
         || !candidate.hasModifier(CodeConstants.ACC_ABSTRACT)
-        || MethodDescriptor.parseDescriptor(candidate.getDescriptor()).params.length != samArity) {
+        || candidate.plainDescriptor().params.length != samArity) {
         continue;
       }
       if (samMethod != null) {
@@ -410,7 +410,7 @@ public final class BuilderInference {
       if (!referenceNode.lambdaInformation.method_name.equals(candidate.getName())
         || candidate.hasModifier(CodeConstants.ACC_STATIC)
         || !candidate.hasModifier(CodeConstants.ACC_ABSTRACT)
-        || MethodDescriptor.parseDescriptor(candidate.getDescriptor()).params.length != samArity) {
+        || candidate.plainDescriptor().params.length != samArity) {
         continue;
       }
       if (samMethod != null) {
@@ -704,7 +704,7 @@ public final class BuilderInference {
       if (!referenceNode.lambdaInformation.method_name.equals(candidate.getName())
         || candidate.hasModifier(CodeConstants.ACC_STATIC)
         || !candidate.hasModifier(CodeConstants.ACC_ABSTRACT)
-        || MethodDescriptor.parseDescriptor(candidate.getDescriptor()).params.length != samArity) {
+        || candidate.plainDescriptor().params.length != samArity) {
         continue;
       }
       if (samMethod != null) {

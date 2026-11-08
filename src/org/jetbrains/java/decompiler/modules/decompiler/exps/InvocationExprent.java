@@ -3084,17 +3084,7 @@ public class InvocationExprent extends Exprent {
     if (cl == null || descriptor == null) {
       return false;
     }
-    int arity = descriptor.params.length;
-    int count = 0;
-    for (StructMethod method : cl.getMethods()) {
-      if (CodeConstants.INIT_NAME.equals(method.getName())
-        && MethodDescriptor.parseDescriptor(method.getDescriptor()).params.length == arity) {
-        if (++count >= 2) {
-          return true;
-        }
-      }
-    }
-    return false;
+    return cl.hasOverloadedConstructor(descriptor.params.length);
   }
 
   private static final ThreadLocal<int[]> CALL_LINE = ThreadLocal.withInitial(() -> new int[]{-1});
@@ -4434,7 +4424,7 @@ public class InvocationExprent extends Exprent {
           if (stClass != null) {
             for (StructMethod mt : stClass.getMethods()) {
               if (name.equals(mt.getName()) && (currCls == null || canAccess(currCls.classStruct, mt)) && !stringDescriptor.equals(mt.getDescriptor())) {
-                MethodDescriptor md = MethodDescriptor.parseDescriptor(mt.getDescriptor());
+                MethodDescriptor md = mt.plainDescriptor();
                 if (md.params.length == descriptor.params.length) {
                   if (md.params[i].type == CodeType.OBJECT) {
                     if (DecompilerContext.getStructContext().instanceOf(inv.getInstance().getExprType().value, md.params[i].value)) {
@@ -5333,7 +5323,7 @@ public class InvocationExprent extends Exprent {
 
       for (StructMethod mt : cls.getMethods()) {
         if (name.equals(mt.getName())) {
-          MethodDescriptor md = MethodDescriptor.parseDescriptor(mt.getDescriptor());
+          MethodDescriptor md = mt.plainDescriptor();
           boolean matchedParams;
           if (customParamMatcher == null) {
             if (varargs) {
@@ -8626,7 +8616,7 @@ public class InvocationExprent extends Exprent {
     for (StructMethod candidate : iface.getMethods()) {
       if (!name.equals(candidate.getName()) || candidate.hasModifier(CodeConstants.ACC_STATIC)
         || !candidate.hasModifier(CodeConstants.ACC_ABSTRACT)
-        || MethodDescriptor.parseDescriptor(candidate.getDescriptor()).params.length != arity) {
+        || candidate.plainDescriptor().params.length != arity) {
         continue;
       }
       if (found != null) {

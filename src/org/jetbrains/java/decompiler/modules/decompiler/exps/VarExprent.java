@@ -292,7 +292,7 @@ public class VarExprent extends Exprent implements Pattern {
         }
 
         boolean param = false;
-        MethodDescriptor descriptor = MethodDescriptor.parseDescriptor(method.methodStruct.getDescriptor());
+        MethodDescriptor descriptor = method.methodStruct.plainDescriptor();
         if (method.varproc != null) {
           Integer originalIndex = method.varproc.getVarOriginalIndex(varIndex);
           int i = originalIndex != null ? originalIndex : varIndex;

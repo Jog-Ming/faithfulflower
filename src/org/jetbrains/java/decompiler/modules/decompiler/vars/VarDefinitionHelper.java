@@ -89,7 +89,7 @@ public class VarDefinitionHelper {
 
     boolean thisvar = !mt.hasModifier(CodeConstants.ACC_STATIC);
 
-    MethodDescriptor md = MethodDescriptor.parseDescriptor(mt.getDescriptor());
+    MethodDescriptor md = mt.plainDescriptor();
 
     int paramcount = 0;
     if (thisvar) {
@@ -660,7 +660,7 @@ public class VarDefinitionHelper {
 
   private VPPEntry mergeVars(RootStatement stat) {
     Map<Integer, VarVersionPair> parent = new HashMap<>(); // Always empty dua!
-    MethodDescriptor md = MethodDescriptor.parseDescriptor(mt.getDescriptor());
+    MethodDescriptor md = mt.plainDescriptor();
 
     int index = 0;
     // this var
@@ -1212,7 +1212,7 @@ public class VarDefinitionHelper {
   }
 
   private void propagateLVTs(Statement stat) {
-    MethodDescriptor md = MethodDescriptor.parseDescriptor(mt.getDescriptor());
+    MethodDescriptor md = mt.plainDescriptor();
     Map<VarVersionPair, VarInfo> types = new LinkedHashMap<>();
 
     if (varproc.hasLVT()) {
@@ -2219,7 +2219,7 @@ public class VarDefinitionHelper {
     if (var.getVarVersionPair().version != 0) {
       return false;
     }
-    MethodDescriptor md = MethodDescriptor.parseDescriptor(mt.getDescriptor());
+    MethodDescriptor md = mt.plainDescriptor();
     int args = mt.hasModifier(CodeConstants.ACC_STATIC) ? 0 : 1;
     for (VarType param : md.params) {
       args += param.stackSize;

@@ -46,7 +46,7 @@ public class DataPoint {
 
     DataPoint point = new DataPoint();
 
-    MethodDescriptor md = MethodDescriptor.parseDescriptor(mt.getDescriptor());
+    MethodDescriptor md = mt.plainDescriptor();
 
     int k = 0;
     if (!mt.hasModifier(CodeConstants.ACC_STATIC)) {

@@ -66,7 +66,7 @@ public class NestedMemberAccess {
           if (graph.first.exprents.size() == 1) {
             Exprent exprent = graph.first.exprents.get(0);
 
-            MethodDescriptor mtdesc = MethodDescriptor.parseDescriptor(mt.getDescriptor());
+            MethodDescriptor mtdesc = mt.plainDescriptor();
             int parcount = mtdesc.params.length;
 
             Exprent exprCore = exprent;
@@ -166,7 +166,7 @@ public class NestedMemberAccess {
             if (exprentFirst instanceof AssignmentExprent &&
                 exprentSecond instanceof ExitExprent) {
 
-              MethodDescriptor mtdesc = MethodDescriptor.parseDescriptor(mt.getDescriptor());
+              MethodDescriptor mtdesc = mt.plainDescriptor();
               int parcount = mtdesc.params.length;
 
               AssignmentExprent asexpr = (AssignmentExprent)exprentFirst;
