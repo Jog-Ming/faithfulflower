@@ -797,10 +797,11 @@ public final class LocalDeclarationOrder {
     }
     java.util.Map<Integer, List<LocalVariable>> rows = rowTable(structMethod);
     // Each move changes the printed order, so the landing point is re-derived after every one;
-    // the moves are few and each declaration can only be hoisted once (its own list then holds
-    // the landing too).
+    // the order is built once and each successful move records itself, exactly as a rebuild
+    // after the move would enumerate the lists. A declaration can only be hoisted once: its own
+    // list then holds the landing too.
+    List<Position> order = declarationOrder(seq, varproc);
     while (true) {
-      List<Position> order = declarationOrder(seq, varproc);
       if (!hoistReservedOne(seq, order, rows, names, fields, method)) {
         return;
       }
@@ -862,14 +863,37 @@ public final class LocalDeclarationOrder {
       }
       debug(method, var, "hoisted above a nested block that reserved slot-" + position.slot);
       Exprent declaration;
+      boolean removed = false;
       if (position.exprent == var) {
         removeIdentity(position.list, position.exprent);
         declaration = position.exprent;
+        removed = true;
       } else {
         declaration = var.copy();
         var.setDefinition(false);
       }
-      insertByTargetSlot(landing.list, declaration);
+      int at = insertByTargetSlot(landing.list, declaration);
+      // Record the move in the order the next candidate is read from: the landing declaration
+      // stands just before the removed position, so its run ends at the preceding slot, and the
+      // new declaration takes its place inside that run. The store left behind by an initialized
+      // declaration is no longer a declaration, so its position keeps printing but loses its slot.
+      if (removed) {
+        order.remove(i);
+      } else {
+        order.set(i, new Position(position.exprent, position.list, -1, position.owner, -1));
+      }
+      int runStart = i - 1;
+      while (runStart > 0 && order.get(runStart - 1).list == landing.list) {
+        runStart--;
+      }
+      int before = 0;
+      for (int j = 0; j < at; j++) {
+        if (landing.list.get(j) != null) {
+          before++;
+        }
+      }
+      order.add(runStart + before,
+        new Position(declaration, landing.list, position.slot, landing.owner, -1));
       return true;
     }
     return false;
@@ -1659,7 +1683,7 @@ public final class LocalDeclarationOrder {
   }
 
   /** Inserts the declaration before the first definition the target gives a higher slot. */
-  private static void insertByTargetSlot(List<Exprent> definitions, Exprent declaration) {
+  private static int insertByTargetSlot(List<Exprent> definitions, Exprent declaration) {
     int slot = targetSlot(declaration);
     int at = definitions.size();
     for (int i = 0; i < definitions.size(); i++) {
@@ -1670,6 +1694,7 @@ public final class LocalDeclarationOrder {
       }
     }
     definitions.add(at, declaration);
+    return at;
   }
 
   /** The slot the target's local table gives this definition, or -1. */
