@@ -365,3 +365,20 @@ tasks.register('bench', JavaExec) {
     }
   }
 }
+
+tasks.register('benchQuick', JavaExec) {
+  group = 'verification'
+  description = 'Fast, noisy decompiler benchmark (JIT, 1 warmup + 3 rounds)'
+  classpath = sourceSets.bench.runtimeClasspath
+  mainClass = 'org.jetbrains.java.decompiler.bench.DecompilerBench'
+  args '--warmup', '1', '--rounds', '3'
+}
+
+tasks.register('benchPrecise', JavaExec) {
+  group = 'verification'
+  description = 'Slow, JIT-free decompiler benchmark (interpreted, 1 warmup + 5 rounds)'
+  classpath = sourceSets.bench.runtimeClasspath
+  mainClass = 'org.jetbrains.java.decompiler.bench.DecompilerBench'
+  args '--warmup', '1', '--rounds', '5'
+  jvmArgs '-Xint'
+}
