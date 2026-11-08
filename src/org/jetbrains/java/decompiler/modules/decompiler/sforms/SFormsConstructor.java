@@ -238,12 +238,14 @@ public abstract class SFormsConstructor {
 
   private void mergeInVarMaps(DirectNode node, DirectGraph dgraph) {
 
-    SFormsFastMapDirect mapNew = new SFormsFastMapDirect(this.factory);
+    SFormsFastMapDirect mapNew = null;
 
     for (DirectEdge pred : node.getPredecessors(DirectEdgeType.REGULAR)) {
       SFormsFastMapDirect mapOut = this.getFilteredOutMap(node, pred.getSource(), dgraph);
-      if (mapNew.isEmpty()) {
-        mapNew = mapOut.getCopy();
+      if (mapNew == null) {
+        // getFilteredOutMap always hands back a map this node owns -- a fresh one or a copy of a
+        // stored out map -- so the first predecessor's map is this node's in-map as it stands.
+        mapNew = mapOut;
       } else {
         mergeMaps(mapNew, mapOut);
       }
@@ -253,7 +255,7 @@ public abstract class SFormsConstructor {
       // TODO: interact with finally?
       SFormsFastMapDirect mapOut = this.catchableVersions.get(pred.getSource().id);
       if (mapOut != null) {
-        if (mapNew.isEmpty()) {
+        if (mapNew == null) {
           mapNew = mapOut.getCopy();
         } else {
           mergeMaps(mapNew, mapOut);
@@ -263,19 +265,19 @@ public abstract class SFormsConstructor {
 
     if (this.extraVarVersions.containsKey(node.id)) {
       SFormsFastMapDirect mapExtra = this.extraVarVersions.get(node.id);
-      if (mapNew.isEmpty()) {
+      if (mapNew == null) {
         mapNew = mapExtra.getCopy();
       } else {
         mergeMaps(mapNew, mapExtra);
       }
     }
 
-    this.inVarVersions.put(node.id, mapNew);
+    this.inVarVersions.put(node.id, mapNew == null ? new SFormsFastMapDirect(this.factory) : mapNew);
   }
 
   private SFormsFastMapDirect getFilteredOutMap(DirectNode node, DirectNode pred, DirectGraph dgraph) {
 
-    SFormsFastMapDirect mapNew = new SFormsFastMapDirect(this.factory);
+    SFormsFastMapDirect mapNew = null;
 
     if (node.id.equals(dgraph.mapNegIfBranch.get(pred.id))) {
       if (this.outNegVarVersions.containsKey(pred.id)) {
@@ -298,6 +300,9 @@ public abstract class SFormsConstructor {
         while (finallyNode != node.tryFinally) {
           ValidationHelper.notNull(finallyNode);
           if (finallyNode.type == DirectNodeType.FINALLY) {
+            if (mapNew == null) {
+              mapNew = new SFormsFastMapDirect(this.factory);
+            }
 
             getAndApplyDiff(this.inVarVersions.get(finallyNode.statement.id + "_FINALLY"), this.outVarVersions.get(finallyNode.id), mapNew);
 
@@ -307,7 +312,7 @@ public abstract class SFormsConstructor {
       }
     }
 
-    return mapNew;
+    return mapNew == null ? new SFormsFastMapDirect(this.factory) : mapNew;
   }
 
   private static void getAndApplyDiff(SFormsFastMapDirect input, SFormsFastMapDirect output, SFormsFastMapDirect target) {
