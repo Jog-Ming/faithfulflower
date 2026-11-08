@@ -2161,11 +2161,6 @@ public final class ConstantNames {
       }
       long[] bounds = pairBounds(cls, firstUses, i, early, indices, untrusted);
       if (bounds[1] != point) {
-        for (Map.Entry<Integer, FirstUse> higher : firstUses.entrySet()) {
-          if (higher.getKey() > i && coordinate(higher.getValue().order(), higher.getValue().offset())
-              == bounds[1]) {
-          }
-        }
         continue; // a higher entry was created before this reference; the pair is not its naming
       }
       int open = -1;
@@ -2214,11 +2209,6 @@ public final class ConstantNames {
       // A pair whose successor is another naming's Class entry records that the two names were
       // written in one expression, in pool order: the source named this owner, then the next.
       int nextClass = anotherNaming(pool, i + 2) ? i + 2 : -1;
-      for (Map.Entry<Integer, FirstUse> lowerEntry : firstUses.entrySet()) {
-        if (lowerEntry.getKey() < i && coordinate(lowerEntry.getValue().order(),
-            lowerEntry.getValue().offset()) == bounds[0]) {
-        }
-      }
       pairs.putIfAbsent(owner, new PairSite(i, point, bounds[0], lastPoolUse(firstUses, use),
         open, close, member, successorKey, pooledKeys(cls, i), at == null ? -1 : at,
         lowerAt == null ? -1 : lowerAt, nextClass,
