@@ -912,6 +912,7 @@ public final class ConstantNames {
     Map<String, long[]> coordinates = new HashMap<>();
     Set<String> strict = new HashSet<>();
     Map<String, Integer> classIndices = classIndices(own);
+    ClassOperands operands = new ClassOperands(own, classIndices);
     Set<Integer> early = earlyClassEntries(own, classIndices);
     Set<Integer> setup = setupClassEntries(own, classIndices);
     // The owners whose pool position pins a naming across methods: an owner whose Class entry an
@@ -933,7 +934,7 @@ public final class ConstantNames {
         direct.add(entry.getKey());
       }
     }
-    Set<String> earlyOwners = earlyOwners(own, classIndices, setup, firstUses);
+    Set<String> earlyOwners = earlyOwners(own, classIndices, setup, firstUses, operands);
     boolean ownEarly = false;
     boolean ownProven = false;
     {
@@ -1037,7 +1038,7 @@ public final class ConstantNames {
     // them: an owner the pool records this way is not offered to the window rules at all.
     Set<String> untrusted = untrustedMethodKeys(own);
     Map<String, PairSite> pairs = pairSites(own, text, firstUses, catchTypes, setup, early, positions,
-      ownProven, untrusted);
+      ownProven, untrusted, operands);
     Map<String, PairSite> activePairs = new HashMap<>();
     Map<String, ValueSite> values = valueSites(own, firstUses, catchTypes, setup, early, positions);
     Map<String, ValueSite> activeValues = new HashMap<>();
@@ -1912,7 +1913,8 @@ public final class ConstantNames {
    * or its superclass's setup entry.
    */
   private static Set<String> earlyOwners(StructClass own, Map<String, Integer> classIndices,
-                                         Set<Integer> setup, Map<Integer, FirstUse> firstUses) {
+                                         Set<Integer> setup, Map<Integer, FirstUse> firstUses,
+                                         ClassOperands operands) {
     Set<String> owners = new HashSet<>();
     int firstReferenced = Integer.MAX_VALUE;
     for (int key : firstUses.keySet()) {
@@ -1945,7 +1947,7 @@ public final class ConstantNames {
       // the naming this rule reproduces. A reference that merely follows the pair is what the
       // naming's own use of the class looks like (a constructor call on an enclosing superclass),
       // not evidence against it.
-      if (classOperand(own, classIndices, index)) {
+      if (operands.isOperand(index)) {
         continue;
       }
       // A pair opening the pool was entered before this_class did. The class-file writer enters
@@ -2173,10 +2175,12 @@ public final class ConstantNames {
                                                  Set<String> catchTypes,
                                                  Set<Integer> setup, Set<Integer> early,
                                                  Map<Pair<String, String>, Map<Integer, Integer>> positions,
-                                                 boolean ownProven, Set<String> untrusted) {
+                                                 boolean ownProven, Set<String> untrusted,
+                                                 ClassOperands operands) {
     Map<String, PairSite> pairs = new HashMap<>();
     List<PooledConstant> pool = cls.getPool().getPool();
     Map<String, Integer> indices = classIndices(cls);
+    PairBounds pairBounds = new PairBounds(cls, firstUses, early, untrusted, indices, operands);
     int writeStart = attributeStart(cls);
     Integer ownIndex = indices.get(cls.qualifiedName);
     // An own entry directly after another naming's pair is the continuation of that expression
@@ -2200,7 +2204,7 @@ public final class ConstantNames {
       boolean ownNaming = owner.equals(cls.qualifiedName) && i < writeStart
         && (ownProven || ownChain
             || directUseAfterPair(firstUses, i));
-      if (classOperand(cls, indices, i)) {
+      if (operands.isOperand(i)) {
         continue; // a reference below the pair entered this Class entry as its operand
       }
       // The pool writer numbers a reference first and enters the Class it names as that
@@ -2244,19 +2248,12 @@ public final class ConstantNames {
         // does not bound this naming: the pool still says this pair precedes the next naming, so
         // the first higher entry an instruction uses is the upper bound on the generation point
         // the naming occupies, and the pair is placed from that generation gap.
-        long[] until = pairBounds(cls, firstUses, i, early, indices, untrusted);
+        long[] until = pairBounds.at(i);
         if (until[1] == Long.MAX_VALUE) {
           continue;
         }
         point = until[1];
-        FirstUse successorUse = null;
-        for (FirstUse candidate : firstUses.values()) {
-          if (coordinate(candidate.order(), candidate.offset()) == point) {
-            successorUse = candidate;
-            break;
-          }
-        }
-        use = successorUse;
+        use = pairBounds.successorUse(i, point);
         if (use == null) {
           continue;
         }
@@ -2278,7 +2275,7 @@ public final class ConstantNames {
       if (direct != null && coordinate(direct.order(), direct.offset()) <= point) {
         continue;
       }
-      long[] bounds = pairBounds(cls, firstUses, i, early, indices, untrusted);
+      long[] bounds = pairBounds.at(i);
       if (bounds[1] != point) {
         continue; // a higher entry was created before this reference; the pair is not its naming
       }
@@ -2324,11 +2321,11 @@ public final class ConstantNames {
         successorKey = null;
       }
       Integer at = position(cls, use, positions);
-      Integer lowerAt = position(cls, lastPoolUseEntry(firstUses, use), positions);
+      Integer lowerAt = position(cls, pairBounds.lastPoolUseEntry(use), positions);
       // A pair whose successor is another naming's Class entry records that the two names were
       // written in one expression, in pool order: the source named this owner, then the next.
       int nextClass = anotherNaming(pool, i + 2) ? i + 2 : -1;
-      pairs.putIfAbsent(owner, new PairSite(i, point, bounds[0], lastPoolUse(firstUses, use),
+      pairs.putIfAbsent(owner, new PairSite(i, point, bounds[0], pairBounds.lastPoolUse(use),
         open, close, member, successorKey, pooledKeys(cls, i), at == null ? -1 : at,
         lowerAt == null ? -1 : lowerAt, nextClass,
         link != null && link.type == CodeConstants.CONSTANT_Fieldref
@@ -2406,7 +2403,56 @@ public final class ConstantNames {
   }
 
   /**
-   * The generation-order bounds of a pair's naming site, read from the pool.
+   * Whether each {@code Class} entry is a reference's operand, precomputed once per pool.
+   *
+   * <p>A reference and its operand are numbered together, the reference first, so a Class entry
+   * above every reference that names it was not entered as an operand: a folded constant naming
+   * interned it, possibly long before any instruction uses the class. The old check scanned the
+   * pool below the entry for every query; the earliest reference that names the entry answers it
+   * for good, so one pass over the pool serves every query.
+   */
+  private static final class ClassOperands {
+    private final StructClass cls;
+    private final Map<String, Integer> classIndices;
+    private boolean[] operands;
+
+    ClassOperands(StructClass cls, Map<String, Integer> classIndices) {
+      this.cls = cls;
+      this.classIndices = classIndices;
+    }
+
+    boolean isOperand(int key) {
+      boolean[] flags = operands;
+      if (flags == null) {
+        flags = operandFlags();
+      }
+      return key >= 0 && key < flags.length && flags[key];
+    }
+
+    private boolean[] operandFlags() {
+      List<PooledConstant> pool = cls.getPool().getPool();
+      int size = pool.size();
+      int[] firstReference = new int[size];
+      java.util.Arrays.fill(firstReference, Integer.MAX_VALUE);
+      for (int i = 1; i < size; i++) {
+        if (pool.get(i) instanceof LinkConstant link && link.classname != null) {
+          Integer target = classIndices.get(link.classname);
+          if (target != null && target < size && i < firstReference[target]) {
+            firstReference[target] = i;
+          }
+        }
+      }
+      boolean[] flags = new boolean[size];
+      for (int key = 1; key < size; key++) {
+        flags[key] = firstReference[key] < key;
+      }
+      this.operands = flags;
+      return flags;
+    }
+  }
+
+  /**
+   * The generation-order bounds of a pair's naming site, precomputed once for the class's pool.
    *
    * <p>The same bracket as {@link #coordinates}, except that a {@code Class} entry entered as a
    * reference's operand is bounded by that reference's first use: the operand is numbered after
@@ -2414,93 +2460,263 @@ public final class ConstantNames {
    * entry point even when the class's own first instruction use lies in a later method. Without
    * the cap a lower entry first used after the pair would put the bound past a site the pool
    * still admits.
+   *
+   * <p>{@code pairBounds} used to rebuild every lower entry's bound and rescan the pool for each
+   * candidate pair. The bounds, the cap and the upper bound are fixed by the pool and the first
+   * uses, so they are computed once here: {@code lower} holds each entry's lower contribution,
+   * {@code suffix} the minimum higher contribution above each index, and the lower entry a query
+   * admits is the greatest contribution below the successor, kept in a sorted set as the pair walk
+   * (the only caller, in ascending pool order) passes each index.
    */
-  private static long[] pairBounds(StructClass cls, Map<Integer, FirstUse> firstUses, int index,
-                                   Set<Integer> early, Map<String, Integer> classIndices,
-                                   Set<String> untrusted) {
-    Map<Integer, Long> upper = new HashMap<>();
-    long succ = Long.MAX_VALUE;
-    List<PooledConstant> entries = cls.getPool().getPool();
-    for (Map.Entry<Integer, FirstUse> entry : firstUses.entrySet()) {
-      int key = entry.getKey();
-      if (key == index || early.contains(key)) {
-        continue;
-      }
-      if (key < index && entries.get(key) instanceof PrimitiveConstant primitive
-          && primitive.type == CodeConstants.CONSTANT_Class
-          && !classOperand(cls, classIndices, key)) {
-        // A bare Class entry below the pair may have been interned by a constant naming long
-        // before the instruction that first uses it (`instanceof Player` in a late method says
-        // nothing about when the entry was created). Its first use does not bound the naming from
-        // below. Only an entry a reference entered as its operand has its creation pinned; the cap
-        // loop adds those. The upper bound keeps every entry: the pair's successor may itself be
-        // the next naming's Class entry, and its first use is the point that places the pair.
-        continue;
-      }
-      if (key != index + 2 && untrusted.contains(entry.getValue().methodKey())
-          && (key > index || valuesMethod(entry.getValue().methodKey()))) {
-        // The method's class-file position is not where it was generated (a synthetic lambda is
-        // generated with its enclosing method, a record's generated methods after every source
-        // method, an enum's synthesized {@code $values} after them), so its first use says
-        // nothing about when this entry was created -- not as an upper bound and not as a lower
-        // one. A lambda's use is left as a lower bound: its body is generated with the enclosing
-        // method, so its class-file rank only overshoots, and skipping every such bound widens the
-        // gap enough to admit a naming in an unrelated method. Only the enum's {@code $values},
-        // whose whole body is synthesized after every source method, is skipped on the lower side.
-        // The pair's own successor is the anchor and always counts.
-        continue;
-      }
-      long point = coordinate(entry.getValue().order(), entry.getValue().offset());
-      if (key < index) {
-        upper.put(key, point);
-      }
-      else {
-        succ = Math.min(succ, point);
-      }
+  private static final class PairBounds {
+    private final StructClass cls;
+    private final List<PooledConstant> pool;
+    private final Map<Integer, FirstUse> firstUses;
+    private final Set<Integer> early;
+    private final Set<String> untrusted;
+    private final Map<String, Integer> classIndices;
+    private final ClassOperands operands;
+    private final int size;
+    private boolean[] earlyAt;
+    private long[] points;
+    private long[] caps;
+    private long[] lower;
+    private long[] suffix;
+    private FirstUse[] suffixUse;
+    private java.util.TreeSet<Long> lowerValues;
+    private int inserted;
+    private Map<Integer, MethodUses> orderUses;
+
+    PairBounds(StructClass cls, Map<Integer, FirstUse> firstUses, Set<Integer> early,
+               Set<String> untrusted, Map<String, Integer> classIndices, ClassOperands operands) {
+      this.cls = cls;
+      this.pool = cls.getPool().getPool();
+      this.firstUses = firstUses;
+      this.early = early;
+      this.untrusted = untrusted;
+      this.classIndices = classIndices;
+      this.operands = operands;
+      this.size = pool.size();
     }
-    List<PooledConstant> pool = cls.getPool().getPool();
-    for (int i = 1; i < pool.size(); i++) {
-      if (!(pool.get(i) instanceof LinkConstant link) || link.classname == null) {
-        continue;
+
+    /**
+     * The pair's bounds: the greatest admitted lower entry's first use, and the earliest higher
+     * entry's. Queries arrive in ascending pool order from the pair walk.
+     */
+    long[] at(int index) {
+      build();
+      if (index < 0 || index >= size) {
+        return new long[]{Long.MIN_VALUE, Long.MAX_VALUE}; // never reached from the pair walk
       }
-      Integer operand = classIndices.get(link.classname);
-      FirstUse use = firstUses.get(i);
-      if (operand == null || use == null || operand >= index || i >= operand
-          || early.contains(operand)) {
-        continue;
+      long succ = suffix[index + 1];
+      int neighbour = index + 2;
+      if (neighbour < size && points[neighbour] != NO_COORDINATE && !earlyAt[neighbour]) {
+        // The pair's own successor is the anchor and always counts, even in a method whose
+        // class-file position is not its generation point.
+        succ = Math.min(succ, points[neighbour]);
       }
-      upper.merge(operand, coordinate(use.order(), use.offset()), Math::min);
+      return new long[]{predecessor(index, succ), succ};
     }
-    // A lower entry's first use can fall after the pair's successor: the entry was created
-    // before the pair (its index is lower), but its first instruction use may come later -- a
-    // value pooled by a naming, a reference in a synthetic method whose class-file position is
-    // not its generation point. Such a point cannot bound the naming from below: any site the
-    // pair admits lies before the successor, and so after every lower entry's creation.
-    long pred = Long.MIN_VALUE;
-    for (long point : upper.values()) {
-      if (point < succ) {
-        pred = Math.max(pred, point);
+
+    /** The first use whose generation point is this pair's upper bound. */
+    FirstUse successorUse(int index, long point) {
+      int neighbour = index + 2;
+      if (neighbour < size && points[neighbour] == point) {
+        return firstUses.get(neighbour);
       }
+      return suffixUse[index + 1];
     }
-    return new long[]{pred, succ};
+
+    /** The generation point of the last pool entry first used before the reference in its method. */
+    long lastPoolUse(FirstUse successor) {
+      FirstUse entry = lastPoolUseEntry(successor);
+      return entry == null ? NO_COORDINATE : coordinate(entry.order(), entry.offset());
+    }
+
+    /** The last pool entry first used before the reference in its method, or null when none is. */
+    FirstUse lastPoolUseEntry(FirstUse successor) {
+      Map<Integer, MethodUses> groups = orderUses;
+      if (groups == null) {
+        groups = groupFirstUses();
+      }
+      MethodUses uses = groups.get(successor.order());
+      return uses == null ? null : uses.before(successor.offset());
+    }
+
+    private void build() {
+      if (lower != null) {
+        return;
+      }
+      earlyAt = new boolean[size];
+      for (int key : early) {
+        if (key >= 0 && key < size) {
+          earlyAt[key] = true;
+        }
+      }
+      points = new long[size];
+      java.util.Arrays.fill(points, NO_COORDINATE);
+      for (Map.Entry<Integer, FirstUse> entry : firstUses.entrySet()) {
+        int key = entry.getKey();
+        if (key >= 0 && key < size) {
+          points[key] = coordinate(entry.getValue().order(), entry.getValue().offset());
+        }
+      }
+      // A Class entry a reference below it names was entered with that reference, so the
+      // reference's first use is the entry's creation point even where its own use comes later.
+      caps = new long[size];
+      java.util.Arrays.fill(caps, Long.MAX_VALUE);
+      for (int i = 1; i < size; i++) {
+        if (!(pool.get(i) instanceof LinkConstant link) || link.classname == null) {
+          continue;
+        }
+        Integer target = classIndices.get(link.classname);
+        if (target == null || target >= size || i >= target || points[i] == NO_COORDINATE) {
+          continue;
+        }
+        if (points[i] < caps[target]) {
+          caps[target] = points[i];
+        }
+      }
+      lower = new long[size];
+      java.util.Arrays.fill(lower, Long.MAX_VALUE);
+      for (int key = 0; key < size; key++) {
+        if (earlyAt[key]) {
+          continue;
+        }
+        boolean classEntry = pool.get(key) instanceof PrimitiveConstant primitive
+          && primitive.type == CodeConstants.CONSTANT_Class;
+        // A Class entry a reference entered as its operand may have no instruction use of its
+        // own; the cap above is then its whole lower bound. Every other entry contributes only
+        // through a first use.
+        long base;
+        if (points[key] == NO_COORDINATE) {
+          if (!classEntry) {
+            continue;
+          }
+          base = Long.MAX_VALUE;
+        }
+        else {
+          String methodKey = firstUses.get(key).methodKey();
+          // The method's class-file position is not where it was generated (a synthetic lambda is
+          // generated with its enclosing method, a record's generated methods after every source
+          // method, an enum's synthesized {@code $values} after them). A lambda's use is left as
+          // a lower bound: its body is generated with the enclosing method, so its class-file
+          // rank only overshoots. Only the enum's {@code $values}, whose whole body is
+          // synthesized after every source method, is skipped on the lower side.
+          base = untrusted.contains(methodKey) && valuesMethod(methodKey)
+            ? Long.MAX_VALUE : points[key];
+        }
+        if (classEntry) {
+          if (!operands.isOperand(key)) {
+            // A bare Class entry below the pair may have been interned by a constant naming long
+            // before the instruction that first uses it (`instanceof Player` in a late method
+            // says nothing about when the entry was created). Its first use does not bound the
+            // naming from below; only an entry a reference entered as its operand has its
+            // creation pinned.
+            continue;
+          }
+          lower[key] = Math.min(base, caps[key]);
+        }
+        else {
+          lower[key] = base;
+        }
+      }
+      // The upper bound keeps every higher entry, including a bare Class entry: the pair's
+      // successor may itself be the next naming's Class entry, and its first use is the point
+      // that places the pair. An untrusted method's use says nothing about when the entry was
+      // created, except for the pair's own successor, which is added per query above.
+      suffix = new long[size + 1];
+      suffixUse = new FirstUse[size + 1];
+      suffix[size] = Long.MAX_VALUE;
+      for (int key = size - 1; key >= 0; key--) {
+        FirstUse use = null;
+        long value = Long.MAX_VALUE;
+        if (points[key] != NO_COORDINATE && !earlyAt[key]
+            && !untrusted.contains(firstUses.get(key).methodKey())) {
+          value = points[key];
+          use = firstUses.get(key);
+        }
+        if (value < suffix[key + 1]) {
+          suffix[key] = value;
+          suffixUse[key] = use;
+        }
+        else {
+          suffix[key] = suffix[key + 1];
+          suffixUse[key] = suffixUse[key + 1];
+        }
+      }
+      lowerValues = new java.util.TreeSet<>();
+    }
+
+    /**
+     * The greatest lower contribution below the successor among entries before this index.
+     *
+     * <p>A lower entry's first use can fall after the pair's successor: the entry was created
+     * before the pair (its index is lower), but its first instruction use may come later -- a
+     * value pooled by a naming, a reference in a synthetic method whose class-file position is
+     * not its generation point. Such a point cannot bound the naming from below, so it is
+     * dropped.
+     */
+    private long predecessor(int index, long succ) {
+      if (index < inserted) {
+        // Not reachable from the ascending pair walk; answer exactly without the sorted set.
+        long found = Long.MIN_VALUE;
+        for (int key = 0; key < index; key++) {
+          long value = lower[key];
+          if (value != Long.MAX_VALUE && value < succ) {
+            found = Math.max(found, value);
+          }
+        }
+        return found;
+      }
+      while (inserted < index) {
+        long value = lower[inserted++];
+        if (value != Long.MAX_VALUE) {
+          lowerValues.add(value);
+        }
+      }
+      Long floor = lowerValues.floor(succ - 1);
+      return floor == null ? Long.MIN_VALUE : floor;
+    }
+
+    private Map<Integer, MethodUses> groupFirstUses() {
+      Map<Integer, List<FirstUse>> groups = new HashMap<>();
+      for (FirstUse use : firstUses.values()) {
+        groups.computeIfAbsent(use.order(), k -> new ArrayList<>()).add(use);
+      }
+      Map<Integer, MethodUses> result = new HashMap<>();
+      for (Map.Entry<Integer, List<FirstUse>> entry : groups.entrySet()) {
+        List<FirstUse> list = entry.getValue();
+        list.sort((a, b) -> Integer.compare(a.offset(), b.offset()));
+        int count = list.size();
+        int[] offsets = new int[count];
+        FirstUse[] uses = new FirstUse[count];
+        for (int i = 0; i < count; i++) {
+          offsets[i] = list.get(i).offset();
+          uses[i] = list.get(i);
+        }
+        result.put(entry.getKey(), new MethodUses(offsets, uses));
+      }
+      return orderUses = result;
+    }
   }
 
-  /**
-   * Whether a reference below this {@code Class} entry names the class as its operand.
-   *
-   * <p>A reference and its operand are numbered together, the reference first, so a Class entry
-   * above every reference that names it was not entered as an operand: a folded constant naming
-   * interned it, possibly long before any instruction uses the class.
-   */
-  private static boolean classOperand(StructClass cls, Map<String, Integer> classIndices, int key) {
-    List<PooledConstant> pool = cls.getPool().getPool();
-    for (int i = 1; i < key && i < pool.size(); i++) {
-      if (pool.get(i) instanceof LinkConstant link && link.classname != null
-          && Integer.valueOf(key).equals(classIndices.get(link.classname))) {
-        return true;
-      }
+  /** One method's first uses ordered by instruction offset, for the last-use-before query. */
+  private static final class MethodUses {
+    private final int[] offsets;
+    private final FirstUse[] uses;
+
+    MethodUses(int[] offsets, FirstUse[] uses) {
+      this.offsets = offsets;
+      this.uses = uses;
     }
-    return false;
+
+    /** The last use strictly before this offset, or null when the method has none before it. */
+    FirstUse before(int offset) {
+      int found = java.util.Arrays.binarySearch(offsets, offset);
+      int at = found >= 0 ? found - 1 : -found - 2;
+      return at < 0 ? null : uses[at];
+    }
   }
 
   /**
@@ -2571,34 +2787,6 @@ public final class ConstantNames {
 
   private static String inheritedKey(InheritedConstant inherited) {
     return inherited.kind() + "|" + inherited.printed();
-  }
-
-  /**
-   * The generation point of the last pool entry first used before the reference in its method, or
-   * {@link #NO_COORDINATE}.
-   *
-   * <p>The pair sits immediately before its successor in the pool, so the source named the constant
-   * after that successor's predecessors were all created and before any later entry was. Nothing
-   * can have been entered between the naming and the reference; a site printed before an earlier
-   * entry's first use would create its own entry after the pair instead and reorder the pool.
-   */
-  private static long lastPoolUse(Map<Integer, FirstUse> firstUses, FirstUse successor) {
-    FirstUse entry = lastPoolUseEntry(firstUses, successor);
-    return entry == null ? NO_COORDINATE : coordinate(entry.order(), entry.offset());
-  }
-
-  /** The last pool entry first used before the reference in its method, or null when none is. */
-  private static FirstUse lastPoolUseEntry(Map<Integer, FirstUse> firstUses, FirstUse successor) {
-    FirstUse last = null;
-    for (FirstUse use : firstUses.values()) {
-      if (use.order() != successor.order() || use.offset() >= successor.offset()) {
-        continue;
-      }
-      if (last == null || compare(use, last) > 0) {
-        last = use;
-      }
-    }
-    return last;
   }
 
   /** The first '(' printed after this position that belongs to a call on the same statement. */
