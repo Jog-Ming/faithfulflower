@@ -769,13 +769,18 @@ public final class LineAlign {
       TreeMap<Integer, Integer> shifts, Set<Integer> conflicted, Set<Integer> entryLines,
       ClassesProcessor.ClassNode root) {
     if (root != null) {
-      anchorClassLines(root, 0, tracers, lines, shifts, conflicted, entryLines);
+      // The walk visits every class of the file, and each visit used to rescan every tracer to
+      // find its own class's first line. The mappings are final by now (the join pass above is
+      // the last writer), so one pass over the tracers answers every class.
+      Map<String, Integer> firstLines = firstMemberLines(tracers, lines.length);
+      anchorClassLines(root, 0, tracers, lines, shifts, conflicted, entryLines, firstLines);
     }
   }
 
   private static void anchorClassLines(ClassesProcessor.ClassNode node, int enclosingLine,
       Map<Pair<String, String>, BytecodeMappingTracer> tracers, String[] lines,
-      TreeMap<Integer, Integer> shifts, Set<Integer> conflicted, Set<Integer> entryLines) {
+      TreeMap<Integer, Integer> shifts, Set<Integer> conflicted, Set<Integer> entryLines,
+      Map<String, Integer> firstLines) {
     String className = node.classStruct == null ? null : node.classStruct.qualifiedName;
     int declaration = -1;
     if (className != null) {
@@ -792,7 +797,8 @@ public final class LineAlign {
       }
       if (!simple.isEmpty() && Character.isJavaIdentifierStart(simple.charAt(0))) {
         declaration = classDeclarationLine(lines, simple, enclosingLine,
-          firstMemberLine(className, tracers, lines), declarationHint(node.classStruct, className, tracers));
+          firstLines.getOrDefault(className, lines.length + 1),
+          declarationHint(node.classStruct, className, tracers));
         if (declaration >= 0) {
           anchorOne(node.classStruct, className, declaration, tracers, lines, shifts, conflicted, entryLines);
         }
@@ -800,20 +806,22 @@ public final class LineAlign {
     }
     int childEnclosing = declaration >= 0 ? declaration : enclosingLine;
     for (ClassesProcessor.ClassNode nested : node.nested) {
-      anchorClassLines(nested, childEnclosing, tracers, lines, shifts, conflicted, entryLines);
+      anchorClassLines(nested, childEnclosing, tracers, lines, shifts, conflicted, entryLines,
+        firstLines);
     }
   }
 
-  private static int firstMemberLine(String className,
-      Map<Pair<String, String>, BytecodeMappingTracer> tracers, String[] lines) {
-    int first = lines.length + 1;
+  /** The first printed line of each class's members, by the tracers that class was printed from. */
+  private static Map<String, Integer> firstMemberLines(
+      Map<Pair<String, String>, BytecodeMappingTracer> tracers, int lineCount) {
+    Map<String, Integer> first = new java.util.HashMap<>();
     for (Map.Entry<Pair<String, String>, BytecodeMappingTracer> entry : tracers.entrySet()) {
-      if (!className.equals(entry.getKey().a)) {
-        continue;
-      }
+      String className = entry.getKey().a;
+      int member = first.getOrDefault(className, lineCount + 1);
       for (int line : entry.getValue().getMapping().values()) {
-        first = Math.min(first, line + 1);
+        member = Math.min(member, line + 1);
       }
+      first.put(className, member);
     }
     return first;
   }
